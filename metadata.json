@@ -1,0 +1,6 @@
+{
+  "name": "Hava Araçları Bakım Portalı",
+  "description": "Hava Araçları Bakım Teknik Şube Müdürlüğü'nün uçuş durumu, personel yoklama, ikmal takibi ve teknik periyodik bakım durumlarını koordine eden kurumsal portalı.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
