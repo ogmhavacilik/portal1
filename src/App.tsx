@@ -57,7 +57,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxS-7uiQP6_UMJQieUG4jf5wqSKFEcoq5g8VJxEgOy7CZEx-m-KSKqp06nwX-5wBNlaUQ/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8HKrPadDYsg3PH49sIz5k07uyxZkmnDRJhzmi2isQplu1oqN-26GM4E6WyuirD8UVQg/exec";
 
 // Convert a File object to Base64 string for Drive uploading
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -2220,6 +2220,7 @@ export default function App() {
     fetchPdfMetadata();
     fetchUpdateDatesFromGoogleSheet();
     pullAllTechizatFromGoogleSheets(true);
+    pullDataFromGoogleSheets(5, true);
   }, []);
 
   // Reset form sub-modal states on selectedFormId change
@@ -2439,9 +2440,23 @@ export default function App() {
         });
 
         // Set state and local localStorage
-        const newTableData = { ...tableData, [formId]: parsedRows };
-        setTableData(newTableData);
-        localStorage.setItem(config.storageKey, JSON.stringify(parsedRows));
+        if (formId === 5) {
+          const gridData: string[][] = Array.from({ length: 537 }, () => Array(12).fill(""));
+          parsedRows.forEach((rObj: any, rIdx: number) => {
+            if (rIdx < 537) {
+              config.columns.forEach((col, cIdx) => {
+                const val = rObj[col.label] ?? rObj[col.key] ?? "";
+                gridData[rIdx][cIdx] = String(val).trim();
+              });
+            }
+          });
+          setExcelForm5Data(gridData);
+          localStorage.setItem('excel_form_5_data', JSON.stringify(gridData));
+        } else {
+          const newTableData = { ...tableData, [formId]: parsedRows };
+          setTableData(newTableData);
+          localStorage.setItem(config.storageKey, JSON.stringify(parsedRows));
+        }
         updateFormTimestamp(formId);
 
         const timeNow = new Date().toLocaleTimeString('tr-TR');
@@ -3401,18 +3416,17 @@ export default function App() {
             }
           }
           
-          setExcelForm5Data(gridData);
-          localStorage.setItem('excel_form_5_data', JSON.stringify(gridData));
-          
           setIsSendingToSheets(prev => ({ ...prev, [5]: true }));
           setUploadProgress(10);
-          showNotification(`${file.name} dosyası çözümleniyor and Google Drive'a yedekleniyor...`);
+          showNotification(`${file.name} belgesi çözümleniyor, Google Drive'a yükleniyor ve E-Tablo güncelleniyor...`);
 
-          // Background Google Drive upload for the Excel file to persist it on Drive
           fileToBase64(file).then(async (base64Data) => {
             try {
               const driveFileName = "personel_bilgi_cizelgesi.xlsx";
-              const res = await fetch(GOOGLE_SCRIPT_URL, {
+              setUploadProgress(30);
+
+              // 1. Upload to Google Drive (with correct mimeType)
+              const driveRes = await fetch(GOOGLE_SCRIPT_URL, {
                 method: "POST",
                 headers: {
                   "Content-Type": "text/plain;charset=utf-8"
@@ -3420,42 +3434,61 @@ export default function App() {
                 body: JSON.stringify({
                   action: "uploadPdfToDrive",
                   fileName: driveFileName,
+                  mimeType: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                   base64Data: base64Data,
                   formId: 5,
                   month: "Genel Plan"
                 })
               });
-              if (res.ok) {
-                const result = await res.json();
-                if (result.status === "success") {
-                  showNotification("Güncel Excel belgesi Google Drive'a başarıyla yedeklendi!");
-                  fetchPdfMetadata(); // Refresh metadata list
-                }
+
+              if (!driveRes.ok) {
+                throw new Error("Google Drive yedekleme başarısız oldu.");
               }
-            } catch (err) {
-              console.error("Failed to backup Excel to Google Drive:", err);
-            }
-          });
-          
-          let progressVal = 10;
-          const interval = setInterval(() => {
-            progressVal += 15;
-            if (progressVal >= 100) {
-              clearInterval(interval);
-              setUploadProgress(100);
-              setIsSendingToSheets(prev => ({ ...prev, [5]: false }));
-              showNotification(`'5. Personel Bilgi Çizelgeleri' Excel dosyası başarıyla sisteme aktarıldı ve 537rx12c matris oluşturuldu!`);
-              
+
+              const driveResult = await driveRes.json();
+              if (driveResult.status !== "success") {
+                throw new Error(driveResult.message || "Google Drive yedekleme işlemi başarısız.");
+              }
+
+              setUploadProgress(60);
+              showNotification("Dosya Google Drive'a başarıyla yüklendi. Şimdi E-Tablo veritabanı güncelleniyor...");
+
+              // 2. Upload parsed gridData to Google Sheet (5-Personel_Bilgi)
+              const headers = TABLE_CONFIGS[5].columns.map(col => col.label);
+              const dataWithHeaders = [headers, ...gridData];
+
+              const sheetRes = await fetch(GOOGLE_SCRIPT_URL, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "text/plain;charset=utf-8"
+                },
+                body: JSON.stringify({
+                  action: "updateSheet",
+                  sheetName: TABLE_CONFIGS[5].sheetName,
+                  data: dataWithHeaders
+                })
+              });
+
+              if (!sheetRes.ok) {
+                throw new Error("E-Tablo veritabanı güncellenemedi.");
+              }
+
+              setUploadProgress(90);
+
+              // 3. Only on complete success, we write to local state and cache!
+              setExcelForm5Data(gridData);
+              localStorage.setItem('excel_form_5_data', JSON.stringify(gridData));
+
               const now = new Date();
               const dateStr = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
               setFormUpdateDates(prev => ({ ...prev, 5: dateStr }));
               localStorage.setItem('form_update_dates', JSON.stringify({ ...formUpdateDates, 5: dateStr }));
-              
-              // Also mock a matching PDF metadata item so the UI registers it as loaded
+
+              // Mock a matching PDF metadata item so the UI registers it as loaded
               const excelPdfMeta = {
                 name: "personel_bilgi_cizelgesi.pdf",
-                id: "excel_loaded_form5",
-                viewUrl: "excel_loaded",
+                id: driveResult.fileId || "excel_loaded_form5",
+                viewUrl: driveResult.viewUrl || "excel_loaded",
                 lastUpdated: dateStr
               };
               setPdfMetadataList(prev => {
@@ -3463,15 +3496,25 @@ export default function App() {
                 return [excelPdfMeta, ...filtered];
               });
 
-              // Automatically open the Personnel Information table immediately as requested
+              setUploadProgress(100);
+              setIsSendingToSheets(prev => ({ ...prev, [5]: false }));
+              showNotification(`'5. Personel Bilgi Çizelgeleri' başarıyla Google Drive'a yedeklendi ve E-Tablo veritabanı güncellendi!`);
+
+              fetchPdfMetadata(); // Refresh metadata list
+
+              // Automatically open the Personnel Information table
               setSelectedFormId(5);
               setModalType('form_table');
               setModalTitle(TABLE_CONFIGS[5].title);
               setSearchQuery('');
-            } else {
-              setUploadProgress(progressVal);
+
+            } catch (err: any) {
+              console.error("Failed to sync Personnel Info to Google Sheets / Drive:", err);
+              setIsSendingToSheets(prev => ({ ...prev, [5]: false }));
+              setUploadProgress(0);
+              alert(`Hata: Güncelleme sırasında bir sorun oluştu. Veriler ön belleğe alınmadı.\nDetay: ${err?.message || err}`);
             }
-          }, 200);
+          });
           
         } catch (err: any) {
           console.error(err);

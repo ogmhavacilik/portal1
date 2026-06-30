@@ -115,8 +115,17 @@ function doPost(e) {
         }
       }
       
+      var mimeType = postData.mimeType;
+      if (!mimeType) {
+        var fileNameLower = fileName.toLowerCase();
+        if (fileNameLower.indexOf(".xlsx") !== -1) mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        else if (fileNameLower.indexOf(".xls") !== -1) mimeType = "application/vnd.ms-excel";
+        else if (fileNameLower.indexOf(".csv") !== -1) mimeType = "text/csv";
+        else mimeType = "application/pdf";
+      }
+      
       var decoded = Utilities.base64Decode(base64Data);
-      var blob = Utilities.newBlob(decoded, "application/pdf", fileName);
+      var blob = Utilities.newBlob(decoded, mimeType, fileName);
       var newFile = folder.createFile(blob);
       
       // Hangi hava aracının hangi ayı olduğunu tespit et ve güncelleme tarihini yaz
