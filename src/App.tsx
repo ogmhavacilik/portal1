@@ -49,13 +49,15 @@ import {
   Folder,
   Printer,
   FileSpreadsheet,
-  Copy
+  Copy,
+  SlidersHorizontal,
+  UserCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8H0TN3yNCek4SVaeF9T6KR_yJBhvcsU5iZW7Zzp-c55ViEp8xUlkBdWO_nWqvCDohsg/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxS-7uiQP6_UMJQieUG4jf5wqSKFEcoq5g8VJxEgOy7CZEx-m-KSKqp06nwX-5wBNlaUQ/exec";
 
 // Convert a File object to Base64 string for Drive uploading
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -97,6 +99,82 @@ export const formatToTurkishDateRange = (startStr: string, endStr: string): stri
     return `${startDay} ${startMonth} - ${endDay} ${endMonth} ${startYear}`;
   }
   return `${startDay} ${startMonth} ${startYear} - ${endDay} ${endMonth} ${endYear}`;
+};
+
+export const formatBirthDateToTurkish = (val: string): string => {
+  if (!val) return "";
+  let s = String(val).trim();
+
+  // Map of English month names to Turkish month names
+  const monthsMap: Record<string, string> = {
+    "january": "Ocak",
+    "february": "Şubat",
+    "march": "Mart",
+    "april": "Nisan",
+    "may": "Mayıs",
+    "june": "Haziran",
+    "july": "Temmuz",
+    "august": "Ağustos",
+    "september": "Eylül",
+    "october": "Ekim",
+    "november": "Kasım",
+    "december": "Aralık",
+    "jan": "Ocak",
+    "feb": "Şubat",
+    "mar": "Mart",
+    "apr": "Nisan",
+    "jun": "Haziran",
+    "jul": "Temmuz",
+    "aug": "Ağustos",
+    "sep": "Eylül",
+    "oct": "Ekim",
+    "nov": "Kasım",
+    "dec": "Aralık"
+  };
+
+  const turkishMonths = [
+    "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+    "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"
+  ];
+
+  // If it is a serial Excel date (e.g., purely numeric)
+  if (/^\d+$/.test(s)) {
+    const serial = parseInt(s, 10);
+    try {
+      const utc_days  = Math.floor(serial - 25569);
+      const utc_value = utc_days * 86400;                                        
+      const dateObj = new Date(utc_value * 1000);
+      
+      const day = dateObj.getDate();
+      const monthIndex = dateObj.getMonth();
+      const year = dateObj.getFullYear();
+      
+      if (year > 1920 && year < 2030 && monthIndex >= 0 && monthIndex < 12) {
+        return `${day} ${turkishMonths[monthIndex]} ${year}`;
+      }
+    } catch (e) {
+      // fallback
+    }
+  }
+
+  // If it is in YYYY-MM-DD format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const parts = s.split("-");
+    const yr = parseInt(parts[0], 10);
+    const mn = parseInt(parts[1], 10);
+    const dy = parseInt(parts[2], 10);
+    if (mn >= 1 && mn <= 12) {
+      return `${dy} ${turkishMonths[mn - 1]} ${yr}`;
+    }
+  }
+
+  // Also replace any English month names
+  Object.keys(monthsMap).forEach(engMonth => {
+    const regex = new RegExp(`\\b${engMonth}\\b`, 'gi');
+    s = s.replace(regex, monthsMap[engMonth]);
+  });
+
+  return s;
 };
 
 export const normalizeTurkishForSearch = (str: string): string => {
@@ -543,10 +621,21 @@ export default function App() {
   // Splash screen state
   const [splashVisible, setSplashVisible] = useState(true);
 
+  // Mobile detection
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Modal active state
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState('SİSTEM');
-  const [modalType, setModalType] = useState<'iframe' | 'design' | 'category' | 'form_table' | 'excel_sync'>('iframe');
+  const [modalType, setModalType] = useState<'iframe' | 'design' | 'category' | 'form_table' | 'excel_sync' | 'techizat_matrix'>('iframe');
   const [modalUrl, setModalUrl] = useState('');
   const [iframeLoading, setIframeLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>(null);
@@ -709,6 +798,216 @@ export default function App() {
   const [excelSearchQuery, setExcelSearchQuery] = useState<string>("");
   const [selectedKadroFilter, setSelectedKadroFilter] = useState<string>("");
   const [activeExcelMatchIdx, setActiveExcelMatchIdx] = useState<number>(0);
+
+  // Teçhizat Takip Matrix States
+  const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'all' | null>(null);
+  const [techizatSearchQuery, setTechizatSearchQuery] = useState<string>("");
+  const [activeTechizatMatchIdx, setActiveTechizatMatchIdx] = useState<number>(0);
+
+  // States for each of the 4 categories
+  const [techizatBell429Columns, setTechizatBell429Columns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_bell429_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON BAKIM", "GELECEK BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_bell429_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "Bell 429 Çekme Çubuğu (Tow Bar)", "B429-TOW-01", "SN-9982", "1", "Ankara Hangar 2", "FAAL", "12.03.2026", "12.09.2026", "A Havacılık A.Ş.", "Günlük kontrol yapıldı"],
+      ["2", "Hidrolik Güç Ünitesi (GPU)", "HYD-GPU-429", "SN-1024", "1", "Ankara Hangar 2", "FAAL", "18.04.2026", "18.10.2026", "B Savunma Ltd.", "Yıllık kalibrasyonu yapıldı"],
+      ["3", "Pervane Sabitleme Aparatı (Blade Tie-Down)", "B429-BTD-05", "SN-5541", "4", "Ankara Depo-A", "FAAL", "05.01.2026", "05.07.2026", "C Teknik Hizmetler", "Eksiksiz durumda"]
+    ];
+  });
+
+  const [techizatAt802Columns, setTechizatAt802Columns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_at802_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_at802_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "Su Dolum Hortumu ve Rakor Seti", "AT-WF-08", "SN-7781", "2", "Muğla Üssü", "FAAL", "01.05.2026", "01.11.2026", "Yangın Söndürme Sistemleri A.Ş.", "Sızdırmazlık testi başarılı"],
+      ["2", "Köpük Karıştırma Ünitesi (Foam Blender)", "AT-FM-02", "SN-4432", "1", "İzmir Üssü", "FAAL", "10.04.2026", "10.10.2026", "Köpük Sanayi Ltd.", "Temizliği yapıldı"]
+    ];
+  });
+
+  const [techizatT70Columns, setTechizatT70Columns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_t70_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatT70Data, setTechizatT70Data] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_t70_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "T-70 Rotor Sabitleme Kiti (Rotor Tie Down)", "T70-RTD-12", "SN-8842", "1", "Ankara Hangar 1", "FAAL", "15.02.2026", "15.08.2026", "Tusaş Havacılık", "Kutusuyla birlikte muhafaza ediliyor"],
+      ["2", "Azot Dolum Arabası (Nitrogen Cart)", "NIT-CART-70", "SN-2219", "1", "Ankara Hangar 1", "FAAL", "20.03.2026", "20.09.2026", "Gaz Endüstrisi A.Ş.", "Basınç manometreleri kontrol edildi"]
+    ];
+  });
+
+  const [techizatT70BumbiBacketColumns, setTechizatT70BumbiBacketColumns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_t70_bumbi_backet_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_t70_bumbi_backet_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "Bumbi Bucket Yangın Kovası - T70", "Model 2026-BB", "BB-4421", "2500 Litre", "Antalya Üssü", "FAAL", "10.05.2026", "10.11.2026", "Bambi Bucket Co.", "Kova gövdesi ve tahliye vanası faal"],
+      ["2", "Yedek Kova Halat ve Sapan Seti", "Model S-70", "SL-8812", "N/A", "Ankara Depo-B", "FAAL", "12.02.2026", "12.08.2026", "Sapan Sanayi Ltd.", "Kullanıma hazır yedek"]
+    ];
+  });
+
+  const [techizatB360Columns, setTechizatB360Columns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_b360_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatB360Data, setTechizatB360Data] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_b360_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "B-360 Lastik Basınç Ölçüm Cihazı", "B360-TPG-10", "SN-1029", "1", "Ankara Hangar 3", "FAAL", "05.05.2026", "05.11.2026", "Ölçüm Teknik A.Ş.", "Kalibrasyonu tamamlandı"],
+      ["2", "B-360 Oksijen Servis Arabası", "B360-OXY-02", "SN-8821", "1", "Ankara Depo-A", "FAAL", "14.04.2026", "14.10.2026", "Oksijen Gaz Sanayi", "Yüksek basınç hortumu yenilendi"]
+    ];
+  });
+
+  const [techizatC650Columns, setTechizatC650Columns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_c650_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatC650Data, setTechizatC650Data] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_c650_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "C-650 Jeneratör Kablosu (Power Cable)", "C650-PC-04", "SN-9382", "1", "Ankara Hangar 1", "FAAL", "10.03.2026", "10.09.2026", "Kablo Sanayi A.Ş.", "Konektörleri temizlendi"],
+      ["2", "C-650 Motor Yıkama Kiti", "C650-EWC-01", "SN-3029", "1", "Ankara Hangar 1", "FAAL", "22.05.2026", "22.11.2026", "Yıkama Teknolojileri Ltd.", "Pompası test edildi"]
+    ];
+  });
+
+  const [techizatHangarColumns, setTechizatHangarColumns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_hangar_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatHangarData, setTechizatHangarData] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_hangar_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "Hangar Isıtıcı Ünitesi (Blower)", "HGR-HTR-01", "SN-4491", "2", "Ankara Hangar 1", "FAAL", "12.01.2026", "12.11.2026", "Isı Sistemleri Ltd.", "Filtre değişimi yapıldı"],
+      ["2", "Hangar Vinç Sistemi (Overhead Crane)", "HGR-CRN-05", "SN-0283", "1", "Ankara Hangar 2", "FAAL", "01.06.2026", "01.06.2027", "Vinç Muayene Hizmetleri", "Yıllık fenni muayenesi yapıldı"]
+    ];
+  });
+
+  // Helper method to open Teçhizat Takip Matrix
+  const openTechizatMatrix = (type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'all', title: string) => {
+    setActiveTechizatType(type);
+    setModalType('techizat_matrix');
+    setModalTitle(title);
+    setModalOpen(true);
+    setTechizatSearchQuery('');
+    setActiveTechizatMatchIdx(0);
+  };
+
+  // Excel exporter for Teçhizat Takip
+  const exportTechizatToExcel = (type: string, cols: string[], rows: string[][], title: string = "TEÇHİZAT LİSTESİ") => {
+    try {
+      let html = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta charset="utf-8">
+          <!--[if gte mso 9]>
+          <xml>
+            <x:ExcelWorkbook>
+              <x:ExcelWorksheets>
+                <x:ExcelWorksheet>
+                  <x:Name>Techizat Listesi</x:Name>
+                  <x:WorksheetOptions>
+                    <x:DisplayGridlines/>
+                  </x:WorksheetOptions>
+                </x:ExcelWorksheet>
+              </x:ExcelWorksheets>
+            </x:ExcelWorkbook>
+          </xml>
+          <![endif]-->
+          <style>
+            table { border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif; }
+            .title-row { background-color: #0b3d1d; color: #ffffff; font-weight: bold; font-size: 14px; text-align: center; height: 40px; }
+            th { background-color: #1e293b; color: #ffffff; font-weight: bold; border: 1px solid #475569; padding: 10px; text-align: center; font-size: 11px; }
+            td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 10px; color: #1e293b; }
+            .zebra { background-color: #f8fafc; }
+            .num { mso-number-format: "\\@"; text-align: center; } /* formats string values safely */
+            .badge-faal { background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center; }
+            .badge-gayrifaal { background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center; }
+          </style>
+        </head>
+        <body>
+          <table>
+            <thead>
+              <!-- Title Row merged -->
+              <tr>
+                <th colspan="${cols.length}" class="title-row" style="background-color: #0b3d1d; color: white; font-weight: bold; font-size: 14px; text-align: center; height: 40px;">
+                  ${title.toUpperCase()}
+                </th>
+              </tr>
+              <tr>
+                ${cols.map(h => `<th style="background-color: #1e293b; color: #ffffff; font-weight: bold; border: 1px solid #475569; padding: 10px; text-align: center;">${h}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      
+      rows.forEach((row, rIdx) => {
+        const isZebra = rIdx % 2 === 1;
+        html += `<tr class="${isZebra ? 'zebra' : ''}">`;
+        row.forEach((cell, cIdx) => {
+          const val = cell || "";
+          let tdClass = "";
+          let style = "";
+          
+          const colName = cols[cIdx]?.toUpperCase() || "";
+          if (colName.includes("SIRA") || colName.includes("NO") || colName.includes("P/N") || colName.includes("S/N") || colName.includes("MİKTAR") || colName.includes("TELEFON") || colName.includes("TC")) {
+            tdClass = "num";
+          }
+          
+          if (colName.includes("DURUM")) {
+            if (val.toUpperCase().includes("FAAL") && !val.toUpperCase().includes("GAYRİ")) {
+              style = "background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
+            } else if (val.toUpperCase().includes("GAYRİ") || val.toUpperCase().includes("ARIZALI") || val.toUpperCase().includes("FAAL DEĞİL")) {
+              style = "background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+            }
+          }
+          
+          html += `<td class="${tdClass}" style="${style}">${val.replace(/\n/g, '<br>')}</td>`;
+        });
+        html += '</tr>';
+      });
+      
+      html += `
+            </tbody>
+          </table>
+        </body>
+        </html>
+      `;
+      
+      const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `techizat_takip_${type}_en_son_surum.xls`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      showNotification("Teçhizat listesi tasarımlı HTML Excel (.xls) olarak başarıyla indirildi.");
+    } catch (err) {
+      alert("Excel indirme hatası: " + err);
+    }
+  };
   
   const uniqueKadroTitles = useMemo(() => {
     const titles = new Set<string>();
@@ -1389,8 +1688,6 @@ export default function App() {
   // Load cached PDF file as Blob URL from IndexedDB for current active selection or download if missing
   useEffect(() => {
     if (selectedFormId) {
-      updatePdfBlobUrl(null);
-      setIsPdfLoading(true);
       const isSummer = isSummerForm(selectedFormId);
       
       // Find the matching PDF from metadata list to retrieve its unique ID and update timestamp
@@ -1434,6 +1731,7 @@ export default function App() {
         const cleanLastUpdated = match.lastUpdated.replace(/[^a-zA-Z0-9]/g, '_');
         const cacheKey = `pdf_${match.id}_${cleanLastUpdated}`;
         
+        // Optimistic check: try to fetch from cache without showing full-screen loader first
         getRawPdfFromDB(cacheKey).then(base64 => {
           if (base64) {
             // Convert to blob and set
@@ -1450,11 +1748,15 @@ export default function App() {
             loadAndCachePdfPages(base64, cacheKey);
             setIsPdfLoading(false);
           } else {
-            // Not in cache, proceed to download and cache
+            // Not in cache, show loading and download
+            updatePdfBlobUrl(null);
+            setIsPdfLoading(true);
             loadRawPdfFromDrive(match.id, cacheKey);
           }
         }).catch(err => {
           console.error("Failed to load cached raw PDF from DB:", err);
+          updatePdfBlobUrl(null);
+          setIsPdfLoading(true);
           loadRawPdfFromDrive(match.id, cacheKey);
         });
       } else {
@@ -1536,7 +1838,21 @@ export default function App() {
                   .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ü/g, 'u')
                   .replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c');
                   
-                if (normBirim.includes("gorevlendirme") || normBirim.includes("1.")) {
+                if (normBirim.includes("bell 429 yer destek")) {
+                  dates["techizat_bell429"] = tarihSaat;
+                } else if (normBirim.includes("at-802f yer destek") || normBirim.includes("at-802 yer destek")) {
+                  dates["techizat_at802"] = tarihSaat;
+                } else if (normBirim.includes("t-70 bumbi")) {
+                  dates["techizat_t70_bumbi_backet"] = tarihSaat;
+                } else if (normBirim.includes("t-70 yer destek")) {
+                  dates["techizat_t70"] = tarihSaat;
+                } else if (normBirim.includes("b-360 yer destek")) {
+                  dates["techizat_b360"] = tarihSaat;
+                } else if (normBirim.includes("c-650 yer destek")) {
+                  dates["techizat_c650"] = tarihSaat;
+                } else if (normBirim.includes("hangar yer destek")) {
+                  dates["techizat_hangar"] = tarihSaat;
+                } else if (normBirim.includes("gorevlendirme") || normBirim.includes("1.")) {
                   dates[1] = tarihSaat;
                 } else if (normBirim.includes("ankara_bell") || normBirim.includes("24")) {
                   dates[24] = tarihSaat;
@@ -1571,8 +1887,8 @@ export default function App() {
     }
   };
 
-  // Form last update dates tracker mapping form ID to string (e.g. "05.01.2026 15:30")
-  const [formUpdateDates, setFormUpdateDates] = useState<Record<number, string>>(() => {
+  // Form last update dates tracker mapping form ID or custom teçhizat string to string (e.g. "05.01.2026 15:30")
+  const [formUpdateDates, setFormUpdateDates] = useState<Record<string | number, string>>(() => {
     const saved = localStorage.getItem("form_update_dates");
     if (saved) {
       try {
@@ -1730,6 +2046,20 @@ export default function App() {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
+
+  // Gün Takip Sorumluları ve Renk Kodu Sıralama State Değişkenleri
+  const [sortByColor, setSortByColor] = useState<boolean>(false);
+  const [isSorumluModalOpen, setIsSorumluModalOpen] = useState(false);
+  const [isSavingSorumlu, setIsSavingSorumlu] = useState(false);
+  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; mail90?: string; mail60?: string; mail30?: string; }[]>([
+    { birim: "BELL 429", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
+    { birim: "AT-802F", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
+    { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
+    { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
+    { birim: "B-360", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
+    { birim: "C-650", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
+    { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" }
+  ]);
 
   // Success notifications
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -1889,6 +2219,7 @@ export default function App() {
     fetchAllGoogleSheetsList();
     fetchPdfMetadata();
     fetchUpdateDatesFromGoogleSheet();
+    pullAllTechizatFromGoogleSheets(true);
   }, []);
 
   // Reset form sub-modal states on selectedFormId change
@@ -2020,6 +2351,13 @@ export default function App() {
   };
 
   const handleBack = () => {
+    if (modalType === 'techizat_matrix') {
+      setModalType('category');
+      setSelectedCategory('HA_YER_DESTEK');
+      setModalTitle(getCategoryTitle('HA_YER_DESTEK'));
+      setActiveTechizatType(null);
+      return;
+    }
     if (modalType === 'form_table' || modalType === 'excel_sync') {
       setModalType('category');
       setSelectedCategory('FORM KAYITLARI');
@@ -2061,7 +2399,7 @@ export default function App() {
   };
 
   // State to track cloud sync progress
-  const [isSendingToSheets, setIsSendingToSheets] = useState<Record<number, boolean>>({});
+  const [isSendingToSheets, setIsSendingToSheets] = useState<Record<string | number, boolean>>({});
   const [isPullingFromSheets, setIsPullingFromSheets] = useState<Record<number, boolean>>({});
 
   // Direct script integration to read/fetch data from the Google Spreadsheet Web App
@@ -2130,6 +2468,205 @@ export default function App() {
     }
   };
 
+  const getTechizatUnitLabel = (techType: string): string => {
+    if (techType === 'bell429') return 'BELL 429';
+    if (techType === 'at802') return 'AT-802F';
+    if (techType === 't70') return 'T-70 YER DESTEK';
+    if (techType === 't70_bumbi_backet') return 'T-70 BUMBİ BACKET';
+    if (techType === 'c650') return 'C-650';
+    if (techType === 'b360') return 'B-360';
+    if (techType === 'hangar') return 'HANGAR YER DESTEK';
+    return '';
+  };
+
+  const pullAllTechizatFromGoogleSheets = async (silent = true) => {
+    try {
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("TÜM TECHİZAT")}`;
+      const response = await fetch(targetUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP Hata: ${response.status}`);
+      }
+      const result = await response.json();
+      if (result.status === "success" && Array.isArray(result.data)) {
+        const rows = result.data;
+        
+        const bell429Rows: string[][] = [];
+        const at802Rows: string[][] = [];
+        const t70Rows: string[][] = [];
+        const t70BumbiRows: string[][] = [];
+        const c650Rows: string[][] = [];
+        const b360Rows: string[][] = [];
+        const hangarRows: string[][] = [];
+        
+        rows.forEach((r: any) => {
+          const unit = String(r["AİT OLDUĞU BİRİM"] || r["Ait Olduğu Birim"] || r["AIT OLDUGU BIRIM"] || "").trim().toUpperCase();
+          
+          const rowData = [
+            String(r["SIRA NO"] || r["Sıra No"] || ""),
+            String(r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || r["TECHIZAT ADI"] || ""),
+            String(r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || r["PARÇA NO (P/N)"] || r["PARCA NO (P/N)"] || r["MODEL / TİP"] || r["MODEL / TIP"] || ""),
+            String(r["SERİ NO (S/N)"] || r["Seri No (S/N)"] || r["SERI NO (S/N)"] || ""),
+            String(r["MİKTAR / KAPASİTE"] || r["Miktar / Kapasite"] || r["MIKTAR / KAPASITE"] || r["MİKTAR"] || r["MIKTAR"] || r["KAPASİTE"] || r["KAPASITE"] || ""),
+            String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || r["BULUNDUGU YER"] || ""),
+            String(r["DURUMU"] || r["Durumu"] || ""),
+            String(r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL"] || r["SON BAKIM"] || ""),
+            String(r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL"] || r["GELECEK BAKIM"] || ""),
+            String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || r["SON KONTROLÜ YAPAN FIRMA"] || r["SON KONTROLU YAPAN FIRMA"] || ""),
+            String(r["AÇIKLAMA"] || r["Açıklama"] || r["ACIKLAMA"] || ""),
+            String(r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] || ""),
+            String(r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] || ""),
+            String(r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] || "")
+          ];
+
+          if (unit.includes("BELL 429")) {
+            bell429Rows.push(rowData);
+          } else if (unit.includes("AT-802")) {
+            at802Rows.push(rowData);
+          } else if (unit.includes("T-70 YER") || (unit.includes("T-70") && !unit.includes("BUMBİ") && !unit.includes("BAMBI"))) {
+            t70Rows.push(rowData);
+          } else if (unit.includes("BUMBİ") || unit.includes("BAMBI") || unit.includes("T-70 BUMBİ")) {
+            t70BumbiRows.push(rowData);
+          } else if (unit.includes("C-650")) {
+            c650Rows.push(rowData);
+          } else if (unit.includes("B-360")) {
+            b360Rows.push(rowData);
+          } else if (unit.includes("HANGAR")) {
+            hangarRows.push(rowData);
+          }
+        });
+        
+        if (bell429Rows.length > 0) {
+          setTechizatBell429Data(bell429Rows);
+          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(bell429Rows));
+        }
+        if (at802Rows.length > 0) {
+          setTechizatAt802Data(at802Rows);
+          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(at802Rows));
+        }
+        if (t70Rows.length > 0) {
+          setTechizatT70Data(t70Rows);
+          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(t70Rows));
+        }
+        if (t70BumbiRows.length > 0) {
+          setTechizatT70BumbiBacketData(t70BumbiRows);
+          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(t70BumbiRows));
+        }
+        if (c650Rows.length > 0) {
+          setTechizatC650Data(c650Rows);
+          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(c650Rows));
+        }
+        if (b360Rows.length > 0) {
+          setTechizatB360Data(b360Rows);
+          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(b360Rows));
+        }
+        if (hangarRows.length > 0) {
+          setTechizatHangarData(hangarRows);
+          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(hangarRows));
+        }
+
+        if (!silent) {
+          showNotification("Bütün Teçhizat Verileri Canlı E-Tablodan Senkronize Edildi!");
+        }
+      }
+    } catch (err) {
+      console.error("Failed to sync all teçhizat on startup:", err);
+    }
+  };
+
+  const fetchGunTakipSorumlulari = async () => {
+    try {
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("GÜN TAKİP")}`;
+      const response = await fetch(targetUrl);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.status === "success" && Array.isArray(result.data)) {
+          const mapped = result.data.map((row: any) => ({
+            birim: String(row["SORUMLU BİRİM"] || row["Sorumlu Birim"] || "").trim().toUpperCase(),
+            adSoyad: String(row["ADI SOYADI"] || row["Adı Soyadı"] || row["AD SOYAD"] || "").trim(),
+            eposta: String(row["E-POSTA ADRESİ"] || row["E-posta Adresi"] || row["EPOSTA ADRESI"] || "").trim(),
+            mail90: String(row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["90 Gün Uyarı Mail Gönderim Tarihi"] || row["90 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
+            mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["60 Gün Uyarı Mail Gönderim Tarihi"] || row["60 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
+            mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["30 Gün Uyarı Mail Gönderim Tarihi"] || row["30 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim()
+          })).filter((item: any) => item.birim);
+          
+          if (mapped.length > 0) {
+            setGunTakipSorumlulari(mapped);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Gün takip verisi çekme hatası:", err);
+    }
+  };
+
+  const saveGunTakipSorumlulari = async (updatedData: typeof gunTakipSorumlulari) => {
+    setIsSavingSorumlu(true);
+    try {
+      const rowsToSend = updatedData.map(item => [item.birim, item.adSoyad, item.eposta]);
+      const response = await fetch(GOOGLE_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'updateGunTakip',
+          data: rowsToSend
+        })
+      });
+      
+      const result = await response.json();
+      if (result.status === "success") {
+        setGunTakipSorumlulari(updatedData);
+        showNotification("Sorumlu Personel (Gün Takip) Verileri Başarıyla Güncellendi!");
+        setIsSorumluModalOpen(false);
+      } else {
+        alert("E-Tablo Güncelleme Hatası: " + result.message);
+      }
+    } catch (err: any) {
+      alert("Entegrasyon Bağlantı Hatası: " + err.toString());
+    } finally {
+      setIsSavingSorumlu(false);
+    }
+  };
+
+  const parseGelecekBakimDays = (dateStr: string): number | null => {
+    if (!dateStr) return null;
+    const cleaned = dateStr.trim();
+    
+    // dd.mm.yyyy veya dd/mm/yyyy formatı
+    const dmyRegex = /^(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})$/;
+    const ymdRegex = /^(\d{4})[\.\/-](\d{1,2})[\.\/-](\d{1,2})$/;
+    
+    let dateObj: Date | null = null;
+    let m = cleaned.match(dmyRegex);
+    if (m) {
+      const day = parseInt(m[1], 10);
+      const month = parseInt(m[2], 10) - 1;
+      const year = parseInt(m[3], 10);
+      dateObj = new Date(year, month, day);
+    } else {
+      m = cleaned.match(ymdRegex);
+      if (m) {
+        const year = parseInt(m[1], 10);
+        const month = parseInt(m[2], 10) - 1;
+        const day = parseInt(m[3], 10);
+        dateObj = new Date(year, month, day);
+      } else {
+        const timestamp = Date.parse(cleaned);
+        if (!isNaN(timestamp)) {
+          dateObj = new Date(timestamp);
+        }
+      }
+    }
+    
+    if (!dateObj || isNaN(dateObj.getTime())) return null;
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    dateObj.setHours(0, 0, 0, 0);
+    
+    const diffTime = dateObj.getTime() - today.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+
   // Direct script integration to post local data to Google Spreadsheet Web App
   const sendDataToGoogleSheets = async (formId: number) => {
     const config = TABLE_CONFIGS[formId];
@@ -2194,6 +2731,14 @@ export default function App() {
       setPasswordInput('');
       setPasswordError(false);
       
+      if (activeTechizatType && modalType === 'techizat_matrix') {
+        setSyncSelectedTarget(`techizat_${activeTechizatType}`);
+        setActiveSyncStep(2);
+        setModalType('excel_sync');
+        setModalTitle('TEÇHİZAT VERİ GÜNCELLEME SİHİRBAZI');
+        return;
+      }
+
       // Reset steps and set target based on current view context
       setActiveSyncStep(1);
       if (selectedFormId !== null && [1, 21, 22, 23, 24, 25, 3, 5, 6].includes(selectedFormId)) {
@@ -2324,7 +2869,7 @@ export default function App() {
         
         const parsedSheets = workbook.SheetNames.map((sheetName, index) => {
           const worksheet = workbook.Sheets[sheetName];
-          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "", raw: false });
           
           const dynamicPrefix = isSummerForm(id)
             ? getSummerPeriodSheetPrefix(id, selectedUploadSummerMonth)
@@ -2492,13 +3037,245 @@ export default function App() {
     const file = files[0];
     setUploadedPdfFile(file);
 
-    const id = Number(syncSelectedTarget);
-    if (isNaN(id) || !TABLE_CONFIGS[id]) {
+    const isTechizatTarget = typeof syncSelectedTarget === 'string' && syncSelectedTarget.startsWith('techizat_');
+    const id = isTechizatTarget ? 0 : Number(syncSelectedTarget);
+    if (!isTechizatTarget && (isNaN(id) || !TABLE_CONFIGS[id])) {
       alert("Hata: Geçersiz hedef seçimi.");
       return;
     }
 
     const fileNameLower = file.name.toLowerCase();
+
+    // 1. Handle Teçhizat Takip Excel Upload
+    if (isTechizatTarget) {
+      const techType = syncSelectedTarget.replace('techizat_', '') as 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar';
+      if (!fileNameLower.endsWith('.xlsx') && !fileNameLower.endsWith('.xls') && !fileNameLower.endsWith('.csv')) {
+        alert("Teçhizat Takip güncellemesi için lütfen Excel (.xlsx, .xls) veya CSV belgesi yükleyin.");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        try {
+          const arrayBuffer = evt.target?.result as ArrayBuffer;
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+          const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+          
+          const rawRows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: "", raw: false });
+          if (rawRows.length === 0) {
+            throw new Error("Yüklenen Excel dosyasında veri bulunamadı.");
+          }
+
+          // Smart Header Detection
+          let headerRowIdx = 0;
+          for (let r = 0; r < Math.min(10, rawRows.length); r++) {
+            const rCells = rawRows[r] || [];
+            const filledCount = rCells.filter(c => String(c).trim() !== "").length;
+            const hasKeywords = rCells.some(c => {
+              const s = String(c).toLowerCase();
+              return s.includes("sira") || s.includes("no") || s.includes("teçhizat") || s.includes("techizat") || s.includes("malzeme") || s.includes("parca") || s.includes("parça");
+            });
+            if (filledCount >= 3 && hasKeywords) {
+              headerRowIdx = r;
+              break;
+            }
+          }
+
+          const rawHeaders = (rawRows[headerRowIdx] || []).map(h => String(h || '').trim().toUpperCase());
+          const finalHeaders = rawHeaders.map((h, hIdx) => h || `KOLON ${hIdx + 1}`);
+
+          // Extract rows below the header
+          const parsedRows: string[][] = [];
+          for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+            const rawRow = rawRows[r] || [];
+            const isRowEmpty = rawRow.every(cell => String(cell || '').trim() === '');
+            if (isRowEmpty) continue;
+
+            const trimmedRow = finalHeaders.map((_, cIdx) => {
+              return rawRow[cIdx] !== undefined ? String(rawRow[cIdx]).trim() : "";
+            });
+
+            // Ensure we have consecutive sequence number in the first column
+            if (trimmedRow[0] === "") {
+              trimmedRow[0] = String(parsedRows.length + 1);
+            }
+
+            parsedRows.push(trimmedRow);
+          }
+
+          // Fallback if no rows could be parsed
+          if (parsedRows.length === 0) {
+            for (let r = headerRowIdx + 1; r < Math.min(200, rawRows.length); r++) {
+              const rawRow = rawRows[r] || [];
+              const trimmedRow = finalHeaders.map((_, cIdx) => {
+                return rawRow[cIdx] !== undefined ? String(rawRow[cIdx]).trim() : "";
+              });
+              parsedRows.push(trimmedRow);
+            }
+          }
+
+          // Save columns and rows to states and localStorage
+          if (techType === 'bell429') {
+            setTechizatBell429Columns(finalHeaders);
+            setTechizatBell429Data(parsedRows);
+            localStorage.setItem('excel_techizat_bell429_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(parsedRows));
+          } else if (techType === 'at802') {
+            setTechizatAt802Columns(finalHeaders);
+            setTechizatAt802Data(parsedRows);
+            localStorage.setItem('excel_techizat_at802_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_at802_data', JSON.stringify(parsedRows));
+          } else if (techType === 't70') {
+            setTechizatT70Columns(finalHeaders);
+            setTechizatT70Data(parsedRows);
+            localStorage.setItem('excel_techizat_t70_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_t70_data', JSON.stringify(parsedRows));
+          } else if (techType === 't70_bumbi_backet') {
+            setTechizatT70BumbiBacketColumns(finalHeaders);
+            setTechizatT70BumbiBacketData(parsedRows);
+            localStorage.setItem('excel_techizat_t70_bumbi_backet_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(parsedRows));
+          } else if (techType === 'b360') {
+            setTechizatB360Columns(finalHeaders);
+            setTechizatB360Data(parsedRows);
+            localStorage.setItem('excel_techizat_b360_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_b360_data', JSON.stringify(parsedRows));
+          } else if (techType === 'c650') {
+            setTechizatC650Columns(finalHeaders);
+            setTechizatC650Data(parsedRows);
+            localStorage.setItem('excel_techizat_c650_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_c650_data', JSON.stringify(parsedRows));
+          } else if (techType === 'hangar') {
+            setTechizatHangarColumns(finalHeaders);
+            setTechizatHangarData(parsedRows);
+            localStorage.setItem('excel_techizat_hangar_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(parsedRows));
+          }
+
+          // Sync specifically to "TÜM TECHİZAT" online Google Sheet
+          const unitLabel = getTechizatUnitLabel(techType);
+          if (unitLabel) {
+            fetch(GOOGLE_SCRIPT_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "text/plain;charset=utf-8"
+              },
+              body: JSON.stringify({
+                action: "updateTumTechizat",
+                unitLabel: unitLabel,
+                data: parsedRows.map(r => [unitLabel, ...r])
+              })
+            }).then(() => {
+              console.log(`Synced ${unitLabel} to TÜM TECHİZAT Google Sheet`);
+            }).catch(err => {
+              console.error(`Failed to sync ${unitLabel} to Google Sheet:`, err);
+            });
+          }
+
+          setIsSendingToSheets(prev => ({ ...prev, [syncSelectedTarget]: true }));
+          setUploadProgress(10);
+          showNotification(`${file.name} belgesi Teçhizat Sürücüsüne yükleniyor ve Google Drive'a yedekleniyor...`);
+
+          // Background Google Drive upload for Teçhizat Excel file
+          fileToBase64(file).then(async (base64Data) => {
+            try {
+              let driveFileName = "hava_araçları_yer_destek_bell-429.xlsx";
+              if (techType === 'at802') {
+                driveFileName = "hava_araçları_yer_destek_at-802.xlsx";
+              } else if (techType === 't70') {
+                driveFileName = "hava_araçları_yer_destek_t-70.xlsx";
+              } else if (techType === 't70_bumbi_backet') {
+                driveFileName = "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx";
+              } else if (techType === 'b360') {
+                driveFileName = "hava_araçları_yer_destek_b-360.xlsx";
+              } else if (techType === 'c650') {
+                driveFileName = "hava_araçları_yer_destek_c-650.xlsx";
+              } else if (techType === 'hangar') {
+                driveFileName = "hava_araçları_yer_destek_hangar.xlsx";
+              }
+
+              const prettyUnitName = techType === 'bell429' ? 'BELL 429 YER DESTEK TEÇHİZATLARI'
+                : techType === 'at802' ? 'AT-802F YER DESTEK TEÇHİZATLARI'
+                : techType === 't70' ? 'T-70 YER DESTEK TEÇHİZATI'
+                : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
+                : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
+                : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
+                : 'HANGAR YER DESTEK TEÇHİZATLARI';
+
+              const res = await fetch(GOOGLE_SCRIPT_URL, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "text/plain;charset=utf-8"
+                },
+                body: JSON.stringify({
+                  action: "uploadPdfToDrive",
+                  fileName: driveFileName,
+                  base64Data: base64Data,
+                  unitName: prettyUnitName,
+                  formId: 6,
+                  month: "Teçhizat Takip"
+                })
+              });
+              if (res.ok) {
+                const result = await res.json();
+                if (result.status === "success") {
+                  showNotification(`'${driveFileName}' güncel Teçhizat Excel belgesi Google Drive'a başarıyla yedeklendi!`);
+                }
+              }
+            } catch (err) {
+              console.error("Failed to backup Teçhizat Excel to Google Drive:", err);
+            }
+          });
+
+          // Progress bar animation
+          let progressVal = 10;
+          const interval = setInterval(() => {
+            progressVal += 15;
+            if (progressVal >= 100) {
+              clearInterval(interval);
+              setUploadProgress(100);
+              setIsSendingToSheets(prev => ({ ...prev, [syncSelectedTarget]: false }));
+              
+              const prettyName = techType === 'bell429' ? 'Bell 429 Yer Destek' 
+                : techType === 'at802' ? 'AT-802F Yer Destek' 
+                : techType === 't70' ? 'T-70 Yer Destek' 
+                : techType === 't70_bumbi_backet' ? 'T-70 Bumbi Backet'
+                : techType === 'b360' ? 'B-360 Yer Destek'
+                : techType === 'c650' ? 'C-650 Yer Destek'
+                : 'Hangar Yer Destek';
+
+              showNotification(`'${prettyName}' Excel verisi başarıyla aktarıldı ve matris oluşturuldu!`);
+              
+              const title = techType === 'bell429' ? 'BELL 429 YER DESTEK TEÇHİZATLARI'
+                : techType === 'at802' ? 'AT-802F YER DESTEK TEÇHİZATLARI'
+                : techType === 't70' ? 'T-70 YER DESTEK TEÇHİZATI'
+                : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
+                : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
+                : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
+                : 'HANGAR YER DESTEK TEÇHİZATLARI';
+
+              // Close sync wizard and automatically open and redirect to matrix screen
+              setModalOpen(true);
+              setActiveTechizatType(techType);
+              setModalType('techizat_matrix');
+              setModalTitle(title);
+              setTechizatSearchQuery('');
+              setActiveTechizatMatchIdx(0);
+            } else {
+              setUploadProgress(progressVal);
+            }
+          }, 150);
+
+        } catch (err: any) {
+          console.error(err);
+          alert(`Teçhizat Excel belgesi çözümlenirken hata oluştu: ${err?.message || err}`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+      return;
+    }
+
+    // 2. Handle Personal Info (Form 5) Excel Upload
     if (fileNameLower.endsWith('.xlsx') || fileNameLower.endsWith('.xls') || fileNameLower.endsWith('.csv')) {
       if (id !== 5) {
         alert("Excel yüklemesi sadece '5. Personel Bilgi Çizelgeleri' için aktiftir.");
@@ -2511,11 +3288,10 @@ export default function App() {
           const arrayBuffer = evt.target?.result as ArrayBuffer;
           const workbook = XLSX.read(arrayBuffer, { type: 'array' });
           
-          // Smart sheet detection: find the sheet containing actual data rows with "SIRA", "ADI" or similar keywords
           let worksheet = workbook.Sheets[workbook.SheetNames[0]];
           for (const sheetName of workbook.SheetNames) {
             const sheet = workbook.Sheets[sheetName];
-            const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: "" });
+            const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: "", raw: false });
             const hasKeywords = rows.some(r => r.some((c: any) => {
               const str = String(c || '').toLowerCase();
               return str.includes("sira") || str.includes("adi soyadi") || str.includes("sicil") || str.includes("kadro");
@@ -2526,39 +3302,96 @@ export default function App() {
             }
           }
           
-          const rawRows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: "" });
+          const rawRows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: "", raw: false });
           const gridData: string[][] = Array.from({ length: 537 }, () => Array(12).fill(""));
           
-          // Extract rows that contain a sequence number in Column A (index 0) and filter out headers or titles
+          // Smart Header Detection and Column Mapping
+          let headerRowIdx = 0;
+          for (let r = 0; r < Math.min(10, rawRows.length); r++) {
+            const rCells = rawRows[r] || [];
+            const hasSira = rCells.some(c => String(c).toLowerCase().includes("sira") || String(c).toLowerCase().includes("sıra"));
+            const hasName = rCells.some(c => String(c).toLowerCase().includes("adi") || String(c).toLowerCase().includes("adı") || String(c).toLowerCase().includes("soyadi") || String(c).toLowerCase().includes("soyadı"));
+            if (hasSira || hasName) {
+              headerRowIdx = r;
+              break;
+            }
+          }
+
+          const rawHeaders = (rawRows[headerRowIdx] || []).map(h => String(h || '').trim().toLowerCase());
+          
+          // Locate corresponding indices with smart keywords to prevent column shifting
+          let idxSira = rawHeaders.findIndex(h => h.includes("sira") || h.includes("sıra") || h === "no");
+          let idxName = rawHeaders.findIndex(h => h.includes("adi") || h.includes("adı") || h.includes("soyad") || h.includes("isim"));
+          let idxTC = rawHeaders.findIndex(h => h.includes("tc") || h.includes("t.c") || h.includes("kimlik") || h.includes("kımlık"));
+          let idxSicil = rawHeaders.findIndex(h => h.includes("sicil") || h.includes("sıcil"));
+          let idxKadro = rawHeaders.findIndex(h => h.includes("kadro") || h.includes("unvan") || h.includes("görev") || h.includes("gorev"));
+          let idxDogum = rawHeaders.findIndex(h => h.includes("dogum") || h.includes("doğum") || h.includes("tarih"));
+          let idxYeri = rawHeaders.findIndex(h => h.includes("yer") || h.includes("mahal") || h.includes("bölüm") || h.includes("bolum"));
+          let idxTel = rawHeaders.findIndex(h => h.includes("tel") || h.includes("cep") || h.includes("telefon") || h.includes("gsm"));
+          let idxKan = rawHeaders.findIndex(h => h.includes("kan"));
+          let idxAdres = rawHeaders.findIndex(h => h.includes("adres") || h.includes("ikamet"));
+          let idxYakin = rawHeaders.findIndex(h => h.includes("yakin") || h.includes("yakın") || h.includes("akraba"));
+          let idxEsTel = -1;
+          for (let c = rawHeaders.length - 1; c >= 0; c--) {
+            const h = rawHeaders[c] || "";
+            if (h.includes("tel") || h.includes("telefon") || h.includes("cep") || h.includes("gsm") || h.includes("eş") || h.includes("es")) {
+              idxEsTel = c;
+              break;
+            }
+          }
+
+          // Set fallback defaults if index lookup failed
+          if (idxSira === -1) idxSira = 0;
+          if (idxName === -1) idxName = 1;
+          if (idxTC === -1) idxTC = 2;
+          if (idxSicil === -1) idxSicil = 3;
+          if (idxKadro === -1) idxKadro = 4;
+          if (idxDogum === -1) idxDogum = 5;
+          if (idxYeri === -1) idxYeri = 6;
+          if (idxTel === -1) idxTel = 7;
+          if (idxKan === -1) idxKan = 8;
+          if (idxAdres === -1) idxAdres = 9;
+          if (idxYakin === -1) idxYakin = 10;
+          if (idxEsTel === -1 || idxEsTel === idxTel) idxEsTel = 11;
+
+          // Extract and map all rows below the header
           let targetRowIdx = 0;
-          for (let r = 0; r < rawRows.length; r++) {
+          for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
             const rawRow = rawRows[r] || [];
-            const colA = String(rawRow[0] || '').trim();
             
-            // Check if this row is a header, metadata or title:
+            // Check if this row is a title, metadata, or header to skip
+            const colA = String(rawRow[idxSira] || '').trim();
+            const colB = String(rawRow[idxName] || '').trim();
+            const colD = String(rawRow[idxSicil] || '').trim();
+            
             const isHeader = colA.toLowerCase().includes("sira") || 
                              colA.toLowerCase().includes("no") || 
-                             colA.toLowerCase().includes("cizelge") || 
-                             colA.toLowerCase().includes("çizelge") || 
+                             colB.toLowerCase().includes("adi") || 
+                             colB.toLowerCase().includes("soyad") ||
                              colA.toLowerCase().includes("orman") || 
                              colA.toLowerCase().includes("havacilik") || 
-                             colA.toLowerCase().includes("havacılık") || 
-                             colA.toLowerCase().includes("personel") ||
-                             colA.toLowerCase().includes("mudurlugu") ||
-                             colA.toLowerCase().includes("müdürlüğü");
+                             colA.toLowerCase().includes("personel");
+
+            // Empty check across primary columns
+            const hasData = colA !== "" || colB !== "" || colD !== "";
             
-            // It is a valid data row if Column A is populated and is NOT a title/header
-            const hasSiraNo = colA !== "" && !isHeader;
-            
-            if (hasSiraNo && targetRowIdx < 537) {
-              for (let c = 0; c < 12; c++) {
-                gridData[targetRowIdx][c] = rawRow[c] !== undefined ? String(rawRow[c]).trim() : "";
+            if (hasData && !isHeader && targetRowIdx < 537) {
+              const cellMapping = [idxSira, idxName, idxTC, idxSicil, idxKadro, idxDogum, idxYeri, idxTel, idxKan, idxAdres, idxYakin, idxEsTel];
+              
+              cellMapping.forEach((srcIdx, destIdx) => {
+                gridData[targetRowIdx][destIdx] = rawRow[srcIdx] !== undefined ? String(rawRow[srcIdx]).trim() : "";
+              });
+
+              // Ensure Sıra No is a valid consecutive sequence number
+              if (gridData[targetRowIdx][0] === "") {
+                gridData[targetRowIdx][0] = String(targetRowIdx + 1);
               }
+
               targetRowIdx++;
             }
           }
           
-          // Fallback to basic copy if no matching row with Sıra No was structured this way
+          // Fallback to basic copy if no rows matched the smart mapping
           if (targetRowIdx === 0) {
             for (let r = 0; r < 537; r++) {
               const rawRow = rawRows[r] || [];
@@ -2573,7 +3406,7 @@ export default function App() {
           
           setIsSendingToSheets(prev => ({ ...prev, [5]: true }));
           setUploadProgress(10);
-          showNotification(`${file.name} dosyası çözümleniyor ve Google Drive'a yedekleniyor...`);
+          showNotification(`${file.name} dosyası çözümleniyor and Google Drive'a yedekleniyor...`);
 
           // Background Google Drive upload for the Excel file to persist it on Drive
           fileToBase64(file).then(async (base64Data) => {
@@ -2629,6 +3462,12 @@ export default function App() {
                 const filtered = prev.filter(p => !p.name.toLowerCase().includes("personel_bilgi"));
                 return [excelPdfMeta, ...filtered];
               });
+
+              // Automatically open the Personnel Information table immediately as requested
+              setSelectedFormId(5);
+              setModalType('form_table');
+              setModalTitle(TABLE_CONFIGS[5].title);
+              setSearchQuery('');
             } else {
               setUploadProgress(progressVal);
             }
@@ -2862,7 +3701,7 @@ export default function App() {
         
         const parsedSheets = workbook.SheetNames.map((sheetName, index) => {
           const worksheet = workbook.Sheets[sheetName];
-          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "", raw: false });
           
           const dynamicPrefix = isSummerForm(id)
             ? getSummerPeriodSheetPrefix(id, selectedSummerMonth)
@@ -3002,12 +3841,12 @@ export default function App() {
               </div>
               
               <div className="text-center">
-                <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tighter leading-none mb-2 text-white text-shadow uppercase">
-                  HAVA ARAÇLARI BAKIM
+                <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight leading-tight text-white text-shadow uppercase">
+                  HAVA ARAÇLARI BAKIM VE TEKNİK
                 </h1>
-                <h2 className="text-lg sm:text-xl md:text-2xl font-light tracking-[0.2em] text-white/80 uppercase">
-                  TEKNİK ŞUBE MÜDÜRLÜĞÜ
-                </h2>
+                <div className="text-lg sm:text-xl md:text-2xl font-black tracking-[0.2em] text-emerald-400 uppercase mt-1">
+                  ŞUBE MÜDÜRLÜĞÜ
+                </div>
               </div>
 
               {/* Sağ Logo Frame */}
@@ -3125,13 +3964,13 @@ export default function App() {
               className="pointer-events-auto flex items-center gap-2 text-slate-800 bg-white/95 hover:bg-white border border-slate-200/80 backdrop-blur-md shadow-lg px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wider transition-all hover:scale-105 active:scale-95 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4 text-emerald-800" />
-              <span>{(modalType === 'form_table' || modalType === 'excel_sync' || categoryHistory.length > 1) ? 'Geri' : 'Kapat'}</span>
+              <span>{(modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync' || categoryHistory.length > 1) ? 'Geri' : 'Kapat'}</span>
             </button>
 
             {/* Action Buttons */}
             <div className="flex items-center gap-2 pointer-events-auto">
-              {/* Show Veri Güncelle button only on FORM KAYITLARI categories or views */}
-              {(selectedCategory === 'FORM KAYITLARI' || selectedFormId !== null || modalType === 'form_table' || modalType === 'excel_sync') && (
+              {/* Show Veri Güncelle button on Form/Teçhizat views */}
+              {(selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
                 <button
                   onClick={() => {
                     setPasswordInput('');
@@ -3145,14 +3984,6 @@ export default function App() {
                 </button>
               )}
 
-              <button
-                id="modal-close-btn"
-                onClick={closeSystem}
-                aria-label="Kapat"
-                className="flex items-center justify-center text-slate-800 bg-white/95 hover:bg-red-50 hover:text-red-600 border border-slate-200/80 backdrop-blur-md shadow-lg w-10 h-10 rounded-full transition-all hover:scale-105 active:scale-95 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
             </div>
           </div>
           
@@ -3176,7 +4007,7 @@ export default function App() {
 
           {/* KATEGORİ SEÇİM PANELİ (İKMAL / TEÇHİZAT TAKİP / FORM KAYITLARI VB.) */}
           {modalType === 'category' && selectedCategory && (
-            <div id="category-menu-content" className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-[#f8fafc] to-[#f1f5f9] p-6 overflow-y-auto w-full h-full">
+            <div id="category-menu-content" className="absolute inset-0 flex flex-col items-center justify-start md:justify-center bg-gradient-to-br from-[#f8fafc] to-[#f1f5f9] p-6 pt-24 md:pt-20 overflow-y-auto w-full h-full">
               <div id="category-buttons" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-5xl p-2 mx-auto">
                 
                 {/* İKMAL Alt Butonları */}
@@ -3225,7 +4056,7 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={() => showDesignPhase('HANGAR YER DESTEK TEÇHİZATLARI')}
+                      onClick={() => openTechizatMatrix('hangar', 'HANGAR YER DESTEK TEÇHİZATLARI')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm">
@@ -3241,7 +4072,7 @@ export default function App() {
                 {selectedCategory === 'HA_YER_DESTEK' && (
                   <>
                     <button
-                      onClick={() => showDesignPhase('BELL 429 YER DESTEK LİSTELERİ')}
+                      onClick={() => openTechizatMatrix('bell429', 'BELL 429 YER DESTEK TEÇHİZATLARI')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
@@ -3252,7 +4083,7 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={() => showDesignPhase('AT-802F YER DESTEK LİSTELERİ')}
+                      onClick={() => openTechizatMatrix('at802', 'AT-802F YER DESTEK TEÇHİZATLARI')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-[10px]">
@@ -3274,7 +4105,7 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={() => showDesignPhase('C-650 YER DESTEK LİSTELERİ')}
+                      onClick={() => openTechizatMatrix('c650', 'C-650 YER DESTEK TEÇHİZATLARI')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
@@ -3285,7 +4116,7 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={() => showDesignPhase('B-360 YER DESTEK LİSTELERİ')}
+                      onClick={() => openTechizatMatrix('b360', 'B-360 YER DESTEK TEÇHİZATLARI')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
@@ -3294,6 +4125,19 @@ export default function App() {
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">B-360</span>
                       <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Teçhizat Listesi</span>
                     </button>
+
+                    <button
+                      onClick={() => openTechizatMatrix('all', 'TÜM BİRİMLER ORTAK TEÇHİZAT ARAMA')}
+                      className="bg-emerald-50 hover:bg-emerald-100/80 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group sm:col-span-2 lg:col-span-3 mt-4"
+                    >
+                      <div className="w-16 h-16 bg-[#0b3d1d] text-white rounded-2xl flex items-center justify-center mb-6 shadow-md group-hover:bg-[#082a14] transition-all">
+                        <Search className="w-8 h-8 text-emerald-300" />
+                      </div>
+                      <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">🔍 TÜM BİRİMLERDE TEÇHİZAT ARA</span>
+                      <span className="text-xs text-emerald-800 uppercase tracking-widest font-mono font-bold">
+                        Bütün Hava Araçlarının Yer Destek Teçhizatlarını Tek Listede Arayın & Excel Olarak İndirin
+                      </span>
+                    </button>
                   </>
                 )}
 
@@ -3301,7 +4145,7 @@ export default function App() {
                 {selectedCategory === 'T70_DETAY' && (
                   <>
                     <button
-                      onClick={() => showDesignPhase('T-70 BUMBİ BACKET LİSTESİ')}
+                      onClick={() => openTechizatMatrix('t70_bumbi_backet', 'T-70 BUMBİ BACKET TEÇHİZATI')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm text-[#0b3d1d] font-extrabold text-sm">
@@ -3312,7 +4156,7 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={() => showDesignPhase('T-70 YER DESTEK TEÇHİZATLARI LİSTESİ')}
+                      onClick={() => openTechizatMatrix('t70', 'T-70 YER DESTEK TEÇHİZATI')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm text-[#0b3d1d]">
@@ -3452,6 +4296,48 @@ export default function App() {
                         </span>
                       </div>
                     </button>
+
+                    <a
+                      href="https://bulut.ogm.gov.tr/DIJITALYAKIT"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm relative">
+                        <Fuel className="w-8 h-8 text-[#0b3d1d]" />
+                        <span className="absolute -top-1 -right-1 bg-emerald-800 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">YENİ SEKME ➜</span>
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">7. YAKIT MAKBUZ ARŞİVLERİ</span>
+                      <span className="text-[9px] text-[#0b3d1d]/60 uppercase tracking-wider font-semibold font-mono mb-2">Dijital Yakıt Arşivleri</span>
+                      <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2 py-0.5 rounded-full">bulut.ogm.gov.tr/DIJITALYAKIT ➜</span>
+                      
+                      <div className="mt-auto pt-4 border-t border-gray-100 w-full text-center">
+                        <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest font-mono">
+                          GÜNCELLEME TARİHİ: -
+                        </span>
+                      </div>
+                    </a>
+
+                    <a
+                      href="https://bulut.ogm.gov.tr/DENETLEME"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm relative">
+                        <Folder className="w-8 h-8 text-[#0b3d1d]" />
+                        <span className="absolute -top-1 -right-1 bg-emerald-800 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">YENİ SEKME ➜</span>
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">8. DENETLEME RAPOR VE EKLER</span>
+                      <span className="text-[9px] text-[#0b3d1d]/60 uppercase tracking-wider font-semibold font-mono mb-2">Denetleme Rapor ve Ekleri</span>
+                      <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2 py-0.5 rounded-full">bulut.ogm.gov.tr/DENETLEME ➜</span>
+                      
+                      <div className="mt-auto pt-4 border-t border-gray-100 w-full text-center">
+                        <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest font-mono">
+                          GÜNCELLEME TARİHİ: -
+                        </span>
+                      </div>
+                    </a>
                   </>
                 )}
 
@@ -3726,7 +4612,7 @@ export default function App() {
                                       const isZebra = rIdx % 2 === 1;
                                       html += `<tr class="${isZebra ? 'zebra' : ''}">`;
                                       row.forEach((cell, cIdx) => {
-                                        const val = cell || "";
+                                        const val = cIdx === 5 ? formatBirthDateToTurkish(cell) : (cell || "");
                                         const isNumStr = [2, 3, 7, 11].includes(cIdx);
                                         html += `<td class="${isNumStr ? 'num' : ''}" style="${cIdx === 9 ? 'white-space: pre-wrap; text-align: left;' : ''}">${val.replace(/\n/g, '<br>')}</td>`;
                                       });
@@ -3854,7 +4740,7 @@ export default function App() {
                                       const headers = [
                                         "SIRA", "ADI SOYADI", "T.C. KİMLİK", "SİCİL", 
                                         "KADRO UNV.", "DOĞUM T.", "GÖREV YERİ", "TEL NO", 
-                                        "KAN", "ADRES BİLGİSİ", "YAKIN ADI", "EŞ TEL NO"
+                                        "KAN", "ADRES BİLGİSİ", "YAKIN ADI", "YAKIN TEL NO"
                                       ].map(tr);
                                       
                                       let currentX = startX;
@@ -3871,7 +4757,7 @@ export default function App() {
                                       
                                       chunk.forEach(({ row }, rIdx) => {
                                         const cellLines = row.map((cellVal, cIdx) => {
-                                          const val = cellVal || "";
+                                          const val = cIdx === 5 ? formatBirthDateToTurkish(cellVal) : (cellVal || "");
                                           return doc.splitTextToSize(tr(val), colWidths[cIdx] - 2);
                                         });
                                         
@@ -3942,42 +4828,28 @@ export default function App() {
 
                         {/* Beautiful landscape scrollable page content representing Excel rendered as PDF */}
                         <div className="flex-1 overflow-auto p-6 md:p-8 flex justify-center bg-slate-950 scrollbar-thin">
-                          <div className="w-full max-w-7xl bg-white text-slate-800 rounded-[1.5rem] shadow-2xl p-8 flex flex-col border border-slate-200 select-text relative overflow-x-auto min-w-[1000px]">
+                          <div className="w-full max-w-7xl bg-white text-slate-800 rounded-[1.5rem] shadow-2xl p-8 flex flex-col border border-slate-200 select-text relative overflow-x-auto">
                             
-                            {/* PDF Header Mockup */}
-                            <div className="border-b-2 border-emerald-800 pb-6 mb-6 flex items-center justify-between shrink-0 select-none">
-                              <div className="flex items-center gap-3">
-                                <div className="w-12 h-12 bg-emerald-800 rounded-xl flex items-center justify-center text-white font-black text-lg shadow-md">
-                                  OGM
-                                </div>
-                                <div className="text-left">
-                                  <h4 className="text-sm font-black text-emerald-900 uppercase tracking-wider">ORMAN GENEL MÜDÜRLÜĞÜ</h4>
-                                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">HAVACILIK DAİRESİ BAŞKANLIĞI</p>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <h3 className="text-base font-black text-slate-800 uppercase tracking-tighter">PERSONEL BİLGİ ÇİZELGESİ</h3>
-                              </div>
-                            </div>
-
-                            {/* Column Headers */}
-                            <div className="grid grid-cols-[60px_160px_110px_80px_100px_90px_90px_110px_70px_180px_140px_120px] gap-2 bg-slate-900 text-white rounded-xl p-3 text-center text-[10px] font-extrabold uppercase tracking-wider mb-2 select-none min-w-[1310px]">
-                              <div>SIRA NO</div>
-                              <div>ADI SOYADI</div>
-                              <div>T.C. KİMLİK</div>
-                              <div>SİCİL NO</div>
-                              <div>KADRO UNVANI</div>
-                              <div>DOĞUM T.</div>
-                              <div>GÖREV YERİ</div>
-                              <div>TELEFON NO</div>
-                              <div>KAN GRUBU</div>
-                              <div>ADRES BİLGİSİ</div>
-                              <div>YAKININ ADI</div>
-                              <div>EŞ TEL NUMARALARI</div>
-                            </div>
-
-                            {/* 537 Rows Layout container. Scrollable horizontally and vertically */}
-                            <div className="flex-1 space-y-1.5 max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin overflow-x-auto">
+                            {/* Column Headers and Table rows using a real, beautifully-designed responsive table */}
+                            <div className="flex-1 overflow-x-auto scrollbar-thin">
+                              <table className="w-full border-collapse text-[11px] text-slate-700 min-w-[1100px] table-fixed">
+                                <thead>
+                                  <tr className="bg-slate-900 text-white font-extrabold uppercase tracking-wider select-none text-center text-[10px]">
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '4%' }}>SIRA</th>
+                                    <th className="p-2 border border-slate-200 text-left" style={{ width: '13%' }}>ADI SOYADI</th>
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '10%' }}>T.C. KİMLİK</th>
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '6%' }}>SİCİL</th>
+                                    <th className="p-2 border border-slate-200 text-left" style={{ width: '10%' }}>KADRO UNV.</th>
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '8%' }}>DOĞUM T.</th>
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '8%' }}>GÖREV YERİ</th>
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '9%' }}>TELEFON NO</th>
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '5%' }}>KAN</th>
+                                    <th className="p-2 border border-slate-200 text-left" style={{ width: '15%' }}>ADRES BİLGİSİ</th>
+                                    <th className="p-2 border border-slate-200 text-left" style={{ width: '12%' }}>YAKININ ADI</th>
+                                    <th className="p-2 border border-slate-200 text-center" style={{ width: '10%' }}>YAKIN TEL NO</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
                               {(() => {
                                 const q = excelSearchQuery.toLowerCase().trim();
                                 const matchesList: { r: number; c: number }[] = [];
@@ -3994,38 +4866,19 @@ export default function App() {
 
                                 if (currentFilteredRows.length === 0) {
                                   return (
-                                    <div className="text-center py-12 text-slate-400 select-none font-mono text-xs uppercase tracking-wider min-w-[1310px]">
-                                      🚫 ARAMA SONUCUNA UYGUN PERSONEL BULUNAMADI!
-                                    </div>
+                                    <tr>
+                                      <td colSpan={12} className="text-center py-12 text-slate-400 select-none font-mono text-xs uppercase tracking-wider">
+                                        🚫 ARAMA SONUCUNA UYGUN PERSONEL BULUNAMADI!
+                                      </td>
+                                    </tr>
                                   );
                                 }
 
                                 return currentFilteredRows.map(({ row, rIdx }) => {
-                                  const hasText = true;
-                                  
-                                  // If row is empty, we show a highly styled, clean "empty slot"
-                                  if (!hasText) {
-                                    return (
-                                      <div 
-                                        key={rIdx} 
-                                        className="grid grid-cols-[60px_160px_110px_80px_100px_90px_90px_110px_70px_180px_140px_120px] gap-2 px-3 py-2 rounded-lg border border-slate-100 bg-slate-50/40 text-[10px] font-mono text-slate-350 hover:bg-slate-100/50 transition-all select-none group min-w-[1310px]"
-                                      >
-                                        <div className="font-bold text-slate-400 group-hover:text-[#0b3d1d]">R-{String(rIdx + 1).padStart(3, '0')}</div>
-                                        <div className="col-span-11 text-left text-slate-350 italic tracking-widest pl-4">
-                                          --- BOŞ VERİ ALANI (METİN GELDİKÇE DOLACAKTIR) ---
-                                        </div>
-                                      </div>
-                                    );
-                                  }
-
                                   return (
-                                    <div 
+                                    <tr 
                                       key={rIdx} 
-                                      className={`grid grid-cols-[60px_160px_110px_80px_100px_90px_90px_110px_70px_180px_140px_120px] gap-2 px-3 py-2 rounded-lg border text-[11px] font-semibold items-center transition-all min-w-[1310px] ${
-                                        hasText 
-                                          ? 'border-slate-200 bg-white hover:border-emerald-500 hover:shadow-md' 
-                                          : 'border-slate-100 bg-slate-50/50 text-slate-400'
-                                      }`}
+                                      className="border-b border-slate-200 bg-white hover:bg-emerald-50/25 transition-all"
                                     >
                                       {row.map((cell, cIdx) => {
                                         // Search Match check
@@ -4050,38 +4903,40 @@ export default function App() {
                                         const label = COLUMN_LABELS[cIdx] || "Bilgi";
 
                                         return (
-                                          <div 
+                                          <td 
                                             key={cIdx} 
                                             onDoubleClick={() => {
                                               if (cell) {
                                                 setActiveModalCell({
                                                   r: rIdx,
                                                   c: cIdx,
-                                                  value: cell,
+                                                  value: cIdx === 5 ? formatBirthDateToTurkish(cell) : cell,
                                                   label: label
                                                 });
                                                 setCopiedCellSuccess(false);
                                               }
                                             }}
-                                            title={cell ? `${label}: ${cell} (Detay için Çift Tıklayın)` : "Boş Veri"}
-                                            className={`truncate px-1 py-0.5 rounded transition-all text-center select-text cursor-zoom-in hover:bg-emerald-50 hover:text-emerald-950 active:scale-95 ${
+                                            title={cell ? `${label}: ${cIdx === 5 ? formatBirthDateToTurkish(cell) : cell} (Detay için Çift Tıklayın)` : "Boş Veri"}
+                                            className={`p-2 border border-slate-200 truncate text-center select-text cursor-zoom-in hover:bg-emerald-50 hover:text-emerald-950 transition-all ${
                                               isActiveMatch 
                                                 ? 'bg-blue-600 text-white font-black scale-105 shadow-lg ring-2 ring-blue-400 animate-pulse'
                                                 : isMatch
                                                   ? 'bg-blue-200 text-blue-950 font-black border border-blue-400'
                                                   : cell 
                                                     ? 'text-slate-800 font-sans font-medium' 
-                                                    : 'text-slate-300 italic'
+                                                    : 'text-slate-350 italic'
                                             }`}
                                           >
-                                            {cell || "-"}
-                                          </div>
+                                            {cIdx === 5 ? formatBirthDateToTurkish(cell) : (cell || "-")}
+                                          </td>
                                         );
                                       })}
-                                    </div>
+                                    </tr>
                                   );
                                 });
                               })()}
+                                </tbody>
+                              </table>
                             </div>
 
                             {/* PDF Footer Info */}
@@ -4136,7 +4991,7 @@ export default function App() {
                                       <th className="border border-slate-300 p-1 bg-[#0b3d1d] text-white text-center" style={{ width: '5%' }}>KAN</th>
                                       <th className="border border-slate-300 p-1 bg-[#0b3d1d] text-white text-left" style={{ width: '16%' }}>ADRES BİLGİSİ</th>
                                       <th className="border border-slate-300 p-1 bg-[#0b3d1d] text-white text-left" style={{ width: '12%' }}>YAKIN ADI</th>
-                                      <th className="border border-slate-300 p-1 bg-[#0b3d1d] text-white text-center" style={{ width: '12%' }}>EŞ TEL NO</th>
+                                      <th className="border border-slate-300 p-1 bg-[#0b3d1d] text-white text-center" style={{ width: '12%' }}>YAKIN TEL NO</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -4147,7 +5002,7 @@ export default function App() {
                                         <td className="border border-slate-300 p-1 text-center font-mono text-black">{row[2] || ""}</td>
                                         <td className="border border-slate-300 p-1 text-center font-mono text-black">{row[3] || ""}</td>
                                         <td className="border border-slate-300 p-1 text-left text-black" style={{ wordBreak: 'break-word', whiteSpace: 'normal' }}>{row[4] || ""}</td>
-                                        <td className="border border-slate-300 p-1 text-center font-mono text-black">{row[5] || ""}</td>
+                                        <td className="border border-slate-300 p-1 text-center font-mono text-black">{formatBirthDateToTurkish(row[5])}</td>
                                         <td className="border border-slate-300 p-1 text-center text-black" style={{ wordBreak: 'break-word', whiteSpace: 'normal' }}>{row[6] || ""}</td>
                                         <td className="border border-slate-300 p-1 text-center font-mono text-black" style={{ whiteSpace: 'nowrap' }}>{row[7] || ""}</td>
                                         <td className="border border-slate-300 p-1 text-center font-bold text-black">{row[8] || ""}</td>
@@ -4220,6 +5075,57 @@ export default function App() {
                           )}
                         </div>
                       );
+                    }
+
+                    if (isMobile) {
+                      // Mobile PDF Viewer - Sequential cached page images for high performance and zero compatibility issues
+                      if (cachedPdfPages && cachedPdfPages.length > 0) {
+                        return (
+                          <div className="absolute inset-0 bg-slate-950 flex flex-col overflow-hidden text-white animate-fade-in z-20">
+                            {/* Mobile Top Toolbar */}
+                            <div className="shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between gap-4 select-none shadow-md z-30">
+                              <div className="flex-1 min-w-0">
+                                <h4 className="text-[11px] font-black text-slate-100 uppercase tracking-wider truncate">{match.name}</h4>
+                                <p className="text-[9px] text-emerald-400 font-extrabold tracking-widest uppercase mt-0.5">ÖNBELLEK GÖRÜNTÜLEME (MOBİL UYUMLU)</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] bg-[#0b3d1d] text-white px-2 py-1 rounded-md font-bold font-mono">
+                                  {cachedPdfPages.length} SAYFA
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Scrollable container displaying images of all pages */}
+                            <div className="flex-1 overflow-y-auto p-4 bg-slate-900 space-y-4">
+                              {cachedPdfPages.map((page) => (
+                                <div key={page.pageNumber} className="flex flex-col items-center bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-xl p-1 relative">
+                                  <img
+                                    src={page.dataUrl}
+                                    alt={`Sayfa ${page.pageNumber}`}
+                                    className="w-full h-auto object-contain rounded-lg"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-sm text-white px-2 py-1 rounded text-[9px] font-black uppercase tracking-wider font-mono">
+                                    SAYFA {page.pageNumber}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      } else {
+                        return (
+                          <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center p-8 text-center animate-fade-in z-20">
+                            <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
+                            <h3 className="text-emerald-400 font-extrabold text-xs uppercase tracking-widest animate-pulse font-mono mb-2">
+                              CİHAZ ÖNBELLEĞİNDEN SAYFALAR YÜKLENİYOR...
+                            </h3>
+                            <p className="text-[10px] text-slate-400 uppercase tracking-wider max-w-xs leading-relaxed">
+                              PDF sayfaları yüksek çözünürlüklü olarak taranıyor ve mobil uyumlu görünüme hazırlanıyor. Lütfen bekleyin.
+                            </p>
+                          </div>
+                        );
+                      }
                     }
 
                     if (pdfBlobUrl) {
@@ -4319,6 +5225,409 @@ export default function App() {
             </div>
           )}
 
+          {/* TEÇHİZAT TAKİP MATRİS EKRANI */}
+          {modalType === 'techizat_matrix' && activeTechizatType && (() => {
+            const baseColumns = [
+              "SIRA NO", 
+              "TEÇHİZAT ADI", 
+              "PARÇA NO (P/N) / MODEL", 
+              "SERİ NO (S/N)", 
+              "MİKTAR / KAPASİTE", 
+              "BULUNDUĞU YER", 
+              "DURUMU", 
+              "SON KONTROL / BAKIM", 
+              "GELECEK KONTROL / BAKIM", 
+              "SON KONTROLÜ YAPAN FİRMA", 
+              "AÇIKLAMA", 
+              "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
+              "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
+              "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+            ];
+            const cols = activeTechizatType === 'all'
+              ? ["AİT OLDUĞU BİRİM", ...baseColumns]
+              : baseColumns;
+
+            const formatRowWithMailStatus = (row: string[]) => {
+              const newRow = [...row];
+              while (newRow.length < 14) {
+                newRow.push("");
+              }
+              return newRow.slice(0, 14);
+            };
+
+            const rows = activeTechizatType === 'all'
+              ? [
+                  ...techizatBell429Data.map(r => ["BELL 429", ...formatRowWithMailStatus(r)]),
+                  ...techizatAt802Data.map(r => ["AT-802F", ...formatRowWithMailStatus(r)]),
+                  ...techizatT70Data.map(r => ["T-70 YER DESTEK", ...formatRowWithMailStatus(r)]),
+                  ...techizatT70BumbiBacketData.map(r => ["T-70 BUMBİ BACKET", ...formatRowWithMailStatus(r)]),
+                  ...techizatC650Data.map(r => ["C-650", ...formatRowWithMailStatus(r)]),
+                  ...techizatB360Data.map(r => ["B-360", ...formatRowWithMailStatus(r)]),
+                  ...techizatHangarData.map(r => ["HANGAR YER DESTEK", ...formatRowWithMailStatus(r)])
+                ]
+              : activeTechizatType === 'bell429' ? techizatBell429Data.map(formatRowWithMailStatus)
+              : activeTechizatType === 'at802' ? techizatAt802Data.map(formatRowWithMailStatus)
+              : activeTechizatType === 't70' ? techizatT70Data.map(formatRowWithMailStatus)
+              : activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData.map(formatRowWithMailStatus)
+              : activeTechizatType === 'b360' ? techizatB360Data.map(formatRowWithMailStatus)
+              : activeTechizatType === 'c650' ? techizatC650Data.map(formatRowWithMailStatus)
+              : techizatHangarData.map(formatRowWithMailStatus);
+
+            const q = techizatSearchQuery.toLowerCase().trim();
+            const matchesList: { r: number; c: number }[] = [];
+
+            const filteredRows = rows.filter(row => {
+              if (!q) return true;
+              return row.some(cell => cell && cell.toLowerCase().includes(q));
+            });
+
+            // Locate search match coordinates
+            rows.forEach((row, rIdx) => {
+              row.forEach((cell, cIdx) => {
+                if (q && cell && cell.toLowerCase().includes(q)) {
+                  matchesList.push({ r: rIdx, c: cIdx });
+                }
+              });
+            });
+
+            const activeMatch = matchesList[activeTechizatMatchIdx];
+            const gelecekBakimColIdx = cols.indexOf("GELECEK KONTROL / BAKIM");
+
+            // Sıralama (Normalde seçili değil, ama basılınca Kırmızı -> Turuncu -> Sarı -> Yeşil sıralasın)
+            let processedRows = [...filteredRows];
+            if (sortByColor && gelecekBakimColIdx !== -1) {
+              processedRows.sort((rowA, rowB) => {
+                const valA = rowA[gelecekBakimColIdx] || "";
+                const valB = rowB[gelecekBakimColIdx] || "";
+                
+                const daysA = parseGelecekBakimDays(valA);
+                const daysB = parseGelecekBakimDays(valB);
+                
+                const getPriorityScore = (days: number | null) => {
+                  if (days === null) return 5;
+                  if (days < 30) return 1; // Kırmızı
+                  if (days >= 60 && days <= 90) return 2; // Turuncu
+                  if (days >= 30 && days < 60) return 3; // Sarı
+                  return 4; // Yeşil (>90)
+                };
+                
+                const scoreA = getPriorityScore(daysA);
+                const scoreB = getPriorityScore(daysB);
+                
+                if (scoreA !== scoreB) {
+                  return scoreA - scoreB;
+                }
+                
+                // Aynı gruptakileri en yakın gün sayısına göre artan sırala
+                const dJanA = daysA !== null ? daysA : 999999;
+                const dJanB = daysB !== null ? daysB : 999999;
+                return dJanA - dJanB;
+              });
+            }
+
+            return (
+              <div className="absolute inset-0 flex flex-col bg-slate-50 p-4 md:p-6 lg:p-8 animate-fade-in overflow-y-auto">
+                <div className="max-w-7xl mx-auto w-full flex flex-col h-full">
+                  
+                  {/* Header Titles */}
+                  <div className="text-center mb-6 select-none print:hidden">
+                    <h3 className="text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-tighter">
+                      🛠️ {modalTitle}
+                    </h3>
+                    {formUpdateDates[`techizat_${activeTechizatType}`] && (
+                      <p className="text-xs font-mono font-extrabold text-emerald-700 mt-2 bg-emerald-100 border border-emerald-200/50 rounded-full px-4 py-1.5 inline-block shadow-sm">
+                        📅 GÜNCELLEME TARİHİ: {formUpdateDates[`techizat_${activeTechizatType}`]}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Search and Utility Controls */}
+                  <div className="bg-slate-900 text-slate-200 rounded-3xl p-5 mb-6 flex flex-col xl:flex-row gap-4 items-center justify-between shadow-xl border border-slate-800 print:hidden select-none">
+                    <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
+                      <div className="bg-slate-800 p-2.5 rounded-2xl border border-slate-700">
+                        <Search className="w-5 h-5 text-emerald-400" />
+                      </div>
+                      <div className="relative flex-1 sm:flex-initial">
+                        <input
+                          type="text"
+                          placeholder="Teçhizat veya durum aratın..."
+                          value={techizatSearchQuery}
+                          onChange={(e) => {
+                            setTechizatSearchQuery(e.target.value);
+                            setActiveTechizatMatchIdx(0);
+                          }}
+                          className="bg-slate-800 text-white font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-60 border border-slate-700 placeholder-slate-400"
+                        />
+                      </div>
+                      {techizatSearchQuery && (
+                        <span className="text-[10px] font-mono font-black text-emerald-400 px-3 py-1.5 bg-emerald-950/50 rounded-xl border border-emerald-900 shrink-0">
+                          {matchesList.length} EŞLEŞME
+                        </span>
+                      )}
+
+                      <button
+                        onClick={() => setSortByColor(!sortByColor)}
+                        className={`px-4 py-3 active:scale-95 font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border shrink-0 ${
+                          sortByColor 
+                            ? 'bg-red-600 hover:bg-red-700 text-white border-red-500 animate-pulse' 
+                            : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
+                        }`}
+                        title="Bakım gün sayısına göre (Kırmızı ➜ Turuncu ➜ Sarı ➜ Yeşil) sıralar"
+                      >
+                        <SlidersHorizontal className="w-4 h-4 text-amber-400" />
+                        <span>{sortByColor ? "🔴 RENK SIRALAMASI AKTİF" : "⏳ RENK KODUNA GÖRE SIRALA"}</span>
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto justify-end">
+                      {matchesList.length > 0 && (
+                        <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-2xl border border-slate-700">
+                          <button
+                            onClick={() => {
+                              setActiveTechizatMatchIdx(prev => (prev - 1 + matchesList.length) % matchesList.length);
+                            }}
+                            className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
+                            title="Önceki"
+                          >
+                            ◀
+                          </button>
+                          <span className="text-[10px] font-mono font-black text-slate-300">
+                            {activeTechizatMatchIdx + 1} / {matchesList.length}
+                          </span>
+                          <button
+                            onClick={() => {
+                              setActiveTechizatMatchIdx(prev => (prev + 1) % matchesList.length);
+                            }}
+                            className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
+                            title="Sonraki"
+                          >
+                            ▶
+                          </button>
+                        </div>
+                      )}
+
+                      {activeTechizatType !== 'all' && (
+                        <button
+                          onClick={() => {
+                            setPasswordInput('');
+                            setPasswordError(false);
+                            setIsPasswordModalOpen(true);
+                          }}
+                          className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
+                        >
+                          <RefreshCw className="w-4 h-4 text-emerald-300 animate-spin-slow" />
+                          <span>VERİ GÜNCELLE</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => exportTechizatToExcel(activeTechizatType, cols, rows, modalTitle)}
+                        className="px-4 py-3 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-900/10 border border-emerald-600 shrink-0"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>EXCEL OLARAK AKTAR</span>
+                      </button>
+
+                      <button
+                        onClick={() => window.print()}
+                        className="px-4 py-3 bg-indigo-700 hover:bg-indigo-600 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-indigo-900/10 border border-indigo-600 shrink-0"
+                      >
+                        <Printer className="w-4 h-4" />
+                        <span>YAZDIR / PDF İNDİR</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Dynamic Interactive Grid Container */}
+                  <div className="flex-1 bg-white border-2 border-slate-200/60 rounded-[2.5rem] shadow-xl overflow-hidden flex flex-col print:border-none print:shadow-none min-h-[400px]">
+                    
+                    {/* Table Title Bar */}
+                    <div className="bg-slate-900 px-6 py-4 border-b border-slate-800 flex items-center justify-between select-none print:hidden shrink-0">
+                      <div></div>
+                      <span className="text-[10px] font-mono font-black text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                        {processedRows.length} KALEM TEÇHİZAT LİSTELENDİ
+                      </span>
+                    </div>
+
+                    {/* Table Grid Scroll Wrapper */}
+                    <div className="flex-1 overflow-auto max-h-[60vh] print:max-h-none print:overflow-visible">
+                      <table className="w-full border-collapse text-left min-w-[1200px]">
+                        <thead>
+                          <tr className="bg-slate-900 border-b border-slate-800 select-none print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10">
+                            {cols.map((col, cIdx) => (
+                              <th 
+                                key={cIdx} 
+                                className="px-4 py-3.5 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono border-r border-slate-800 last:border-r-0"
+                              >
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {processedRows.length === 0 ? (
+                            <tr>
+                              <td colSpan={cols.length} className="px-6 py-16 text-center text-slate-400 font-extrabold text-sm select-none">
+                                🔍 Arama kriterlerine uygun teçhizat kaydı bulunamadı.
+                              </td>
+                            </tr>
+                          ) : (
+                            processedRows.map((row, rIdx) => {
+                              return (
+                                <tr 
+                                  key={rIdx} 
+                                  className="hover:bg-emerald-50/30 transition-colors duration-150 odd:bg-white even:bg-slate-50/50"
+                                >
+                                  {row.map((cell, cIdx) => {
+                                    const label = cols[cIdx] || "Veri";
+                                    const isMatch = q && cell && cell.toLowerCase().includes(q);
+                                    const isActiveMatch = activeMatch && activeMatch.r === rIdx && activeMatch.c === cIdx;
+
+                                    let cellStyleClass = cell 
+                                      ? 'text-slate-800 font-sans font-semibold' 
+                                      : 'text-slate-300 italic';
+                                      
+                                    if (cIdx === gelecekBakimColIdx && cell) {
+                                      const days = parseGelecekBakimDays(cell);
+                                      if (days !== null) {
+                                        if (days > 90) {
+                                          cellStyleClass = 'bg-emerald-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                        } else if (days >= 60) {
+                                          cellStyleClass = 'bg-orange-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                        } else if (days >= 30) {
+                                          cellStyleClass = 'bg-yellow-400 text-slate-900 font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                        } else {
+                                          cellStyleClass = 'bg-red-600 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center animate-pulse';
+                                        }
+                                      }
+                                    }
+
+                                    return (
+                                      <td 
+                                        key={cIdx} 
+                                        className="px-4 py-3 text-center border-r border-slate-100 last:border-r-0 max-w-[200px]"
+                                      >
+                                        <div 
+                                          onClick={() => {
+                                            if (cell) {
+                                              setActiveModalCell({
+                                                r: rIdx,
+                                                c: cIdx,
+                                                value: cell,
+                                                label: label
+                                              });
+                                              setCopiedCellSuccess(false);
+                                            }
+                                          }}
+                                          title={cell ? `${label}: ${cell} (Detay için Tıklayın)` : "Boş Veri"}
+                                          className={`truncate px-2 py-1 rounded-xl transition-all text-xs text-center select-text cursor-zoom-in hover:bg-emerald-100 hover:text-emerald-950 active:scale-95 ${
+                                            isActiveMatch 
+                                              ? 'bg-blue-600 text-white font-black scale-105 shadow-md ring-2 ring-blue-400 animate-pulse'
+                                              : isMatch
+                                                ? 'bg-blue-200 text-blue-950 font-black border border-blue-400'
+                                                : cellStyleClass
+                                          }`}
+                                        >
+                                          {cell || "-"}
+                                        </div>
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                  </div>
+
+                  {/* Renk Kodları Açıklama Paneli */}
+                  <div className="mt-6 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm print:hidden select-none">
+                    <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider mb-3">
+                      💡 GELECEK BAKIM / KONTROL RENK KODU AÇIKLAMALARI
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div className="flex items-center gap-3 p-3 bg-red-50 border border-red-200 rounded-2xl">
+                        <span className="w-5 h-5 rounded-lg bg-red-600 shrink-0 animate-pulse" />
+                        <div>
+                          <p className="text-xs font-bold text-red-950">KIRMIZI</p>
+                          <p className="text-[10px] text-red-700">30 Günden Az (<span className="font-mono">{'<'}30 Gün</span>)</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-2xl">
+                        <span className="w-5 h-5 rounded-lg bg-orange-500 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-orange-950">TURUNCU</p>
+                          <p className="text-[10px] text-orange-700">60 - 90 Gün Arası (<span className="font-mono">60-90 Gün</span>)</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-3 bg-yellow-50 border border-yellow-200 rounded-2xl">
+                        <span className="w-5 h-5 rounded-lg bg-yellow-400 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-yellow-950">SARI</p>
+                          <p className="text-[10px] text-yellow-700">30 - 60 Gün Arası (<span className="font-mono">30-60 Gün</span>)</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-2xl">
+                        <span className="w-5 h-5 rounded-lg bg-emerald-500 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-emerald-950">YEŞİL</p>
+                          <p className="text-[10px] text-emerald-700">90 Günden Fazla (<span className="font-mono">{'>'}90 Gün</span>)</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Print Only Representation (High contrast landscape layout) */}
+                  <div className="print-only-container hidden print:block bg-white text-black p-6 w-full">
+                    <div className="w-full text-black bg-white min-h-screen">
+                      
+                      {/* Brand Header */}
+                      <div className="border-b-4 border-[#0b3d1d] pb-4 mb-6 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-[#0b3d1d] text-white rounded-xl flex items-center justify-center font-black text-sm">
+                            OGM
+                          </div>
+                          <div className="text-left">
+                            <h4 className="text-sm font-black text-[#0b3d1d] uppercase tracking-wider leading-none">ORMAN GENEL MÜDÜRLÜĞÜ</h4>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <h3 className="text-base font-black text-slate-900 uppercase tracking-tighter">{modalTitle}</h3>
+                          <p className="text-[10px] text-slate-500 mt-1 font-mono font-semibold">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
+                        </div>
+                      </div>
+
+                      {/* Print Grid Table */}
+                      <table className="w-full border-collapse border border-slate-300 text-[9px]">
+                        <thead>
+                          <tr className="bg-[#0b3d1d] text-white font-bold">
+                            {cols.map((col, idx) => (
+                              <th key={idx} className="border border-slate-300 p-1.5 bg-[#0b3d1d] text-white text-center uppercase font-mono">{col}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {processedRows.map((row, rIdx) => (
+                            <tr key={rIdx} className={rIdx % 2 === 1 ? "bg-slate-50" : "bg-white"}>
+                              {row.map((cell, cIdx) => (
+                                <td key={cIdx} className="border border-slate-300 p-1.5 text-center text-slate-900 font-bold">{cell || "-"}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            );
+          })()}
+
           {/* EXCEL ONLINE & ÇEVRİMDIŞI UPDATE PANELİ WITH SMART CONTROLLER */}
           {modalType === 'excel_sync' && (
             <div className="absolute inset-0 flex flex-col bg-slate-50 p-6 md:p-8 animate-fade-in overflow-y-auto">
@@ -4361,6 +5670,10 @@ export default function App() {
                           onChange={(e) => {
                             const val = e.target.value;
                             setStep1Target(val);
+                            if (val === 'gun_takip') {
+                              fetchGunTakipSorumlulari();
+                              setIsSorumluModalOpen(true);
+                            }
                           }}
                           className="w-full bg-white border-2 border-slate-200 text-slate-800 font-extrabold text-xs uppercase px-4 py-4 rounded-xl shadow-sm focus:border-emerald-600 focus:ring-0 transition-all cursor-pointer appearance-none"
                         >
@@ -4373,6 +5686,14 @@ export default function App() {
                           <option value="3">3. BAKIM YETKİ ÇİZELGELERİ (3-Bakim_Yetki)</option>
                           <option value="5">5. PERSONEL BİLGİ ÇİZELGELERİ (5-Personel_Bilgi)</option>
                           <option value="6">6. PERSONEL UÇUŞ-HİZMET YILLARI (6-Personel_Ucus_Hizmet)</option>
+                          <option value="techizat_bell429">TEÇHİZAT ENVANTER TAKİBİ - BELL 429 (EXCEL)</option>
+                          <option value="techizat_at802">TEÇHİZAT ENVANTER TAKİBİ - AT-802 (EXCEL)</option>
+                          <option value="techizat_t70">TEÇHİZAT ENVANTER TAKİBİ - T-70 (EXCEL)</option>
+                          <option value="techizat_t70_bumbi_backet">TEÇHİZAT ENVANTER TAKİBİ - T-70 BUMBİ BACKET (EXCEL)</option>
+                          <option value="techizat_b360">TEÇHİZAT ENVANTER TAKİBİ - B-360 (EXCEL)</option>
+                          <option value="techizat_c650">TEÇHİZAT ENVANTER TAKİBİ - C-650 (EXCEL)</option>
+                          <option value="techizat_hangar">TEÇHİZAT ENVANTER TAKİBİ - HANGAR YER DESTEK (EXCEL)</option>
+                          <option value="gun_takip">📋 SORUMLU BİRİM VE MAİL AYARLARI (GÜN TAKİP)</option>
                         </select>
                         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-505">
                           🔻
@@ -4426,13 +5747,18 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          const targetId = step1Target || '1';
-                          setSyncSelectedTarget(targetId);
-                          setActiveSyncStep(2);
+                          if (step1Target === 'gun_takip') {
+                            fetchGunTakipSorumlulari();
+                            setIsSorumluModalOpen(true);
+                          } else {
+                            const targetId = step1Target || '1';
+                            setSyncSelectedTarget(targetId);
+                            setActiveSyncStep(2);
+                          }
                         }}
                         className="w-full py-4 bg-[#0b3d1d] hover:bg-[#072612] text-white font-extrabold text-xs rounded-xl tracking-widest uppercase transition-all shadow-md active:scale-95 cursor-pointer select-none"
                       >
-                        İLERLE VE PDF YÜKLEME EKRANINA GEÇ ➜
+                        {step1Target === 'gun_takip' ? '📋 SORUMLU BİRİM AYARLARINI AÇ ➜' : 'İLERLE VE PDF YÜKLEME EKRANINA GEÇ ➜'}
                       </button>
                     </div>
 
@@ -4577,8 +5903,8 @@ export default function App() {
                   <div className="max-w-xl w-full mb-6">
                     <div className="bg-white border-2 border-emerald-200/80 rounded-[2rem] p-8 flex flex-col items-center justify-between text-center transition-all shadow-xl hover:border-emerald-300">
                       <div className="p-5 bg-emerald-50 rounded-2xl mb-5 text-[#0b3d1d] shadow-inner">
-                        {isSendingToSheets[Number(syncSelectedTarget)] ? (
-                          <Loader2 className="w-10 h-10 animate-spin" />
+                        {isSendingToSheets[String(syncSelectedTarget)] ? (
+                          <Loader2 className="w-10 h-10 animate-spin text-emerald-700" />
                         ) : (
                           <FileText className="w-10 h-10 animate-pulse text-[#0b3d1d]" />
                         )}
@@ -4586,23 +5912,34 @@ export default function App() {
                       
                       <div className="flex-1 flex flex-col justify-center select-none w-full">
                         <h4 className="text-slate-800 font-extrabold text-sm uppercase tracking-wider mb-2">
-                          {syncSelectedTarget === '5' ? "PLANLAMA BELGESİ YÜKLE (EXCEL VEYA PDF)" : "PLANLAMA BELGESİ YÜKLE (PDF)"}
+                          {String(syncSelectedTarget).startsWith('techizat_') ? "TEÇHİZAT ENVENTAR BELGESİ YÜKLE (EXCEL)" : syncSelectedTarget === '5' ? "PLANLAMA BELGESİ YÜKLE (EXCEL VEYA PDF)" : "PLANLAMA BELGESİ YÜKLE (PDF)"}
                         </h4>
                         <p className="text-xs text-slate-500 leading-relaxed max-w-sm mx-auto mb-6">
-                          {isSendingToSheets[Number(syncSelectedTarget)] 
+                          {isSendingToSheets[String(syncSelectedTarget)] 
                             ? "Plan belgesi sisteme aktarılıyor ve veriler işleniyor. Lütfen bekleyin..." 
-                            : syncSelectedTarget === '5'
-                              ? "Personel Bilgi Çizelgesi için güncel Excel (.xlsx, .xls) veya PDF dosyasını yükleyin."
-                              : "Seçilen birim için güncel planlama belgesini PDF formatında yükleyin."}
+                            : String(syncSelectedTarget).startsWith('techizat_')
+                              ? "İlgili hava aracı grubu için Excel (.xlsx, .xls) dosyasını yükleyin."
+                              : syncSelectedTarget === '5'
+                                ? "Personel Bilgi Çizelgesi için güncel Excel (.xlsx, .xls) veya PDF dosyasını yükleyin."
+                                : "Seçilen birim için güncel planlama belgesini PDF formatında yükleyin."}
                         </p>
 
                         {/* Guide rules depending on summer period or not */}
                         <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100 text-left w-full">
                           <span className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-2">
-                            📋 {syncSelectedTarget === '5' ? "Yükleme ve Önizleme Teknolojisi:" : "Sürücü (Drive) Otomatik Adlandırma Formatı:"}
+                            📋 {syncSelectedTarget === '5' || String(syncSelectedTarget).startsWith('techizat_') ? "Yükleme ve Önizleme Teknolojisi:" : "Sürücü (Drive) Otomatik Adlandırma Formatı:"}
                           </span>
                           <div className="space-y-1.5 font-mono text-[10px] text-slate-600">
-                            {syncSelectedTarget === '5' ? (
+                            {String(syncSelectedTarget).startsWith('techizat_') ? (
+                              <>
+                                <div className="text-emerald-800 font-bold uppercase tracking-wider">
+                                  • MATRİS EXCEL VERİ GÜNCELLEME SİSTEMİ
+                                </div>
+                                <div className="text-slate-500 text-[10px] leading-relaxed">
+                                  Yüklenen Excel belgesindeki sütunlar otomatik olarak <strong>Teçhizat Takis Matrisine</strong> işlenecektir. Kaydedilen parçalar kalıcı olarak sürücüye kaydedilecektir.
+                                </div>
+                              </>
+                            ) : syncSelectedTarget === '5' ? (
                               <>
                                 <div className="text-emerald-800 font-bold uppercase tracking-wider">
                                   • EXCEL ➔ PDF MATRİS DÖNÜŞTÜRÜCÜ
@@ -4611,7 +5948,7 @@ export default function App() {
                                   Yüklenen Excel belgesindeki satırlar çözümlenerek <strong>537 Satır x 12 Sütunluk (537rx12c)</strong> yatay bir elektronik tabloya dönüştürülür. Sadece metin içeren kısımlar şık ve yüksek çözünürlüklü bir PDF belgesi gibi taranarak ekranda gösterilir.
                                 </div>
                               </>
-                            ) : ["21", "22", "23", "24", "25"].includes(syncSelectedTarget) ? (
+                            ) : ["21", "22", "23", "24", "25"].includes(String(syncSelectedTarget)) ? (
                               <>
                                 <div>
                                   • Dosyanız otomatik olarak şu adla kaydedilecektir:
@@ -4651,7 +5988,7 @@ export default function App() {
                         <label
                           htmlFor="pdf-file-contextual-upload"
                           className={`w-full py-4 text-white text-center font-extrabold text-xs rounded-xl tracking-widest uppercase transition-all block select-none cursor-pointer shadow-md ${
-                            isSendingToSheets[Number(syncSelectedTarget)] 
+                            isSendingToSheets[String(syncSelectedTarget)] 
                               ? "bg-slate-400 cursor-not-allowed animate-pulse" 
                               : "bg-[#0b3d1d] hover:bg-[#072612]"
                           }`}
@@ -4659,12 +5996,12 @@ export default function App() {
                           <input
                             type="file"
                             id="pdf-file-contextual-upload"
-                            accept={syncSelectedTarget === '5' ? ".xlsx,.xls,.csv,.pdf" : ".pdf"}
+                            accept={syncSelectedTarget === '5' || String(syncSelectedTarget).startsWith('techizat_') ? ".xlsx,.xls,.csv" : ".pdf"}
                             onChange={handlePdfUpload}
-                            disabled={isSendingToSheets[Number(syncSelectedTarget)]}
+                            disabled={isSendingToSheets[String(syncSelectedTarget)]}
                             className="hidden"
                           />
-                          {isSendingToSheets[Number(syncSelectedTarget)] ? (
+                          {isSendingToSheets[String(syncSelectedTarget)] ? (
                             <span className="flex flex-col items-center justify-center gap-1.5 font-black">
                               <span className="flex items-center gap-1.5 justify-center">
                                 <Loader2 className="w-4 h-4 animate-spin text-white" />
@@ -4675,6 +6012,17 @@ export default function App() {
                             "⚡ DOSYA SEÇ VE SİSTEME AKTAR"
                           )}
                         </label>
+
+                        {isSendingToSheets[String(syncSelectedTarget)] && (
+                          <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200/50 shadow-inner p-0.5">
+                            <div 
+                              className="bg-emerald-600 h-2 rounded-full transition-all duration-300 shadow-sm relative overflow-hidden" 
+                              style={{ width: `${uploadProgress}%` }}
+                            >
+                              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-pulse" />
+                            </div>
+                          </div>
+                        )}
 
                         <div className="flex gap-3">
                           <a
@@ -4698,24 +6046,77 @@ export default function App() {
                           </button>
                         </div>
 
-                        {syncSelectedTarget === '5' && (
+                        {(syncSelectedTarget === '5' || String(syncSelectedTarget).startsWith('techizat_')) && (
                           <button
                             type="button"
                             onClick={() => {
                               try {
                                 const wb = XLSX.utils.book_new();
-                                const headers = TABLE_CONFIGS[5].columns.map(col => col.label);
-                                const dataWithHeaders = [headers, ...excelForm5Data];
+                                let headers: string[] = [];
+                                let data: string[][] = [];
+                                let sheetName = "Sayfa1";
+                                let fileName = "en_son_surum.xlsx";
+
+                                if (syncSelectedTarget === '5') {
+                                  headers = TABLE_CONFIGS[5].columns.map(col => col.label);
+                                  data = excelForm5Data.map(row => {
+                                    const formattedRow = [...row];
+                                    formattedRow[5] = formatBirthDateToTurkish(formattedRow[5]);
+                                    return formattedRow;
+                                  });
+                                  sheetName = "Personel_Bilgi";
+                                  fileName = "personel_bilgi_cizelgesi_en_son_surum.xlsx";
+                                } else {
+                                  const techType = String(syncSelectedTarget).replace('techizat_', '');
+                                  if (techType === 'bell429') {
+                                    headers = techizatBell429Columns;
+                                    data = techizatBell429Data;
+                                    sheetName = "Bell429_Techizat";
+                                    fileName = "hava_araçları_yer_destek_bell-429.xlsx";
+                                  } else if (techType === 'at802') {
+                                    headers = techizatAt802Columns;
+                                    data = techizatAt802Data;
+                                    sheetName = "At802_Techizat";
+                                    fileName = "hava_araçları_yer_destek_at-802.xlsx";
+                                  } else if (techType === 't70') {
+                                    headers = techizatT70Columns;
+                                    data = techizatT70Data;
+                                    sheetName = "T70_Techizat";
+                                    fileName = "hava_araçları_yer_destek_t-70.xlsx";
+                                  } else if (techType === 't70_bumbi_backet') {
+                                    headers = techizatT70BumbiBacketColumns;
+                                    data = techizatT70BumbiBacketData;
+                                    sheetName = "T70_Bumbi_Backet";
+                                    fileName = "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx";
+                                  } else if (techType === 'b360') {
+                                    headers = techizatB360Columns;
+                                    data = techizatB360Data;
+                                    sheetName = "B360_Techizat";
+                                    fileName = "hava_araçları_yer_destek_b-360.xlsx";
+                                  } else if (techType === 'c650') {
+                                    headers = techizatC650Columns;
+                                    data = techizatC650Data;
+                                    sheetName = "C650_Techizat";
+                                    fileName = "hava_araçları_yer_destek_c-650.xlsx";
+                                  } else if (techType === 'hangar') {
+                                    headers = techizatHangarColumns;
+                                    data = techizatHangarData;
+                                    sheetName = "Hangar_Techizat";
+                                    fileName = "hava_araçları_yer_destek_hangar.xlsx";
+                                  }
+                                }
+
+                                const dataWithHeaders = [headers, ...data];
                                 const ws = XLSX.utils.aoa_to_sheet(dataWithHeaders);
-                                XLSX.utils.book_append_sheet(wb, ws, "Personel_Bilgi_Tum_Surum");
-                                XLSX.writeFile(wb, "personel_bilgi_cizelgesi_en_son_surum.xlsx");
-                                showNotification("Sistemdeki en son sürüm ham Excel verisi başarıyla indirildi.");
+                                XLSX.utils.book_append_sheet(wb, ws, sheetName);
+                                XLSX.writeFile(wb, fileName);
+                                showNotification(`Sistemdeki en son sürüm '${fileName}' Excel verisi başarıyla indirildi.`);
                               } catch (e) {
                                 alert("Hata: " + e);
                               }
                             }}
                             className="w-full py-3.5 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[11px] rounded-xl tracking-wider uppercase transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
-                            title="Sistemde saklanan en son sürüm Personel Bilgi Excel verisini indir"
+                            title="Sistemde saklanan en son sürüm Excel verisini indir"
                           >
                             <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
                             <span>📥 EN SON SÜRÜM EXCEL İNDİR</span>
@@ -4832,6 +6233,145 @@ export default function App() {
                   className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#0b3d1d]/90 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer"
                 >
                   Giriş Yap
+                </button>
+              </div>
+
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 5. GÜN TAKİP SORUMLU BİRİM AYARLARI MODALİ */}
+      <AnimatePresence>
+        {isSorumluModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 select-none animate-fade-in overflow-y-auto">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white border-2 border-emerald-800/10 rounded-[2.5rem] shadow-2xl max-w-3xl w-full p-6 md:p-8 relative overflow-hidden my-8 animate-fade-in"
+            >
+              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-700"></div>
+              
+              <button
+                onClick={() => setIsSorumluModalOpen(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-2xl flex items-center justify-center">
+                  <UserCheck className="w-6 h-6" />
+                </div>
+                <div className="text-left">
+                  <h4 className="text-slate-800 font-black tracking-tight text-base uppercase">📋 SORUMLU BİRİM VE MAİL AYARLARI (GÜN TAKİP)</h4>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">E-posta Uyarı Hatırlatma Alıcı Sorumluları Yönetimi</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-500 font-semibold leading-relaxed mb-6 text-left border-b border-slate-100 pb-4">
+                TÜM TEÇHİZAT sayfasındaki teçhizatların Gelecek Bakım günlerine 90, 60 veya 30 gün kala sistem tarafından otomatik e-posta hatırlatması gönderilecek birim yetkililerini ve mail adreslerini buradan güncelleyebilirsiniz. Değişiklikler canlı "GÜN TAKİP" e-tablosuyla eşleşecektir.
+              </p>
+
+              {/* Sorumlular Düzenleme Listesi */}
+              <div className="overflow-x-auto max-h-[45vh] border border-slate-200 rounded-3xl mb-6 shadow-inner">
+                <table className="w-full border-collapse text-left min-w-[800px]">
+                  <thead>
+                    <tr className="bg-slate-900 border-b border-slate-800">
+                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[20%] border-r border-slate-800">SORUMLU BİRİM</th>
+                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[25%] border-r border-slate-800">ADI SOYADI</th>
+                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[25%] border-r border-slate-800">E-POSTA ADRESİ</th>
+                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-green-400 uppercase font-mono w-[10%] border-r border-slate-800">SON 90G MAİL</th>
+                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-orange-400 uppercase font-mono w-[10%] border-r border-slate-800">SON 60G MAİL</th>
+                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-red-400 uppercase font-mono w-[10%]">SON 30G MAİL</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {gunTakipSorumlulari.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/50">
+                        <td className="px-4 py-3 text-center font-bold text-slate-800 text-xs border-r border-slate-100 bg-slate-50 font-mono">
+                          {item.birim}
+                        </td>
+                        <td className="px-4 py-2 border-r border-slate-100">
+                          <input
+                            type="text"
+                            value={item.adSoyad}
+                            onChange={(e) => {
+                              const updated = [...gunTakipSorumlulari];
+                              updated[idx].adSoyad = e.target.value;
+                              setGunTakipSorumlulari(updated);
+                            }}
+                            className="w-full px-3 py-1.5 border border-slate-200 hover:border-slate-300 focus:border-emerald-600 focus:outline-none rounded-xl text-xs font-semibold text-slate-800 text-center"
+                            placeholder="Ad Soyad giriniz..."
+                          />
+                        </td>
+                        <td className="px-4 py-2 border-r border-slate-100">
+                          <input
+                            type="email"
+                            value={item.eposta}
+                            onChange={(e) => {
+                              const updated = [...gunTakipSorumlulari];
+                              updated[idx].eposta = e.target.value;
+                              setGunTakipSorumlulari(updated);
+                            }}
+                            className="w-full px-3 py-1.5 border border-slate-200 hover:border-slate-300 focus:border-emerald-600 focus:outline-none rounded-xl text-xs font-mono font-semibold text-slate-800 text-center"
+                            placeholder="eposta@adres.com"
+                          />
+                        </td>
+                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 border-r border-slate-100 bg-green-50/20">
+                          {item.mail90 ? (
+                            <span className="text-emerald-700 bg-emerald-100/60 px-2 py-0.5 rounded-md font-bold block">{item.mail90}</span>
+                          ) : (
+                            <span className="text-slate-400 italic font-medium">-</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 border-r border-slate-100 bg-orange-50/20">
+                          {item.mail60 ? (
+                            <span className="text-orange-700 bg-orange-100/60 px-2 py-0.5 rounded-md font-bold block">{item.mail60}</span>
+                          ) : (
+                            <span className="text-slate-400 italic font-medium">-</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 bg-red-50/20">
+                          {item.mail30 ? (
+                            <span className="text-red-700 bg-red-100/60 px-2 py-0.5 rounded-md font-bold block">{item.mail30}</span>
+                          ) : (
+                            <span className="text-slate-400 italic font-medium">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex gap-3 justify-end pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsSorumluModalOpen(false)}
+                  className="px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-black rounded-2xl transition-colors cursor-pointer uppercase tracking-wider"
+                  disabled={isSavingSorumlu}
+                >
+                  Kapat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => saveGunTakipSorumlulari(gunTakipSorumlulari)}
+                  className="px-6 py-3 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-black rounded-2xl shadow-lg shadow-emerald-950/20 transition-all cursor-pointer flex items-center gap-2 uppercase tracking-wider"
+                  disabled={isSavingSorumlu}
+                >
+                  {isSavingSorumlu ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>SENKRONİZE EDİLİYOR...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>E-Tabloyu Güncelle</span>
+                    </>
+                  )}
                 </button>
               </div>
 
@@ -5171,14 +6711,14 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handlePdfPreviewIntegrate}
-                    disabled={isSendingToSheets[Number(syncSelectedTarget)] || renderedPages.filter(p => p.selected).length === 0}
+                    disabled={isSendingToSheets[String(syncSelectedTarget)] || renderedPages.filter(p => p.selected).length === 0}
                     className={`px-8 py-3 font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-lg transition-all cursor-pointer flex items-center gap-2 ${
-                      isSendingToSheets[Number(syncSelectedTarget)] || renderedPages.filter(p => p.selected).length === 0
+                      isSendingToSheets[String(syncSelectedTarget)] || renderedPages.filter(p => p.selected).length === 0
                         ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
                         : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white'
                     }`}
                   >
-                    {isSendingToSheets[Number(syncSelectedTarget)] ? (
+                    {isSendingToSheets[String(syncSelectedTarget)] ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin text-white" />
                         AKTARIYOR %{uploadProgress}...

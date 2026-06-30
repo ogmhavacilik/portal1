@@ -36,6 +36,9 @@ function doPost(e) {
     var action = postData.action;
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     
+    // Her işlem öncesi Gün Takip sayfasının varlığından emin olalım
+    ensureGunTakipSheet(ss);
+    
     var now = new Date();
     var pad = function(n) { return String(n).padStart(2, '0'); };
     var formattedDate = pad(now.getDate()) + "." + pad(now.getMonth() + 1) + "." + now.getFullYear() + " " + pad(now.getHours()) + ":" + pad(now.getMinutes());
@@ -86,7 +89,7 @@ function doPost(e) {
     } else if (action === "updatePdfTimestamp") {
       var formId = Number(postData.formId);
       var month = postData.month;
-      var unitName = getUnitTitleById(formId, month);
+      var unitName = postData.unitName || getUnitTitleById(formId, month);
       
       recordLastUpdate(ss, unitName, formattedDate);
       response.message = "'" + unitName + "' planlaması için güncelleme tarihi başarıyla e-tabloya kaydedildi.";
@@ -144,7 +147,7 @@ function doPost(e) {
         }
       }
       
-      var unitName = getUnitTitleById(derivedFormId, derivedMonth);
+      var unitName = postData.unitName || getUnitTitleById(derivedFormId, derivedMonth);
       recordLastUpdate(ss, unitName, formattedDate);
       
       response.message = "PDF belgesi '" + fileName + "' adıyla Google Drive'a başarıyla yüklendi ve e-tablo güncelleme tarihi yenilendi.";
@@ -216,6 +219,187 @@ function doPost(e) {
       recordLastUpdate(ss, getUnitTitleByPrefix(prefix), formattedDate);
       response.message = "Toplam " + sheetsList.length + " sayfa '" + prefix + "' ön ekiyle güncellendi.";
       response.updatedSheets = createdList;
+    } else if (action === "updateTumTechizat") {
+      var unitLabel = postData.unitLabel;
+      var data = postData.data;
+      var sheet = getSheetWithFallback(ss, "TÜM TECHİZAT");
+      
+      var lastCol = sheet.getLastColumn();
+      // Sütun başlıklarımıza 13, 14, 15. kolon olarak 90, 60, 30 Gün Mail durumlarını ekliyoruz
+      if (sheet.getLastRow() === 0) {
+        var headers = ["AİT OLDUĞU BİRİM", "SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / BAKIM", "GELECEK KONTROL / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ", "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ", "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"];
+        sheet.appendRow(headers);
+        sheet.getRange("A1:O1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+      } else if (lastCol < 15) {
+        // En az 15 sütun olmasını sağlayalım ve yeni başlıkları yazalım
+        sheet.getRange(1, 13).setValue("90 GÜN UYARISI MAİL GÖNDERİM TARİHİ");
+        sheet.getRange(1, 14).setValue("60 GÜN UYARISI MAİL GÖNDERİM TARİHİ");
+        sheet.getRange(1, 15).setValue("30 GÜN UYARISI MAİL GÖNDERİM TARİHİ");
+        sheet.getRange("M1:O1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+      }
+      
+      var lastRow = sheet.getLastRow();
+      var emailSentTracker = {}; // key: "Birim_CihazAdı_SeriNo" -> { mail90: "", mail60: "", mail30: "", gelecekBakim: "" }
+      
+      if (lastRow > 1) {
+        var numCols = sheet.getLastColumn();
+        if (numCols >= 12) {
+          var entireRange = sheet.getRange(2, 1, lastRow - 1, numCols);
+          var entireValues = entireRange.getValues();
+          for (var r = 0; r < entireValues.length; r++) {
+            var rowUnit = String(entireValues[r][0]).trim().toUpperCase();
+            var eqName = String(entireValues[r][2]).trim().toUpperCase();
+            var serNo = String(entireValues[r][4]).trim().toUpperCase();
+            var savedGelecekBakim = (entireValues[r][9] !== undefined && entireValues[r][9] !== null) ? String(entireValues[r][9]).trim() : "";
+            
+            var m90 = (entireValues[r][12] !== undefined && entireValues[r][12] !== null) ? String(entireValues[r][12]).trim() : "";
+            var m60 = (entireValues[r][13] !== undefined && entireValues[r][13] !== null) ? String(entireValues[r][13]).trim() : "";
+            var m30 = (entireValues[r][14] !== undefined && entireValues[r][14] !== null) ? String(entireValues[r][14]).trim() : "";
+            
+            var trackerKey = rowUnit + "_" + eqName + "_" + serNo;
+            emailSentTracker[trackerKey] = { mail90: m90, mail60: m60, mail30: m30, gelecekBakim: savedGelecekBakim };
+            
+            // Geriye dönük uyumluluk (Migration): Eğer eski tek bir mailStatus kolonu varsa ve yeni kolonlar boşsa bölüştürelim
+            if (m90 && !m60 && !m30) {
+              if (m90.indexOf("90 GÜN") !== -1) {
+                emailSentTracker[trackerKey] = { mail90: m90, mail60: "", mail30: "", gelecekBakim: savedGelecekBakim };
+              } else if (m90.indexOf("60 GÜN") !== -1) {
+                emailSentTracker[trackerKey] = { mail90: "", mail60: m90, mail30: "", gelecekBakim: savedGelecekBakim };
+              } else if (m90.indexOf("30 GÜN") !== -1) {
+                emailSentTracker[trackerKey] = { mail90: "", mail60: "", mail30: m90, gelecekBakim: savedGelecekBakim };
+              }
+            }
+          }
+        }
+        
+        // Eşleşen satırları silelim (böylece sadece güncellenmekte olan birimin verileri güncellenir)
+        var sheetValues = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+        for (var r = sheetValues.length - 1; r >= 0; r--) {
+          var rowUnit = String(sheetValues[r][0]).trim().toUpperCase();
+          if (rowUnit === unitLabel.toUpperCase()) {
+            sheet.deleteRow(r + 2);
+          }
+        }
+      }
+      
+      if (data && data.length > 0) {
+        var startRow = sheet.getLastRow() + 1;
+        var numRows = data.length;
+        var numCols = 15;
+        
+        var valuesToInsert = data.map(function(row) {
+          var newRow = [];
+          for (var i = 0; i < 12; i++) {
+            newRow.push(row[i] !== undefined && row[i] !== null ? String(row[i]) : "");
+          }
+          
+          // Mail durumu eşleşiyorsa koruyalım
+          var rowUnit = String(row[0]).trim().toUpperCase();
+          var eqName = String(row[2]).trim().toUpperCase();
+          var serNo = String(row[4]).trim().toUpperCase();
+          var newGelecekBakim = (row[9] !== undefined && row[9] !== null) ? String(row[9]).trim() : "";
+          var trackerKey = rowUnit + "_" + eqName + "_" + serNo;
+          
+          var saved = emailSentTracker[trackerKey] || { mail90: "", mail60: "", mail30: "", gelecekBakim: "" };
+          
+          // Eğer Gelecek Bakım tarihi değişmişse (yani bakım yapılıp tarih uzatılmışsa veya güncellenmişse) tüm mailleri sıfırlayalım
+          if (saved.gelecekBakim && saved.gelecekBakim !== newGelecekBakim) {
+            newRow.push("");
+            newRow.push("");
+            newRow.push("");
+          } else {
+            newRow.push(saved.mail90);
+            newRow.push(saved.mail60);
+            newRow.push(saved.mail30);
+          }
+          
+          return newRow;
+        });
+        
+        sheet.getRange(startRow, 1, numRows, numCols).setValues(valuesToInsert);
+      }
+      
+      formatGeneralSheet(sheet);
+      
+      var targetUnitTitle = unitLabel.toUpperCase();
+      if (targetUnitTitle === "BELL 429") targetUnitTitle = "BELL 429 YER DESTEK TEÇHİZATLARI";
+      else if (targetUnitTitle === "AT-802F" || targetUnitTitle === "AT-802") targetUnitTitle = "AT-802F YER DESTEK TEÇHİZATLARI";
+      else if (targetUnitTitle === "T-70 YER DESTEK" || targetUnitTitle === "T-70") targetUnitTitle = "T-70 YER DESTEK TEÇHİZATI";
+      else if (targetUnitTitle === "T-70 BUMBİ BACKET") targetUnitTitle = "T-70 BUMBİ BACKET TEÇHİZATI";
+      else if (targetUnitTitle === "B-360") targetUnitTitle = "B-360 YER DESTEK TEÇHİZATLARI";
+      else if (targetUnitTitle === "C-650") targetUnitTitle = "C-650 YER DESTEK TEÇHİZATLARI";
+      else if (targetUnitTitle === "HANGAR YER DESTEK" || targetUnitTitle === "HANGAR") targetUnitTitle = "HANGAR YER DESTEK TEÇHİZATLARI";
+      
+      recordLastUpdate(ss, targetUnitTitle, formattedDate);
+      
+      // Mail hatırlatmalarını otomatik tetikliyoruz
+      processEquipmentReminders(ss, formattedDate);
+      
+      response.message = "TÜM TECHİZAT sayfasındaki '" + unitLabel + "' verileri başarıyla güncellendi.";
+    } else if (action === "updateGunTakip") {
+      var data = postData.data; // Array of [SORUMLU BİRİM, ADI SOYADI, E-POSTA ADRESİ]
+      var sheet = getSheetWithFallback(ss, "GÜN TAKİP");
+      
+      var existingDates = {}; // key: BİRİM (UPPERCASE) -> { mail90: string, mail60: string, mail30: string }
+      var lastRow = sheet.getLastRow();
+      if (lastRow > 1) {
+        var numColsExisting = sheet.getLastColumn();
+        var entireValues = sheet.getRange(2, 1, lastRow - 1, numColsExisting).getValues();
+        for (var r = 0; r < entireValues.length; r++) {
+          var birim = String(entireValues[r][0]).trim().toUpperCase();
+          if (birim) {
+            existingDates[birim] = {
+              mail90: (entireValues[r][3] !== undefined && entireValues[r][3] !== null) ? String(entireValues[r][3]).trim() : "",
+              mail60: (entireValues[r][4] !== undefined && entireValues[r][4] !== null) ? String(entireValues[r][4]).trim() : "",
+              mail30: (entireValues[r][5] !== undefined && entireValues[r][5] !== null) ? String(entireValues[r][5]).trim() : ""
+            };
+          }
+        }
+      }
+      
+      sheet.clear();
+      
+      var headers = [
+        "SORUMLU BİRİM", 
+        "ADI SOYADI", 
+        "E-POSTA ADRESİ", 
+        "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ", 
+        "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ", 
+        "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+      ];
+      sheet.appendRow(headers);
+      sheet.getRange("A1:F1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+      
+      if (data && data.length > 0) {
+        var startRow = 2;
+        var numRows = data.length;
+        var numCols = 6;
+        
+        var valuesToInsert = data.map(function(row) {
+          var rowBirim = row[0] !== undefined && row[0] !== null ? String(row[0]).trim() : "";
+          var rowBirimUpper = rowBirim.toUpperCase();
+          var saved = existingDates[rowBirimUpper] || { mail90: "", mail60: "", mail30: "" };
+          
+          return [
+            rowBirim,
+            row[1] !== undefined && row[1] !== null ? String(row[1]).trim() : "",
+            row[2] !== undefined && row[2] !== null ? String(row[2]).trim() : "",
+            saved.mail90,
+            saved.mail60,
+            saved.mail30
+          ];
+        });
+        
+        sheet.getRange(startRow, 1, numRows, numCols).setValues(valuesToInsert);
+      }
+      
+      formatGeneralSheet(sheet);
+      recordLastUpdate(ss, "GÜN TAKİP", formattedDate);
+      
+      // Mail hatırlatıcıyı tekrar tetikleyerek yeni mail adreslerine göre eşleşen uyarıları gönderelim
+      processEquipmentReminders(ss, formattedDate);
+      
+      response.message = "GÜN TAKİP (Sorumlu Birim Mail Ayarları) başarıyla güncellendi.";
     } else {
       response.status = "error";
       response.message = "Geçersiz doPost aksiyonu: " + action;
@@ -237,6 +421,9 @@ function doGet(e) {
   try {
     var action = e.parameter.action;
     var ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Her işlem öncesi Gün Takip sayfasının varlığından emin olalım
+    ensureGunTakipSheet(ss);
     
     if (action === "getSheets") {
       response.sheets = ss.getSheets().map(function(s) {
@@ -599,3 +786,472 @@ function formatGeneralSheet(sheet) {
     else if (width > 320) sheet.setColumnWidth(c, 320);
   }
 }
+
+/**
+ * Teçhizat gelecek kontrol gün takibini inceler ve 90, 60, 30 gün kala otomatik toplu mail atar.
+ */
+function processEquipmentReminders(ss, formattedDate) {
+  try {
+    var techSheet = getSheetWithFallback(ss, "TÜM TECHİZAT");
+    var gunTakipSheet = ensureGunTakipSheet(ss);
+    
+    var lastRowTech = techSheet.getLastRow();
+    if (lastRowTech <= 1) return;
+    
+    // GÜN TAKİP e-posta ve sorumlu eşleşmelerini okuyalım
+    var gunTakipLastRow = gunTakipSheet.getLastRow();
+    var gunTakipData = gunTakipSheet.getRange(1, 1, gunTakipLastRow, 6).getValues();
+    var emailMap = {}; // key: birimAdı (BÜYÜK HARF) -> { rowIndex: number, originalUnitName: string, unitKey: string, name: string, email: string }
+    
+    for (var i = 1; i < gunTakipData.length; i++) {
+      var unit = String(gunTakipData[i][0]).trim();
+      var unitUpper = unit.toUpperCase();
+      var name = String(gunTakipData[i][1]).trim();
+      var email = String(gunTakipData[i][2]).trim();
+      if (unit) {
+        emailMap[unitUpper] = { 
+          rowIndex: i + 1, 
+          originalUnitName: unit,
+          unitKey: unitUpper,
+          name: name, 
+          email: email 
+        };
+      }
+    }
+    
+    // TÜM TECHİZAT sayfasındaki kayıtları tarayalım
+    var lastColTech = techSheet.getLastColumn();
+    // 13, 14, 15. Sütunların varlığından emin olalım
+    if (lastColTech < 15) {
+      techSheet.getRange(1, 13).setValue("90 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      techSheet.getRange(1, 14).setValue("60 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      techSheet.getRange(1, 15).setValue("30 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      lastColTech = 15;
+    }
+    
+    var techRange = techSheet.getRange(2, 1, lastRowTech - 1, 15);
+    var techValues = techRange.getValues();
+    var modified = false;
+    
+    // Toplu mailler için gruplama nesnesi
+    // Key: targetUnitKey + "||" + warningLevel
+    var pendingAlerts = {};
+    
+    for (var r = 0; r < techValues.length; r++) {
+      var row = techValues[r];
+      var unitName = String(row[0]).trim().toUpperCase();
+      var siraNo = String(row[1]).trim();
+      var techName = String(row[2]).trim();
+      var partNo = String(row[3]).trim();
+      var seriNo = String(row[4]).trim();
+      var location = String(row[6]).trim();
+      var status = String(row[7]).trim();
+      var gelecekBakimStr = String(row[9]).trim();
+      var sonKontrolYapan = String(row[10]).trim();
+      var aciklama = String(row[11]).trim();
+      
+      var mail90 = String(row[12] || "").trim();
+      var mail60 = String(row[13] || "").trim();
+      var mail30 = String(row[14] || "").trim();
+      
+      if (!gelecekBakimStr) continue;
+      
+      var daysDiff = getDaysDiff(gelecekBakimStr);
+      if (daysDiff === null) continue;
+      
+      // Eğer gelecek bakım yenilenmişse ve 90 günden fazla süre kalmışsa eski uyarılardan kalan tarihler varsa otomatik temizleyelim
+      if (daysDiff > 90) {
+        if (mail90 || mail60 || mail30) {
+          techValues[r][12] = "";
+          techValues[r][13] = "";
+          techValues[r][14] = "";
+          modified = true;
+        }
+        continue;
+      }
+      
+      var warningLevel = "";
+      var colToUpdate = -1; // index in row (12 for 90 days, 13 for 60 days, 14 for 30 days)
+      
+      if (daysDiff <= 30) {
+        if (!mail30) {
+          warningLevel = "30 GÜN UYARISI";
+          colToUpdate = 14;
+        }
+      } else if (daysDiff <= 60) {
+        if (!mail60) {
+          warningLevel = "60 GÜN UYARISI";
+          colToUpdate = 13;
+        }
+      } else if (daysDiff <= 90) {
+        if (!mail90) {
+          warningLevel = "90 GÜN UYARISI";
+          colToUpdate = 12;
+        }
+      }
+      
+      if (warningLevel !== "" && colToUpdate !== -1) {
+        // Sorumlu iletişim bilgisi tespiti
+        var contact = null;
+        for (var uKey in emailMap) {
+          if (unitName.indexOf(uKey) !== -1 || uKey.indexOf(unitName) !== -1) {
+            contact = emailMap[uKey];
+            break;
+          }
+        }
+        
+        var targetUnitKey = contact ? contact.unitKey : "VARSAYILAN";
+        var contactName = contact ? contact.name : "Sorumlu Personel";
+        var contactEmail = contact ? contact.email : "ormanhavacilik.bakimsube@gmail.com";
+        var gunTakipRowIndex = contact ? contact.rowIndex : -1;
+        
+        var groupKey = targetUnitKey + "||" + warningLevel;
+        if (!pendingAlerts[groupKey]) {
+          pendingAlerts[groupKey] = {
+            contactName: contactName,
+            contactEmail: contactEmail,
+            gunTakipRowIndex: gunTakipRowIndex,
+            warningLevel: warningLevel,
+            unitName: contact ? contact.originalUnitName : unitName,
+            colToUpdate: colToUpdate,
+            items: []
+          };
+        }
+        
+        pendingAlerts[groupKey].items.push({
+          techValuesIndex: r,
+          techName: techName,
+          partNo: partNo,
+          seriNo: seriNo,
+          location: location,
+          status: status,
+          gelecekBakimStr: gelecekBakimStr,
+          sonKontrolYapan: sonKontrolYapan,
+          aciklama: aciklama,
+          daysDiff: daysDiff
+        });
+      }
+    }
+    
+    // Toplu mailleri gönderelim ve tabloları güncelleyelim
+    for (var gKey in pendingAlerts) {
+      var group = pendingAlerts[gKey];
+      if (group.items.length > 0) {
+        // Toplu maili gönder
+        sendConsolidatedReminderEmail(group.contactEmail, group.contactName, group.warningLevel, group.unitName, group.items);
+        
+        // TÜM TECHİZAT satırlarındaki ilgili kolonları güncelle
+        for (var k = 0; k < group.items.length; k++) {
+          var item = group.items[k];
+          techValues[item.techValuesIndex][group.colToUpdate] = formattedDate;
+        }
+        modified = true;
+        
+        // GÜN TAKİP satırındaki ilgili kolonu güncelle
+        if (group.gunTakipRowIndex !== -1) {
+          var gtCol = -1;
+          if (group.warningLevel === "90 GÜN UYARISI") gtCol = 4;
+          else if (group.warningLevel === "60 GÜN UYARISI") gtCol = 5;
+          else if (group.warningLevel === "30 GÜN UYARISI") gtCol = 6;
+          
+          if (gtCol !== -1) {
+            gunTakipSheet.getRange(group.gunTakipRowIndex, gtCol).setValue(formattedDate);
+          }
+        }
+      }
+    }
+    
+    if (modified) {
+      techRange.setValues(techValues);
+      formatGeneralSheet(techSheet);
+      formatGeneralSheet(gunTakipSheet);
+    }
+  } catch (err) {
+    Logger.log("processEquipmentReminders hatası: " + err.toString());
+  }
+}
+
+/**
+ * Gelecek bakım tarihi ile bugün arasındaki gün farkını hesaplar.
+ */
+function getDaysDiff(dateStr) {
+  if (!dateStr) return null;
+  
+  // Eğer zaten bir Date objesiyse doğrudan kullanalım
+  if (dateStr instanceof Date) {
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    var target = new Date(dateStr.getTime());
+    target.setHours(0, 0, 0, 0);
+    return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  }
+  
+  var cleaned = String(dateStr).trim();
+  var dmyRegex = /^(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})$/;
+  var ymdRegex = /^(\d{4})[\.\/-](\d{1,2})[\.\/-](\d{1,2})$/;
+  
+  var dateObj = null;
+  var m = cleaned.match(dmyRegex);
+  if (m) {
+    var day = parseInt(m[1], 10);
+    var month = parseInt(m[2], 10) - 1;
+    var year = parseInt(m[3], 10);
+    dateObj = new Date(year, month, day);
+  } else {
+    m = cleaned.match(ymdRegex);
+    if (m) {
+      var year = parseInt(m[1], 10);
+      var month = parseInt(m[2], 10) - 1;
+      var day = parseInt(m[3], 10);
+      dateObj = new Date(year, month, day);
+    } else {
+      var timestamp = Date.parse(cleaned);
+      if (!isNaN(timestamp)) {
+        dateObj = new Date(timestamp);
+      }
+    }
+  }
+  
+  if (!dateObj || isNaN(dateObj.getTime())) return null;
+  
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  dateObj.setHours(0, 0, 0, 0);
+  
+  var diffTime = dateObj.getTime() - today.getTime();
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Otomatik şablonlu toplu hatırlatma e-postası gönderir.
+ */
+function sendConsolidatedReminderEmail(email, personName, warningLevel, unitName, items) {
+  var subject = "🚨 YER DESTEK TEÇHİZATLARI YAKLAŞAN DURUMLAR EKTEDİR - [" + unitName + "] (" + warningLevel + ")";
+  
+  var colorHex = "#16a34a"; // Yeşil (90)
+  if (warningLevel.indexOf("60") !== -1) colorHex = "#ea580c"; // Turuncu (60)
+  else if (warningLevel.indexOf("30") !== -1) colorHex = "#dc2626"; // Kırmızı (30)
+  
+  var tableRowsHtml = "";
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    tableRowsHtml += 
+      "<tr style='border-bottom: 1px solid #e2e8f0;'>" +
+        "<td style='padding: 10px 8px; font-weight: bold; font-size: 11px; text-align: center; color: #64748b;'>" + (i + 1) + "</td>" +
+        "<td style='padding: 10px 8px; font-weight: 700; font-size: 12px; color: #1e293b;'>" + item.techName + "</td>" +
+        "<td style='padding: 10px 8px; font-size: 11px; color: #475569;'>" + (item.partNo || "-") + "</td>" +
+        "<td style='padding: 10px 8px; font-size: 11px; font-family: monospace; color: #475569;'>" + (item.seriNo || "-") + "</td>" +
+        "<td style='padding: 10px 8px; font-size: 11px; color: #475569;'>" + (item.location || "-") + "</td>" +
+        "<td style='padding: 10px 8px; font-size: 11px; font-weight: 700; color: " + colorHex + "; text-align: center;'>" + item.gelecekBakimStr + "<br><span style='font-size: 10px; font-weight: 500;'>(" + item.daysDiff + " gün kaldı)</span></td>" +
+        "<td style='padding: 10px 8px; font-size: 11px; color: #64748b;'>" + (item.aciklama || "-") + "</td>" +
+      "</tr>";
+  }
+  
+  var body = 
+    "<html>" +
+    "<head>" +
+      "<style>" +
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; color: #1e293b; padding: 20px; }" +
+        ".container { max-width: 850px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }" +
+        ".header { background-color: " + colorHex + "; padding: 30px 20px; text-align: center; color: #ffffff; }" +
+        ".header h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; text-transform: uppercase; }" +
+        ".header p { margin: 5px 0 0 0; font-size: 13px; font-weight: 500; opacity: 0.9; }" +
+        ".content { padding: 30px 24px; }" +
+        ".intro { font-size: 14px; font-weight: 500; color: #475569; margin-bottom: 25px; }" +
+        ".items-table { width: 100%; border-collapse: collapse; margin-bottom: 25px; text-align: left; }" +
+        ".items-table th { background-color: #f1f5f9; padding: 12px 8px; font-size: 11px; font-weight: bold; color: #475569; text-transform: uppercase; border-bottom: 2px solid #cbd5e1; }" +
+        ".footer { background-color: #f8fafc; padding: 20px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; }" +
+      "</style>" +
+    "</head>" +
+    "<body>" +
+      "<div class='container'>" +
+        "<div class='header'>" +
+          "<h2>🚁 OGM HAVACILIK BAKIM VE TEKNİK ŞUBE MÜDÜRLÜĞÜ</h2>" +
+          "<p>" + warningLevel + " - TOPLU BİLGİLENDİRME</p>" +
+        "</div>" +
+        "<div class='content'>" +
+          "<div class='intro'>Sayın <strong>" + personName + "</strong>,<br><br>" +
+          "<strong>YER DESTEK TEÇHİZATLARI YAKLAŞAN DURUMLAR EKTEDİR.</strong><br><br>" +
+          "<strong>" + unitName + "</strong> biriminize ait aşağıda listelenen yer destek teçhizatlarının <strong>GELECEK KONTROL / BAKIM</strong> tarihlerine <strong>" + (warningLevel.indexOf("30") !== -1 ? "30 günden az" : warningLevel.indexOf("60") !== -1 ? "60 günden az" : "90 günden az") + "</strong> süre kalmıştır. Gerekli kontrollerin ve bakımların zamanında yapılması kritik önem taşımaktadır.</div>" +
+          
+          "<table class='items-table'>" +
+            "<thead>" +
+              "<tr>" +
+                "<th style='width: 5%; text-align: center;'>SIRA</th>" +
+                "<th style='width: 25%;'>TEÇHİZAT ADI</th>" +
+                "<th style='width: 15%;'>PARÇA NO / MODEL</th>" +
+                "<th style='width: 15%;'>SERİ NO (S/N)</th>" +
+                "<th style='width: 15%;'>BULUNDUĞU YER</th>" +
+                "<th style='width: 13%; text-align: center;'>KONTROL TARİHİ</th>" +
+                "<th style='width: 12%;'>AÇIKLAMA</th>" +
+              "</tr>" +
+            "</thead>" +
+            "<tbody>" +
+              tableRowsHtml +
+            "</tbody>" +
+          "</table>" +
+          
+          "<div style='background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 15px; text-align: center; font-size: 11px; font-weight: bold; color: #991b1b;'>" +
+            "⚠️ Lütfen listedeki teçhizatların bakımlarını tamamladıktan sonra portal üzerinden Excel belgesini güncelleyerek e-tabloyu yenileyiniz." +
+          "</div>" +
+        "</div>" +
+        "<div class='footer'>" +
+          "T.C. ORMAN GENEL MÜDÜRLÜĞÜ - HAVA ARAÇLARI BAKIM VE TEKNİK ŞUBE MÜDÜRLÜĞÜ<br>" +
+          "Bu e-posta otomatik olarak üretilmiştir, lütfen yanıtlamayınız." +
+          "<br><span style='font-size: 9px;'>Gönderim Tarihi: " + Utilities.formatDate(new Date(), "GMT+3", "dd.MM.yyyy HH:mm:ss") + "</span>" +
+        "</div>" +
+      "</div>" +
+    "</body>" +
+    "</html>";
+  
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: subject,
+      htmlBody: body
+    });
+  } catch (err) {
+    Logger.log("Toplu Mail gönderim hatası (" + email + "): " + err.toString());
+  }
+}
+
+/**
+ * Otomatik şablonlu hatırlatma e-postası gönderir.
+ */
+function sendReminderEmail(email, personName, warningLevel, unitName, techName, partNo, seriNo, gelecekBakim, daysLeft, location, status, sonKontrolYapan, aciklama) {
+  var subject = "🚨 " + warningLevel + " - Teçhizat Bakım Hatırlatması: [" + unitName + "] " + techName;
+  
+  var colorHex = "#16a34a"; // Yeşil (90)
+  if (warningLevel.indexOf("60") !== -1) colorHex = "#ea580c"; // Turuncu (60)
+  else if (warningLevel.indexOf("30") !== -1) colorHex = "#dc2626"; // Kırmızı (30)
+  
+  var body = 
+    "<html>" +
+    "<head>" +
+      "<style>" +
+        "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; color: #1e293b; padding: 20px; }" +
+        ".container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }" +
+        ".header { background-color: " + colorHex + "; padding: 30px 20px; text-align: center; color: #ffffff; }" +
+        ".header h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; text-transform: uppercase; }" +
+        ".header p { margin: 5px 0 0 0; font-size: 13px; font-weight: 500; opacity: 0.9; }" +
+        ".content { padding: 30px 24px; }" +
+        ".intro { font-size: 14px; font-weight: 500; color: #475569; margin-bottom: 25px; }" +
+        ".detail-table { width: 100%; border-collapse: collapse; margin-bottom: 25px; }" +
+        ".detail-table td { padding: 12px 10px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }" +
+        ".detail-table td.label { font-weight: bold; color: #64748b; width: 35%; text-transform: uppercase; font-size: 11px; }" +
+        ".detail-table td.value { font-weight: 700; color: #1e293b; }" +
+        ".footer { background-color: #f8fafc; padding: 20px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; }" +
+      "</style>" +
+    "</head>" +
+    "<body>" +
+      "<div class='container'>" +
+        "<div class='header'>" +
+          "<h2>🚁 OGM HAVACILIK BAKIM TAKİP SİSTEMİ</h2>" +
+          "<p>" + warningLevel + " - OTOMATİK BİLGİLENDİRME</p>" +
+        "</div>" +
+        "<div class='content'>" +
+          "<div class='intro'>Sayın <strong>" + personName + "</strong>,<br><br>" +
+          "Aşağıda detayları belirtilen yer destek teçhizatının <strong>GELECEK KONTROL / BAKIM</strong> tarihine <strong>" + daysLeft + " gün</strong> kalmıştır. Gerekli kontrollerin ve bakımların zamanında yapılması kritik önem taşımaktadır.</div>" +
+          
+          "<table class='detail-table'>" +
+            "<tr>" +
+              "<td class='label'>AİT OLDUĞU BİRİM</td>" +
+              "<td class='value'>" + unitName + "</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>TEÇHİZAT ADI</td>" +
+              "<td class='value' style='color: " + colorHex + "'>" + techName + "</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>PARÇA NO (P/N) / MODEL</td>" +
+              "<td class='value'>" + (partNo || "-") + "</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>SERİ NO (S/N)</td>" +
+              "<td class='value'>" + (seriNo || "-") + "</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>BULUNDUĞU YER</td>" +
+              "<td class='value'>" + (location || "-") + "</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>DURUMU</td>" +
+              "<td class='value'>" + (status || "-") + "</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>GELECEK KONTROL / BAKIM</td>" +
+              "<td class='value' style='color: " + colorHex + "; font-size: 14px;'>" + gelecekBakim + " (" + daysLeft + " gün kaldı)</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>SON KONTROLÜ YAPAN FİRMA</td>" +
+              "<td class='value'>" + (sonKontrolYapan || "-") + "</td>" +
+            "</tr>" +
+            "<tr>" +
+              "<td class='label'>AÇIKLAMA</td>" +
+              "<td class='value'>" + (aciklama || "-") + "</td>" +
+            "</tr>" +
+          "</table>" +
+          
+          "<div style='background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 15px; text-align: center; font-size: 11px; font-weight: bold; color: #991b1b;'>" +
+            "⚠️ Lütfen teçhizat bakımını tamamladıktan sonra portal üzerinden Excel belgesini güncelleyerek e-tabloyu yenileyiniz." +
+          "</div>" +
+        "</div>" +
+        "<div class='footer'>" +
+          "T.C. ORMAN GENEL MÜDÜRLÜĞÜ - HAVA ARAÇLARI BAKIM VE TEKNİK ŞUBE MÜDÜRLÜĞÜ<br>" +
+          "Bu e-posta otomatik olarak üretilmiştir, lütfen yanıtlamayınız." +
+        "</div>" +
+      "</div>" +
+    "</body>" +
+    "</html>";
+  
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: subject,
+      htmlBody: body
+    });
+  } catch (err) {
+    Logger.log("Mail gönderim hatası (" + email + "): " + err.toString());
+  }
+}
+
+/**
+ * Gün Takip e-tablosunun varlığından ve varsayılan verilerinden emin olur.
+ */
+function ensureGunTakipSheet(ss) {
+  var sheet = getSheetWithFallback(ss, "GÜN TAKİP");
+  if (sheet.getLastRow() === 0) {
+    var headers = [
+      "SORUMLU BİRİM", 
+      "ADI SOYADI", 
+      "E-POSTA ADRESİ", 
+      "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ", 
+      "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ", 
+      "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+    ];
+    sheet.appendRow(headers);
+    sheet.getRange("A1:F1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+    
+    var defaults = [
+      ["BELL 429", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
+      ["AT-802F", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
+      ["T-70 YER DESTEK", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
+      ["T-70 BUMBİ BACKET", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
+      ["B-360", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
+      ["C-650", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
+      ["HANGAR YER DESTEK", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""]
+    ];
+    sheet.getRange(2, 1, defaults.length, 6).setValues(defaults);
+    formatGeneralSheet(sheet);
+  } else {
+    var lastCol = sheet.getLastColumn();
+    if (lastCol < 6) {
+      sheet.getRange(1, 4).setValue("90 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      sheet.getRange(1, 5).setValue("60 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      sheet.getRange(1, 6).setValue("30 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      formatGeneralSheet(sheet);
+    }
+  }
+  return sheet;
+}
+
