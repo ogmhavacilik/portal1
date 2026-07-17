@@ -3,7 +3,7 @@
  * HAVA ARAÇLARI BAKIM TEKNİK ŞUBE MÜDÜRLÜĞÜ - E-TABLO SENKRONİZASYON MOTORU (V6)
  * ==============================================================================
  * Dosya Adı: komut.gs
- * Google Drive Hedef Klasör ID (PDF): 1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0
+ * Google Drive Hedef Klasör ID (PDF): 1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP
  * 
  * Bu script Google E-Tablo script editörüne yapıştırılmalı ve "Web Uygulaması" 
  * olarak tüm kullanıcıların (Herkes / Anyone) erişimine açık şekilde yayınlanmalıdır.
@@ -101,7 +101,7 @@ function doPost(e) {
       var formId = postData.formId ? Number(postData.formId) : null;
       var month = postData.month || null;
       
-      var folderId = "1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0";
+      var folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
       var folder = DriveApp.getFolderById(folderId);
       
       // Aynı isimde dosya varsa üzerine yazmak için eski dosyayı Çöp Kutusuna (trash) gönder
@@ -409,6 +409,123 @@ function doPost(e) {
       processEquipmentReminders(ss, formattedDate);
       
       response.message = "GÜN TAKİP (Sorumlu Birim Mail Ayarları) başarıyla güncellendi.";
+    } else if (action === "appendEbysTable") {
+      var ebysNo = String(postData.ebysNo || "").trim();
+      var tableData = postData.data; // Array of [Ait Olduğu Birim, Teçhizat Adı, Parça No, Seri No, Miktar, Son Kontrolü Yapan Firma, Açıklama]
+      var sheet = getSheetWithFallback(ss, "Sayfa1");
+      
+      var lastRow = sheet.getLastRow();
+      var startRow = lastRow === 0 ? 1 : lastRow + 2; // leave 1 blank row
+      
+      // 1. Write the EBYS Title Row
+      sheet.getRange(startRow, 1).setValue("EBYS NO:");
+      sheet.getRange(startRow, 2).setValue(ebysNo);
+      sheet.getRange(startRow, 3).setValue("MALZEME");
+      
+      var titleRange = sheet.getRange(startRow, 1, 1, 2);
+      titleRange.setBackground("#ffff00").setFontWeight("bold").setHorizontalAlignment("left");
+      
+      var matRange = sheet.getRange(startRow, 3);
+      matRange.setBackground("#93c5fd").setFontWeight("bold").setHorizontalAlignment("center");
+      
+      // 2. Write Headers Row
+      var headers = ["AİT OLDUĞU BİRİM", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+      sheet.getRange(startRow + 1, 1, 1, 7).setValues([headers]);
+      
+      var headerRange = sheet.getRange(startRow + 1, 1, 1, 7);
+      headerRange.setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+      
+      // 3. Write Data Rows
+      if (tableData && tableData.length > 0) {
+        var values = tableData.map(function(row) {
+          return [
+            row[0] || "",
+            row[1] || "",
+            row[2] || "",
+            row[3] || "",
+            row[4] || "",
+            row[5] || "",
+            row[6] || ""
+          ];
+        });
+        sheet.getRange(startRow + 2, 1, values.length, 7).setValues(values);
+        
+        var dataRange = sheet.getRange(startRow + 2, 1, values.length, 7);
+        dataRange.setHorizontalAlignment("center");
+      }
+      
+      // 4. Style entire block
+      var blockHeight = 2 + (tableData ? tableData.length : 0);
+      var totalRange = sheet.getRange(startRow, 1, blockHeight, 7);
+      totalRange.setFontFamily("Calibri").setFontSize(11).setVerticalAlignment("middle");
+      
+      // Apply thin inside borders and thick outside borders
+      try {
+        totalRange.setBorder(true, true, true, true, true, true, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID);
+        totalRange.setBorder(true, true, true, true, null, null, "#000000", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+      } catch (borderErr) {
+        totalRange.setBorder(true, true, true, true, true, true, "#000000", SpreadsheetApp.BorderStyle.SOLID);
+      }
+      
+      // Auto-resize columns
+      for (var colIdx = 1; colIdx <= 7; colIdx++) {
+        sheet.autoResizeColumn(colIdx);
+        var width = sheet.getColumnWidth(colIdx);
+        if (width < 140) sheet.setColumnWidth(colIdx, 140);
+        else if (width > 350) sheet.setColumnWidth(colIdx, 350);
+      }
+      
+      recordLastUpdate(ss, "Sayfa1", formattedDate);
+      response.message = "EBYS Tablosu Sayfa1 sayfasına başarıyla oluşturuldu.";
+
+    } else if (action === "updateEbysFirma") {
+      var ebysNo = String(postData.ebysNo || "").trim();
+      var partNo = String(postData.parcaNo || "").trim();
+      var seriNo = String(postData.seriNo || "").trim();
+      var newFirma = String(postData.firma || "").trim();
+      var sheet = getSheetWithFallback(ss, "Sayfa1");
+      
+      var lastRow = sheet.getLastRow();
+      var updated = false;
+      if (lastRow > 0) {
+        var allValues = sheet.getRange(1, 1, lastRow, 7).getValues();
+        var currentEbysNo = "";
+        
+        for (var i = 0; i < allValues.length; i++) {
+          var row = allValues[i];
+          var cellA = String(row[0] || "").trim();
+          
+          if (cellA.indexOf("EBYS NO:") === 0) {
+            var cellB = String(row[1] || "").trim();
+            if (cellB) {
+              currentEbysNo = cellB;
+            } else {
+              currentEbysNo = cellA.replace("EBYS NO:", "").trim();
+            }
+            continue;
+          }
+          
+          if (currentEbysNo === ebysNo) {
+            var rowPartNo = String(row[2] || "").trim();
+            var rowSeriNo = String(row[3] || "").trim();
+            
+            if (rowPartNo === partNo && rowSeriNo === seriNo) {
+              sheet.getRange(i + 1, 6).setValue(newFirma);
+              updateTechizatFirmaInAllTechizat(ss, partNo, seriNo, newFirma);
+              updated = true;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (updated) {
+        response.message = "Firma başarıyla güncellendi ve teçhizat listesiyle senkronize edildi.";
+      } else {
+        response.status = "error";
+        response.message = "Eşleşen kayıt bulunamadı: " + ebysNo + ", " + partNo + ", " + seriNo;
+      }
+
     } else {
       response.status = "error";
       response.message = "Geçersiz doPost aksiyonu: " + action;
@@ -443,7 +560,7 @@ function doGet(e) {
     } else if (action === "listPdfsFromDrive") {
       var list = [];
       try {
-        var folder = DriveApp.getFolderById("1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0");
+        var folder = DriveApp.getFolderById("1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP");
         var files = folder.getFiles();
         while (files.hasNext()) {
           var file = files.next();
@@ -462,6 +579,37 @@ function doGet(e) {
       }
       response.data = list;
       response.message = list.length + " adet planlama PDF'i listelendi.";
+
+    } else if (action === "listImagesFromDrive") {
+      var imagesMap = {};
+      try {
+        var folder = DriveApp.getFolderById("1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP");
+        var files = folder.getFiles();
+        while (files.hasNext()) {
+          var file = files.next();
+          var name = file.getName();
+          if (name.toLowerCase().indexOf("tech_img_") === 0) {
+            var cleanKey = name.substring("tech_img_".length);
+            var dotIdx = cleanKey.lastIndexOf(".");
+            if (dotIdx !== -1) {
+              cleanKey = cleanKey.substring(0, dotIdx);
+            }
+            var parts = cleanKey.split("_");
+            if (parts.length > 1) {
+              var lastPart = parts[parts.length - 1];
+              if (!isNaN(lastPart) && lastPart.length >= 10) {
+                parts.pop();
+                cleanKey = parts.join("_");
+              }
+            }
+            imagesMap[cleanKey] = "https://drive.google.com/file/d/" + file.getId() + "/preview";
+          }
+        }
+      } catch (driveErr) {
+        Logger.log("Drive resim listeleme hatası: " + driveErr.toString());
+      }
+      response.images = imagesMap;
+      response.message = Object.keys(imagesMap).length + " adet teçhizat resmi listelendi.";
 
     } else if (action === "getPdfBase64") {
       try {
@@ -518,7 +666,57 @@ function doGet(e) {
       var lastRow = sheet.getLastRow();
       var lastCol = sheet.getLastColumn();
       
-      if (lastRow > 0 && lastCol > 0) {
+      if (sheetName === "Sayfa1" || (sheetName && sheetName.toLowerCase() === "sayfa1")) {
+        if (lastRow > 0 && lastCol > 0) {
+          var allValues = sheet.getRange(1, 1, lastRow, Math.max(lastCol, 7)).getValues();
+          var currentEbysNo = "";
+          
+          for (var i = 0; i < allValues.length; i++) {
+            var row = allValues[i];
+            var cellA = String(row[0] || "").trim();
+            var cellB = String(row[1] || "").trim();
+            var cellC = String(row[2] || "").trim();
+            
+            if (cellA.indexOf("EBYS NO:") === 0) {
+              if (cellB) {
+                currentEbysNo = cellB;
+              } else {
+                currentEbysNo = cellA.replace("EBYS NO:", "").trim();
+              }
+              continue;
+            }
+            
+            if (cellA === "AİT OLDUĞU BİRİM" || cellA === "AIT OLDUGU BIRIM" || cellA === "SIRA NU." || cellA === "EBYS NO") {
+              continue;
+            }
+            
+            if (!cellA && !cellB && !cellC) {
+              continue;
+            }
+            
+            if (currentEbysNo) {
+              rows.push({
+                "EBYS NO": currentEbysNo,
+                "ebysNo": currentEbysNo,
+                "AİT OLDUĞU BİRİM": cellA,
+                "aitOlduguBirim": cellA,
+                "MALZEME ADI": cellB,
+                "malzemeAdi": cellB,
+                "PARÇA NUMARASI": cellC,
+                "parcaNumarasi": cellC,
+                "SERİ NO (S/N)": String(row[3] || "").trim(),
+                "seriNo": String(row[3] || "").trim(),
+                "MİKTAR / KAPASİTE": String(row[4] || "").trim(),
+                "miktarKapasite": String(row[4] || "").trim(),
+                "KONTROLÜ YAPAN FİRMA": String(row[5] || "").trim(),
+                "kontroluYapanFirma": String(row[5] || "").trim(),
+                "AÇIKLAMA": String(row[6] || "").trim(),
+                "aciklama": String(row[6] || "").trim()
+              });
+            }
+          }
+        }
+      } else if (lastRow > 0 && lastCol > 0) {
         var allValues = sheet.getRange(1, 1, lastRow, lastCol).getValues();
         var rawHeaders = allValues[0];
         var headers = [];
@@ -902,8 +1100,10 @@ function processEquipmentReminders(ss, formattedDate) {
       if (warningLevel !== "" && colToUpdate !== -1) {
         // Sorumlu iletişim bilgisi tespiti
         var contact = null;
+        var normUnitName = normalizeUnitName(unitName);
         for (var uKey in emailMap) {
-          if (unitName.indexOf(uKey) !== -1 || uKey.indexOf(unitName) !== -1) {
+          var normKey = normalizeUnitName(uKey);
+          if (normUnitName.indexOf(normKey) !== -1 || normKey.indexOf(normUnitName) !== -1) {
             contact = emailMap[uKey];
             break;
           }
@@ -953,6 +1153,20 @@ function processEquipmentReminders(ss, formattedDate) {
         for (var k = 0; k < group.items.length; k++) {
           var item = group.items[k];
           techValues[item.techValuesIndex][group.colToUpdate] = formattedDate;
+          
+          // Cascading updates: If 30-day warning is sent, also populate 60 and 90 if empty. If 60-day is sent, also populate 90 if empty.
+          if (group.colToUpdate === 14) { // 30 GÜN
+            if (!techValues[item.techValuesIndex][13]) {
+              techValues[item.techValuesIndex][13] = formattedDate;
+            }
+            if (!techValues[item.techValuesIndex][12]) {
+              techValues[item.techValuesIndex][12] = formattedDate;
+            }
+          } else if (group.colToUpdate === 13) { // 60 GÜN
+            if (!techValues[item.techValuesIndex][12]) {
+              techValues[item.techValuesIndex][12] = formattedDate;
+            }
+          }
         }
         modified = true;
         
@@ -1248,7 +1462,8 @@ function ensureGunTakipSheet(ss) {
       ["T-70 BUMBİ BACKET", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
       ["B-360", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
       ["C-650", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
-      ["HANGAR YER DESTEK", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""]
+      ["HANGAR YER DESTEK", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""],
+      ["KARA ARAÇLARI", "Sorumlu Personel", "ormanhavacilik.bakimsube@gmail.com", "", "", ""]
     ];
     sheet.getRange(2, 1, defaults.length, 6).setValues(defaults);
     formatGeneralSheet(sheet);
@@ -1263,4 +1478,47 @@ function ensureGunTakipSheet(ss) {
   }
   return sheet;
 }
+
+/**
+ * Türkçe karakterleri normalize eder ve boşlukları/özel karakterleri silerek eşleşmeleri sağlamlaştırır.
+ */
+function normalizeUnitName(str) {
+  if (!str) return "";
+  return String(str).trim().toUpperCase()
+    .replace(/İ/g, "I")
+    .replace(/ı/g, "i")
+    .replace(/Ğ/g, "G")
+    .replace(/ğ/g, "g")
+    .replace(/Ü/g, "U")
+    .replace(/ü/g, "u")
+    .replace(/Ş/g, "S")
+    .replace(/ş/g, "s")
+    .replace(/Ö/g, "O")
+    .replace(/ö/g, "o")
+    .replace(/Ç/g, "C")
+    .replace(/ç/g, "c")
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+/**
+ * Updates the company name in the matching "TÜM TECHİZAT" sheet rows
+ */
+function updateTechizatFirmaInAllTechizat(ss, partNo, seriNo, newFirma) {
+  var techSheet = getSheetWithFallback(ss, "TÜM TECHİZAT");
+  var lastRow = techSheet.getLastRow();
+  if (lastRow > 1) {
+    var range = techSheet.getRange(2, 1, lastRow - 1, 12);
+    var values = range.getValues();
+    for (var r = 0; r < values.length; r++) {
+      var rowPart = String(values[r][3] || "").trim(); // Index 3 is Column D: PARÇA NO (P/N) / MODEL
+      var rowSeri = String(values[r][4] || "").trim(); // Index 4 is Column E: SERİ NO (S/N)
+      
+      if (rowPart === partNo && rowSeri === seriNo) {
+        // Set the value in Column K (Index 11, but 1-based index is 11)
+        techSheet.getRange(r + 2, 11).setValue(newFirma);
+      }
+    }
+  }
+}
+
 

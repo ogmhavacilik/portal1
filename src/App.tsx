@@ -40,6 +40,9 @@ import {
   ExternalLink,
   ChevronUp,
   ChevronDown,
+  ChevronRight,
+  ChevronLeft,
+  Camera,
   Edit3,
   Columns,
   Rows,
@@ -51,13 +54,20 @@ import {
   FileSpreadsheet,
   Copy,
   SlidersHorizontal,
-  UserCheck
+  UserCheck,
+  Truck,
+  History,
+  Maximize2,
+  Sparkles,
+  Send
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
+import { ImageEditorAndRetoucher } from './components/ImageEditorAndRetoucher';
+import { CachedDriveImage } from './components/CachedDriveImage';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8HKrPadDYsg3PH49sIz5k07uyxZkmnDRJhzmi2isQplu1oqN-26GM4E6WyuirD8UVQg/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzkHiSK2lW0tSElLoIJbqquOjIgE1AZlKrFmoajhYeneVAdvYcMy7fnd2A5-ShKpTXbOw/exec";
 
 // Convert a File object to Base64 string for Drive uploading
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -71,6 +81,34 @@ export const fileToBase64 = (file: File): Promise<string> => {
     };
     reader.onerror = (error) => reject(error);
   });
+};
+
+export const getEmbeddableDriveUrl = (url: string | null | undefined): string | null => {
+  if (!url) return null;
+  if (url.startsWith('data:')) return url;
+
+  // Convert Google Drive view or sharing links to direct/embed links
+  // Pattern 1: https://drive.google.com/file/d/FILE_ID/view... or similar
+  const dMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (dMatch && dMatch[1]) {
+    return `https://drive.google.com/uc?export=download&id=${dMatch[1]}`;
+  }
+
+  // Pattern 2: https://drive.google.com/open?id=FILE_ID
+  const idMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (url.includes('drive.google.com') && idMatch && idMatch[1]) {
+    return `https://drive.google.com/uc?export=download&id=${idMatch[1]}`;
+  }
+
+  // Pattern 3: Ensure any uc?id= link has export=download
+  if (url.includes('drive.google.com/uc') && !url.includes('export=download')) {
+    const ucIdMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (ucIdMatch && ucIdMatch[1]) {
+      return `https://drive.google.com/uc?export=download&id=${ucIdMatch[1]}`;
+    }
+  }
+
+  return url;
 };
 
 export const formatToTurkishDateRange = (startStr: string, endStr: string): string => {
@@ -415,6 +453,7 @@ export type CategoryType =
   | 'TEÇHİZAT TAKİP' 
   | 'HA_YER_DESTEK' 
   | 'T70_DETAY' 
+  | 'KARA_ARACLARI_MENU'
   | 'FORM KAYITLARI' 
   | null;
 
@@ -664,6 +703,679 @@ export default function App() {
   const [activeModalCell, setActiveModalCell] = useState<{ r: number; c: number; value: string; label: string } | null>(null);
   const [copiedCellSuccess, setCopiedCellSuccess] = useState<boolean>(false);
 
+  // Teçhizat row edit, image upload and mission order states
+  const [mobileEditTab, setMobileEditTab] = useState<'form' | 'image'>('form');
+  const [activeTechizatRowEdit, setActiveTechizatRowEdit] = useState<{
+    rIdx: number;
+    techType: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all';
+    row: string[];
+  } | null>(null);
+  const [techizatImages, setTechizatImages] = useState<Record<string, string>>(() => {
+    const defaultImages = {
+      "bell429_Bell_429_Çekme_Çubuğu_(Tow_Bar)_SN-9982": "https://drive.google.com/file/d/1QXCX6zN79vZ6nSk4prwH0LacFfT0WyEv/view?usp=drivesdk"
+    };
+    const saved = localStorage.getItem('techizat_images');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return { ...defaultImages, ...parsed };
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return defaultImages;
+  });
+  const [techizatImageScale, setTechizatImageScale] = useState<number>(1);
+  const [isFullScreenImage, setIsFullScreenImage] = useState<boolean>(false);
+  const [editRowValues, setEditRowValues] = useState<string[]>([]);
+  const [showSavePasswordPrompt, setShowSavePasswordPrompt] = useState<boolean>(false);
+  const [tempImageUrlInput, setTempImageUrlInput] = useState<string>('');
+  const [tempImageAction, setTempImageAction] = useState<'upload' | 'link' | 'remove' | null>(null);
+  const [showImageSavePasswordPrompt, setShowImageSavePasswordPrompt] = useState<boolean>(false);
+  const [isImageUpdateUnlocked, setIsImageUpdateUnlocked] = useState<boolean>(false);
+  const [imagePasswordInput, setImagePasswordInput] = useState<string>('');
+  const [imagePasswordError, setImagePasswordError] = useState<boolean>(false);
+  const [showImagePasswordPrompt, setShowImagePasswordPrompt] = useState<boolean>(false);
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [isImageUploadingToDrive, setIsImageUploadingToDrive] = useState<boolean>(false);
+  const [isDataUpdateUnlocked, setIsDataUpdateUnlocked] = useState<boolean>(false);
+  const [dataPasswordInput, setDataPasswordInput] = useState<string>('');
+  const [dataPasswordError, setDataPasswordError] = useState<boolean>(false);
+
+  // Techizat and Mission Order Editing States
+  const [isTechizatSaving, setIsTechizatSaving] = useState<boolean>(false);
+  const [activeGorevEmriEdit, setActiveGorevEmriEdit] = useState<any | null>(null);
+  const [editGorevEmriValues, setEditGorevEmriValues] = useState<any | null>(null);
+  const [pendingGeEditOrder, setPendingGeEditOrder] = useState<any | null>(null);
+  const [geEditPasswordInput, setGeEditPasswordInput] = useState<string>('');
+  const [geEditPasswordError, setGeEditPasswordError] = useState<boolean>(false);
+  const [showGeEditPasswordPrompt, setShowGeEditPasswordPrompt] = useState<boolean>(false);
+
+  const [karaAraclariSubTab, setKaraAraclariSubTab] = useState<'list' | 'mission_order' | 'past_records'>('list');
+  const [karaAraclariGorevEmirleri, setKaraAraclariGorevEmirleri] = useState<any[]>(() => {
+    const saved = localStorage.getItem('kara_araclari_gorev_emirleri');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+    }
+    return [];
+  });
+
+  const [geTarih, setGeTarih] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [gePlaka, setGePlaka] = useState<string>("");
+  const [geSoforName, setGeSoforName] = useState<string>("");
+  const [geSeriNo, setGeSeriNo] = useState<string>("");
+  const [geReturnKm, setGeReturnKm] = useState<string>("");
+  const [geDepartureTime, setGeDepartureTime] = useState<string>("08:00");
+  const [geReturnTime, setGeReturnTime] = useState<string>("17:00");
+  const [geDepartureKm, setGeDepartureKm] = useState<string>("");
+  const [geStep, setGeStep] = useState<number>(1);
+  const [showDriverSuggestions, setShowDriverSuggestions] = useState<boolean>(false);
+  const [isRedirectingToPortal, setIsRedirectingToPortal] = useState<boolean>(false);
+  const [geRoutes, setGeRoutes] = useState<{ from: string; to: string }[]>([{ from: "", to: "" }]);
+  const [isSlidingUp, setIsSlidingUp] = useState<boolean>(false);
+  const [showGeDeletePasswordPrompt, setShowGeDeletePasswordPrompt] = useState<boolean>(false);
+  const [geDeleteOrderId, setGeDeleteOrderId] = useState<string | null>(null);
+  const [geDeletePasswordInput, setGeDeletePasswordInput] = useState<string>("");
+  const [geDeletePasswordError, setGeDeletePasswordError] = useState<boolean>(false);
+  const [pendingImageBase64, setPendingImageBase64] = useState<string | null>(null);
+  const [pendingImageMimeType, setPendingImageMimeType] = useState<string | null>(null);
+
+  // EBYS multi-selection and tracking state variables
+  const [selectedTechizatItems, setSelectedTechizatItems] = useState<Record<string, { techType: string; row: string[] }>>({});
+  const [techizatSubTab, setTechizatSubTab] = useState<'list' | 'ebys_tracking'>('list');
+  const [isEbysModalOpen, setIsEbysModalOpen] = useState(false);
+  const [ebysSearchQuery, setEbysSearchQuery] = useState("");
+  const [ebysList, setEbysList] = useState<any[]>([]);
+  const [isLoadingEbys, setIsLoadingEbys] = useState(false);
+  const [ebysError, setEbysError] = useState<string | null>(null);
+  const [selectedEbysRow, setSelectedEbysRow] = useState<any | null>(null);
+  const [ebysBaslik, setEbysBaslik] = useState("");
+  const [ebysAciklama, setEbysAciklama] = useState("");
+  const [ebysTalepTuru, setEbysTalepTuru] = useState("");
+  const [ebysTeslimTarihi, setEbysTeslimTarihi] = useState(() => new Date().toISOString().split('T')[0]);
+  const [submittedEbysRequests, setSubmittedEbysRequests] = useState<any[]>([]);
+  const [isLoadingSubmitted, setIsLoadingSubmitted] = useState(false);
+  const [isEbysSelectDropdownOpen, setIsEbysSelectDropdownOpen] = useState(false);
+
+  // Bulk edit states for multiple teçhizat rows
+  const [bulkEditYer, setBulkEditYer] = useState("");
+  const [bulkEditDurum, setBulkEditDurum] = useState("");
+  const [bulkEditFirma, setBulkEditFirma] = useState("");
+  const [bulkModalMode, setBulkModalMode] = useState<'choice' | 'edit' | 'send'>('choice');
+  const [bulkEditPasswordInput, setBulkEditPasswordInput] = useState("");
+  const [bulkEditPasswordError, setBulkEditPasswordError] = useState(false);
+  const [showBulkEditPasswordPrompt, setShowBulkEditPasswordPrompt] = useState(false);
+  const [isBulkSaving, setIsBulkSaving] = useState(false);
+
+  // Password-protected EBYS Talep tracking editing states
+  const [editingEbysRowIndex, setEditingEbysRowIndex] = useState<number | null>(null);
+  const [editingEbysFirma, setEditingEbysFirma] = useState<string>("");
+  const [showEbysFirmaPasswordPrompt, setShowEbysFirmaPasswordPrompt] = useState<boolean>(false);
+  const [ebysFirmaPasswordInput, setEbysFirmaPasswordInput] = useState<string>("");
+  const [ebysFirmaPasswordError, setEbysFirmaPasswordError] = useState<boolean>(false);
+
+  // Search filter states for past records
+  const [pastRecordsSearchName, setPastRecordsSearchName] = useState<string>("");
+  const [pastRecordsSearchSerial, setPastRecordsSearchSerial] = useState<string>("");
+  const [pastRecordsSearchStartDate, setPastRecordsSearchStartDate] = useState<string>("");
+  const [pastRecordsSearchEndDate, setPastRecordsSearchEndDate] = useState<string>("");
+  const [isPastRecordsSearched, setIsPastRecordsSearched] = useState<boolean>(false);
+
+  // Helper to parse EBYS rows or objects dynamically
+  const parseEbysItem = (item: any) => {
+    if (!item) return null;
+    let ebysNo = "";
+    let baslik = "";
+    let aciklama = "";
+    let talepTuru = "";
+
+    const normalize = (str: string) => {
+      return String(str || "")
+        .toLowerCase()
+        .replace(/ı/g, 'i')
+        .replace(/ğ/g, 'g')
+        .replace(/ü/g, 'u')
+        .replace(/ş/g, 's')
+        .replace(/ö/g, 'o')
+        .replace(/ç/g, 'c')
+        .replace(/[^a-z0-9]/g, '');
+    };
+
+    if (Array.isArray(item)) {
+      // Index 7 is column H (EBYS)
+      ebysNo = String(item[7] || "").trim();
+      baslik = String(item[1] || "").trim();
+      aciklama = String(item[2] || "").trim();
+      talepTuru = String(item[3] || "").trim();
+    } else if (typeof item === "object") {
+      const keys = Object.keys(item);
+      
+      const ebysKey = keys.find(k => {
+        const norm = normalize(k);
+        return norm.includes("ebys") || norm === "h";
+      });
+      if (ebysKey) ebysNo = String(item[ebysKey]).trim();
+      
+      const baslikKey = keys.find(k => {
+        const norm = normalize(k);
+        return norm === "baslik" || norm.includes("basligi") || norm.includes("konu") || norm === "b" || norm === "title";
+      });
+      if (baslikKey) baslik = String(item[baslikKey]).trim();
+      
+      const aciklamaKey = keys.find(k => {
+        const norm = normalize(k);
+        return norm === "aciklama" || norm.includes("aciklamasi") || norm === "c" || norm === "description";
+      });
+      if (aciklamaKey) aciklama = String(item[aciklamaKey]).trim();
+
+      const talepTuruKey = keys.find(k => {
+        const norm = normalize(k);
+        return norm === "talepturu" || norm.includes("turu") || norm === "d" || norm === "type";
+      });
+      if (talepTuruKey) talepTuru = String(item[talepTuruKey]).trim();
+
+      // Fallbacks - Prefer Column H (8th column) if ebysNo is still empty
+      if (!ebysNo && keys.length > 7) {
+        ebysNo = String(item[keys[7]] || "").trim();
+      }
+      if (!ebysNo) ebysNo = String(item["EBYS NO"] || item["EBYS"] || item["ebys"] || item["EBYS Numarası"] || item["ebysNumber"] || item["H"] || "");
+      if (!baslik) baslik = String(item["Başlık"] || item["Baslik"] || item["title"] || item["B"] || "");
+      if (!aciklama) aciklama = String(item["Açıklama"] || item["Aciklama"] || item["description"] || item["C"] || "");
+      if (!talepTuru) talepTuru = String(item["Talep Türü"] || item["Talep Turu"] || item["type"] || item["D"] || "");
+    }
+
+    // Extract only digits/numbers from column H (EBYS) as requested ("h sutundaki rakamlari cek")
+    const digitsOnly = ebysNo.replace(/\D/g, "");
+    if (digitsOnly) {
+      ebysNo = digitsOnly;
+    }
+
+    return { ebysNo, baslik, aciklama, talepTuru };
+  };
+
+  const getTechUnitName = (techType: string): string => {
+    if (techType === 'bell429') return 'BELL 429';
+    if (techType === 'at802') return 'AT-802F';
+    if (techType === 't70') return 'T-70 YER DESTEK';
+    if (techType === 't70_bumbi_backet') return 'T-70 BUMBİ BACKET';
+    if (techType === 'c650') return 'C-650';
+    if (techType === 'b360') return 'B-360';
+    if (techType === 'hangar') return 'HANGAR YER DESTEK';
+    if (techType === 'kara_araclari') return 'KARA ARAÇLARI';
+    return techType.toUpperCase();
+  };
+
+  // Fetch Taskline data (EBYS List)
+  const fetchTasklineEbysList = async () => {
+    setIsLoadingEbys(true);
+    setEbysError(null);
+    try {
+      // Use our server-side API proxy to completely bypass client CORS / 'Failed to fetch' error
+      const url = `/api/taskline-ebys`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP Hata: ${response.status}`);
+      }
+      const result = await response.json();
+      
+      if (result && result.status === "error") {
+        throw new Error(result.message);
+      }
+      
+      if (result && Array.isArray(result.data)) {
+        setEbysList(result.data);
+      } else if (Array.isArray(result)) {
+        setEbysList(result);
+      } else if (result && result.status === "success" && Array.isArray(result.data)) {
+        setEbysList(result.data);
+      } else {
+        setEbysList([]);
+      }
+    } catch (err: any) {
+      console.error("Taskline EBYS listesi çekme hatası:", err);
+      setEbysError(err?.message || "Bağlantı hatası");
+    } finally {
+      setIsLoadingEbys(false);
+    }
+  };
+
+  // Fetch Sayfa1 from Görevline script
+  const fetchSubmittedEbysRequests = async () => {
+    setIsLoadingSubmitted(true);
+    try {
+      const url = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("Sayfa1")}`;
+      const response = await fetch(url);
+      if (response.ok) {
+        const result = await response.json();
+        if (result && Array.isArray(result.data)) {
+          setSubmittedEbysRequests(result.data);
+          localStorage.setItem('submitted_ebys_requests', JSON.stringify(result.data));
+        } else if (Array.isArray(result)) {
+          setSubmittedEbysRequests(result);
+          localStorage.setItem('submitted_ebys_requests', JSON.stringify(result));
+        }
+      }
+    } catch (err) {
+      console.error("Görevline Sayfa1 listesi çekme hatası:", err);
+      const saved = localStorage.getItem('submitted_ebys_requests');
+      if (saved) {
+        setSubmittedEbysRequests(JSON.parse(saved));
+      }
+    } finally {
+      setIsLoadingSubmitted(false);
+    }
+  };
+
+  // Submit selected equipment rows to Görevline (Sayfa1)
+  const submitEbysRequests = async () => {
+    if (!ebysSearchQuery) {
+      showNotification("Lütfen bir EBYS numarası seçin veya girin.");
+      return;
+    }
+
+    const rowsToAppend = Object.values(selectedTechizatItems).map((item: { techType: string; row: string[] }) => {
+      const row = item.row;
+      const aitOlduguBirim = getTechUnitName(item.techType);
+      const malzemeAdi = row[1] || "";
+      const parcaNo = row[2] || "";
+      const seriNo = row[3] || "";
+      const miktarKapasite = row[4] || "1";
+      const aciklama = row[10] || "";
+
+      return [
+        aitOlduguBirim,
+        malzemeAdi,
+        parcaNo,
+        seriNo,
+        miktarKapasite,
+        "", // SON KONTROLÜ YAPAN FİRMA (initially empty)
+        aciklama
+      ];
+    });
+
+    try {
+      showNotification("Talepleriniz online Excel sayfasına aktarılıyor ve durumları 'BAKIM / KALİBRASYON' olarak güncelleniyor...");
+      
+      // 1. Group selected items by techType to update their status column in main database
+      const updatedTechTypes = new Set<string>();
+      
+      Object.values(selectedTechizatItems).forEach((item: { techType: string; row: string[] }) => {
+        const { techType, row } = item;
+        const statusIdx = 6;
+        row[statusIdx] = "BAKIM / KALİBRASYON";
+        updatedTechTypes.add(techType);
+      });
+
+      // 2. Update local state arrays and local storage, then sync online in the background
+      updatedTechTypes.forEach(techType => {
+        let currentList: string[][] = [];
+        if (techType === 'bell429') currentList = [...techizatBell429Data];
+        else if (techType === 'at802') currentList = [...techizatAt802Data];
+        else if (techType === 't70') currentList = [...techizatT70Data];
+        else if (techType === 't70_bumbi_backet') currentList = [...techizatT70BumbiBacketData];
+        else if (techType === 'b360') currentList = [...techizatB360Data];
+        else if (techType === 'c650') currentList = [...techizatC650Data];
+        else if (techType === 'hangar') currentList = [...techizatHangarData];
+        else if (techType === 'kara_araclari') currentList = [...techizatKaraAraclariData];
+
+        const newArray = currentList.map((r) => {
+          const matched = Object.values(selectedTechizatItems).find((sel: { techType: string; row: string[] }) => 
+            sel.techType === techType && 
+            (sel.row[0] || "").trim() === (r[0] || "").trim() && 
+            (sel.row[1] || "").trim() === (r[1] || "").trim()
+          );
+          if (matched) {
+            const cloned = [...r];
+            const statusIdx = 6;
+            cloned[statusIdx] = "BAKIM / KALİBRASYON";
+            return cloned;
+          }
+          return r;
+        });
+
+        // Set React state and LocalStorage for local responsiveness
+        if (techType === 'bell429') {
+          setTechizatBell429Data(newArray);
+          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(newArray));
+        } else if (techType === 'at802') {
+          setTechizatAt802Data(newArray);
+          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(newArray));
+        } else if (techType === 't70') {
+          setTechizatT70Data(newArray);
+          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(newArray));
+        } else if (techType === 't70_bumbi_backet') {
+          setTechizatT70BumbiBacketData(newArray);
+          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(newArray));
+        } else if (techType === 'b360') {
+          setTechizatB360Data(newArray);
+          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(newArray));
+        } else if (techType === 'c650') {
+          setTechizatC650Data(newArray);
+          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(newArray));
+        } else if (techType === 'hangar') {
+          setTechizatHangarData(newArray);
+          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(newArray));
+        } else if (techType === 'kara_araclari') {
+          setTechizatKaraAraclariData(newArray);
+          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(newArray));
+        }
+
+        // Sync back to online central sheet
+        const unitLabel = getTechizatUnitLabel(techType);
+        if (unitLabel && newArray.length > 0) {
+          fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "updateTumTechizat",
+              unitLabel: unitLabel,
+              data: newArray.map(r => [unitLabel, ...r])
+            })
+          }).then(() => {
+            console.log(`Synced status change to "BAKIM / KALİBRASYON" for ${unitLabel} to Google Sheets.`);
+          }).catch(e => {
+            console.error(`Failed to sync status for ${unitLabel}:`, e);
+          });
+        }
+      });
+
+      // 3. Post selected rows to Taskline/Görevline
+      await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "appendEbysTable",
+          ebysNo: ebysSearchQuery,
+          data: rowsToAppend
+        })
+      });
+
+      // Show instant feedback since it's no-cors
+      showNotification("Seçilen teçhizatlar başarıyla Görevline Sayfa1 sistemine gönderildi ve durumları 'BAKIM / KALİBRASYON' olarak güncellendi!");
+      setSelectedTechizatItems({});
+      setIsEbysModalOpen(false);
+      setEbysSearchQuery("");
+      setEbysBaslik("");
+      setEbysAciklama("");
+      setEbysTalepTuru("");
+
+      // Refresh tracking lists
+      setTimeout(() => {
+        fetchSubmittedEbysRequests();
+        pullAllTechizatFromGoogleSheets(true);
+      }, 1500);
+
+    } catch (err) {
+      console.error("Görevline yazma hatası:", err);
+      showNotification("Gönderim sırasında bir hata oluştu, lütfen tekrar deneyiniz.");
+    }
+  };
+
+  // Bulk update function for selected teçhizat rows
+  const handleBulkEditTechizatRows = async () => {
+    try {
+      setIsBulkSaving(true);
+      showNotification("Seçilen teçhizatlar toplu olarak güncelleniyor, lütfen bekleyiniz...");
+      
+      const updatedTechTypes = new Set<string>();
+
+      // Group by techType and apply updates
+      Object.entries(selectedTechizatItems).forEach(([key, item]: [string, any]) => {
+        const { techType } = item;
+        updatedTechTypes.add(techType);
+      });
+
+      // For each affected techType, load current list, map updates, and save
+      for (const techType of updatedTechTypes) {
+        let currentList: string[][] = [];
+        if (techType === 'bell429') currentList = [...techizatBell429Data];
+        else if (techType === 'at802') currentList = [...techizatAt802Data];
+        else if (techType === 't70') currentList = [...techizatT70Data];
+        else if (techType === 't70_bumbi_backet') currentList = [...techizatT70BumbiBacketData];
+        else if (techType === 'b360') currentList = [...techizatB360Data];
+        else if (techType === 'c650') currentList = [...techizatC650Data];
+        else if (techType === 'hangar') currentList = [...techizatHangarData];
+        else if (techType === 'kara_araclari') currentList = [...techizatKaraAraclariData];
+
+        const newArray = currentList.map((r) => {
+          // Check if this row is selected
+          const isSelected = Object.values(selectedTechizatItems).some((sel: any) => 
+            sel.techType === techType && 
+            (sel.row[0] || "").trim() === (r[0] || "").trim() && 
+            (sel.row[1] || "").trim() === (r[1] || "").trim()
+          );
+
+          if (isSelected) {
+            const cloned = [...r];
+            while (cloned.length < 12) cloned.push("");
+            
+            // Standard indices in 12-column row:
+            // 5: BULUNDUĞU YER
+            // 6: DURUMU
+            // 9: SON KONTROLÜ YAPAN FİRMA
+            if (bulkEditYer.trim() !== "") {
+              cloned[5] = bulkEditYer.trim();
+            }
+            if (bulkEditDurum.trim() !== "") {
+              cloned[6] = bulkEditDurum.trim();
+            }
+            if (bulkEditFirma.trim() !== "") {
+              cloned[9] = bulkEditFirma.trim();
+            }
+            return cloned;
+          }
+          return r;
+        });
+
+        // Save back to local states
+        if (techType === 'bell429') {
+          setTechizatBell429Data(newArray);
+          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(newArray));
+        } else if (techType === 'at802') {
+          setTechizatAt802Data(newArray);
+          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(newArray));
+        } else if (techType === 't70') {
+          setTechizatT70Data(newArray);
+          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(newArray));
+        } else if (techType === 't70_bumbi_backet') {
+          setTechizatT70BumbiBacketData(newArray);
+          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(newArray));
+        } else if (techType === 'b360') {
+          setTechizatB360Data(newArray);
+          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(newArray));
+        } else if (techType === 'c650') {
+          setTechizatC650Data(newArray);
+          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(newArray));
+        } else if (techType === 'hangar') {
+          setTechizatHangarData(newArray);
+          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(newArray));
+        } else if (techType === 'kara_araclari') {
+          setTechizatKaraAraclariData(newArray);
+          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(newArray));
+        }
+
+        // Sync back to online central sheet
+        const unitLabel = getTechizatUnitLabel(techType);
+        if (unitLabel && newArray.length > 0) {
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "updateTumTechizat",
+              unitLabel: unitLabel,
+              data: newArray.map(r => [unitLabel, ...r])
+            })
+          });
+        }
+      }
+
+      showNotification("Seçilen teçhizatlar başarıyla topluca güncellendi ve online e-tabloya kaydedildi!");
+      setSelectedTechizatItems({});
+      setIsEbysModalOpen(false);
+      setBulkEditYer("");
+      setBulkEditDurum("");
+      setBulkEditFirma("");
+      setBulkModalMode('choice');
+      
+      setTimeout(() => {
+        pullAllTechizatFromGoogleSheets(true);
+      }, 1500);
+
+    } catch (err) {
+      console.error("Bulk edit error:", err);
+      showNotification("Toplu güncelleme sırasında bir hata oluştu, lütfen tekrar deneyiniz.");
+    } finally {
+      setIsBulkSaving(false);
+    }
+  };
+
+  // Update a specific request's KONTROLÜ YAPAN FİRMA column on Görevline Sayfa1 online sheet
+  const updateEbysFirmaOnline = async (indexToUpdate: number, newFirma: string) => {
+    const item = submittedEbysRequests[indexToUpdate];
+    if (!item) return;
+
+    const ebysNo = item["EBYS NO"] || item["ebysNo"] || "";
+    const partNo = item["PARÇA NUMARASI"] || item["parcaNumarasi"] || "";
+    const seriNo = item["SERİ NO (S/N)"] || item["seriNo"] || "";
+
+    // 1. Create a modified copy of current submittedEbysRequests
+    const updatedList = submittedEbysRequests.map((req, idx) => {
+      if (idx === indexToUpdate) {
+        return {
+          ...req,
+          "KONTROLÜ YAPAN FİRMA": newFirma,
+          "kontroluYapanFirma": newFirma
+        };
+      }
+      return req;
+    });
+
+    setSubmittedEbysRequests(updatedList);
+    localStorage.setItem('submitted_ebys_requests', JSON.stringify(updatedList));
+
+    try {
+      showNotification("KONTROLÜ YAPAN FİRMA bilgisi e-tabloya güncelleniyor...");
+      
+      await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "updateEbysFirma",
+          ebysNo: ebysNo,
+          parcaNo: partNo,
+          seriNo: seriNo,
+          firma: newFirma
+        })
+      });
+
+      showNotification("Firma bilgisi başarıyla güncellendi ve teçhizat listesiyle senkronize edildi!");
+      setEditingEbysRowIndex(null);
+      
+      // Pull fresh data to reflect changes
+      setTimeout(() => {
+        pullAllTechizatFromGoogleSheets(true);
+      }, 1500);
+    } catch (err) {
+      console.error("Error updating KONTROLÜ YAPAN FİRMA:", err);
+      showNotification("Güncelleme sırasında hata oluştu.");
+    }
+  };
+
+  // Fetch past mission orders from Google Sheets
+  const pullKaraAraclariGorevEmirleri = async () => {
+    try {
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("görev emri kaytlar")}`;
+      const response = await fetch(targetUrl);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.status === "success" && Array.isArray(result.data)) {
+          const mapped = result.data.map((row: any, index: number) => ({
+            id: row.id ? Number(row.id) : Date.now() + index,
+            date: row["Tarih"] || row["Date"] || "",
+            plate: row["Araç Plakası"] || row["Plate"] || "",
+            driverName: row["Sürücü Personel"] || row["DriverName"] || "",
+            driverId: row["T.C. Kimlik No"] || row["DriverId"] || "",
+            driverSicil: row["Sicil No"] || row["DriverSicil"] || "",
+            driverPhone: row["Telefon"] || row["DriverPhone"] || "",
+            driverKanGrubu: row["Kan Grubu"] || row["DriverKanGrubu"] || "",
+            driverAdres: row["Adres"] || row["DriverAdres"] || "",
+            serialNo: row["Görev Seri No"] || row["SerialNo"] || "",
+            departureTime: row["Çıkış Saati"] || row["DepartureTime"] || "08:00",
+            returnTime: row["Dönüş Saati"] || row["ReturnTime"] || "17:00",
+            departureKm: row["Çıkış KM"] || row["DepartureKm"] || "",
+            returnKm: Number(row["Dönüş KM"] || row["ReturnKm"] || 0),
+            route: row["Güzergah"] || row["Route"] || ""
+          }));
+          if (mapped.length > 0) {
+            setKaraAraclariGorevEmirleri(mapped);
+            localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(mapped));
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Görev emri kayıtları yükleme hatası:", err);
+    }
+  };
+
+  // Push past mission orders to Google Sheets
+  const pushKaraAraclariGorevEmirleri = async (ordersList: any[]) => {
+    try {
+      const targetUrl = GOOGLE_SCRIPT_URL;
+      const headers = [
+        "id", "Tarih", "Araç Plakası", "Sürücü Personel", "T.C. Kimlik No", "Sicil No", 
+        "Telefon", "Kan Grubu", "Adres", "Görev Seri No", "Çıkış Saati", "Dönüş Saati", "Çıkış KM", "Dönüş KM", "Güzergah"
+      ];
+      const rows = ordersList.map(o => [
+        String(o.id || ""),
+        String(o.date || ""),
+        String(o.plate || ""),
+        String(o.driverName || ""),
+        String(o.driverId || ""),
+        String(o.driverSicil || ""),
+        String(o.driverPhone || ""),
+        String(o.driverKanGrubu || ""),
+        String(o.driverAdres || ""),
+        String(o.serialNo || ""),
+        String(o.departureTime || ""),
+        String(o.returnTime || ""),
+        String(o.departureKm || ""),
+        String(o.returnKm || ""),
+        String(o.route || "")
+      ]);
+
+      await fetch(targetUrl, {
+        method: "POST",
+        mode: "no-cors",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "updateSheet",
+          sheetName: "görev emri kaytlar",
+          data: [headers, ...rows]
+        })
+      });
+    } catch (err) {
+      console.error("Görev emri senkronizasyon hatası:", err);
+    }
+  };
+
+  useEffect(() => {
+    localStorage.setItem('techizat_images', JSON.stringify(techizatImages));
+  }, [techizatImages]);
+
+  useEffect(() => {
+    localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(karaAraclariGorevEmirleri));
+  }, [karaAraclariGorevEmirleri]);
+
   // Ctrl+F Keyboard Shortcut Listener for PDF Search Input (Allows native browser Ctrl+F to open)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -800,15 +1512,24 @@ export default function App() {
   const [activeExcelMatchIdx, setActiveExcelMatchIdx] = useState<number>(0);
 
   // Teçhizat Takip Matrix States
-  const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'all' | null>(null);
+  const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all' | null>(null);
   const [techizatSearchQuery, setTechizatSearchQuery] = useState<string>("");
   const [activeTechizatMatchIdx, setActiveTechizatMatchIdx] = useState<number>(0);
 
-  // States for each of the 4 categories
+  // States for each of the categories
   const [techizatBell429Columns, setTechizatBell429Columns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_bell429_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON BAKIM", "GELECEK BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
   const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_bell429_data');
@@ -822,8 +1543,17 @@ export default function App() {
 
   const [techizatAt802Columns, setTechizatAt802Columns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_at802_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
   const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_at802_data');
@@ -836,8 +1566,17 @@ export default function App() {
 
   const [techizatT70Columns, setTechizatT70Columns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_t70_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
   const [techizatT70Data, setTechizatT70Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_t70_data');
@@ -850,8 +1589,17 @@ export default function App() {
 
   const [techizatT70BumbiBacketColumns, setTechizatT70BumbiBacketColumns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_t70_bumbi_backet_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
   const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_t70_bumbi_backet_data');
@@ -864,8 +1612,17 @@ export default function App() {
 
   const [techizatB360Columns, setTechizatB360Columns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_b360_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
   const [techizatB360Data, setTechizatB360Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_b360_data');
@@ -878,8 +1635,17 @@ export default function App() {
 
   const [techizatC650Columns, setTechizatC650Columns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_c650_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
   const [techizatC650Data, setTechizatC650Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_c650_data');
@@ -892,8 +1658,17 @@ export default function App() {
 
   const [techizatHangarColumns, setTechizatHangarColumns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_hangar_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL", "GELECEK KONTROL", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
   const [techizatHangarData, setTechizatHangarData] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_hangar_data');
@@ -904,8 +1679,24 @@ export default function App() {
     ];
   });
 
+  const [techizatKaraAraclariColumns, setTechizatKaraAraclariColumns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_kara_araclari_cols');
+    if (saved) return JSON.parse(saved);
+    return ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "ARAÇ TİPİ", "MARKA / MODEL", "MİKTAR", "BULUNDUĞU GÖREV YERİ", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "BAKIM YAPAN FİRMA / KURUM", "AÇIKLAMA"];
+  });
+  const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_kara_araclari_data');
+    if (saved) return JSON.parse(saved);
+    return [
+      ["1", "06 OGM 1001 (T-70 Çekici)", "Uçak/Helikopter Çekici Araç", "Tow-Tractor 4x4", "1", "Ankara Hangar 1", "FAAL", "15.04.2026", "15.10.2026", "Ulaşım Otomotiv A.Ş.", "6 aylık periyodik sıvı ve filtre bakımları tamamlandı."],
+      ["2", "06 OGM 1002 (Jet-A1 Tankeri)", "Hava Aracı Yakıt Tankeri (15K LT)", "Mercedes-Benz Axor", "1", "Ankara Apron", "FAAL", "01.05.2026", "01.11.2026", "TSE Muayene Hizmetleri", "Tank sızdırmazlık testi ve sayaç kalibrasyonları yapıldı."],
+      ["3", "06 OGM 1003 (Follow Me)", "Alan Hizmet ve Eskort Aracı", "Ford Ranger", "1", "Esenboğa Havalimanı", "FAAL", "10.06.2026", "10.12.2026", "Ankara Ford Yetkili Servisi", "Telsiz ve tepe lambası elektrik tesisatı kontrol edildi."],
+      ["4", "06 OGM 1004 (Crashed Tender)", "Acil Müdahale ve Yangın Söndürme Aracı", "Rosenbauer Panther", "1", "Muğla Üssü", "FAAL", "20.02.2026", "20.08.2026", "Rosenbauer Türkiye", "Köpük lansları ve yüksek basınç pompası fenni muayenesi yapıldı."]
+    ];
+  });
+
   // Helper method to open Teçhizat Takip Matrix
-  const openTechizatMatrix = (type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'all', title: string) => {
+  const openTechizatMatrix = (type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all', title: string) => {
     setActiveTechizatType(type);
     setModalType('techizat_matrix');
     setModalTitle(title);
@@ -1769,6 +2560,26 @@ export default function App() {
     }
   }, [selectedFormId, selectedSummerMonth, pdfMetadataList]);
 
+  // Google Drive klasöründen teçhizat resimlerini listeler ve senkronize eder
+  const fetchImagesFromDrive = async () => {
+    try {
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=listImagesFromDrive`;
+      const response = await fetch(targetUrl);
+      if (response.ok) {
+        const result = await response.json();
+        if (result && result.status === "success" && result.images) {
+          setTechizatImages(prev => {
+            const merged = { ...prev, ...result.images };
+            localStorage.setItem('techizat_images', JSON.stringify(merged));
+            return merged;
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Resim senkronizasyon hatası:", error);
+    }
+  };
+
   // Google Drive klasöründen PDF dosyalarını listeler
   const fetchPdfMetadata = async () => {
     try {
@@ -2051,14 +2862,14 @@ export default function App() {
   const [sortByColor, setSortByColor] = useState<boolean>(false);
   const [isSorumluModalOpen, setIsSorumluModalOpen] = useState(false);
   const [isSavingSorumlu, setIsSavingSorumlu] = useState(false);
-  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; mail90?: string; mail60?: string; mail30?: string; }[]>([
-    { birim: "BELL 429", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
-    { birim: "AT-802F", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
-    { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
-    { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
-    { birim: "B-360", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
-    { birim: "C-650", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" },
-    { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "", mail60: "", mail30: "" }
+  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; mail90?: string; }[]>([
+    { birim: "BELL 429", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
+    { birim: "AT-802F", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
+    { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
+    { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
+    { birim: "B-360", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
+    { birim: "C-650", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
+    { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" }
   ]);
 
   // Success notifications
@@ -2218,9 +3029,11 @@ export default function App() {
     document.title = "Hava Araçları Bakım Teknik Şube Müdürlüğü";
     fetchAllGoogleSheetsList();
     fetchPdfMetadata();
+    fetchImagesFromDrive();
     fetchUpdateDatesFromGoogleSheet();
     pullAllTechizatFromGoogleSheets(true);
     pullDataFromGoogleSheets(5, true);
+    pullKaraAraclariGorevEmirleri();
   }, []);
 
   // Reset form sub-modal states on selectedFormId change
@@ -2313,6 +3126,7 @@ export default function App() {
       case 'TEÇHİZAT TAKİP': return 'TEÇHİZAT TAKİP SİSTEMİ';
       case 'HA_YER_DESTEK': return 'HAVA ARAÇLARI YER DESTEK TEÇHİZATLARI';
       case 'T70_DETAY': return 'T-70 TEÇHİZAT ALTBİRİMLERİ';
+      case 'KARA_ARACLARI_MENU': return 'KARA ARAÇLARI TAKİP SİSTEMİ';
       case 'FORM KAYITLARI': return 'FORM KAYITLARI';
       default: return 'SİSTEM';
     }
@@ -2354,8 +3168,19 @@ export default function App() {
   const handleBack = () => {
     if (modalType === 'techizat_matrix') {
       setModalType('category');
-      setSelectedCategory('HA_YER_DESTEK');
-      setModalTitle(getCategoryTitle('HA_YER_DESTEK'));
+      if (activeTechizatType === 'kara_araclari') {
+        setSelectedCategory('KARA_ARACLARI_MENU');
+        setModalTitle(getCategoryTitle('KARA_ARACLARI_MENU'));
+      } else if (activeTechizatType === 't70' || activeTechizatType === 't70_bumbi_backet') {
+        setSelectedCategory('T70_DETAY');
+        setModalTitle(getCategoryTitle('T70_DETAY'));
+      } else if (activeTechizatType === 'bell429' || activeTechizatType === 'at802') {
+        setSelectedCategory('HA_YER_DESTEK');
+        setModalTitle(getCategoryTitle('HA_YER_DESTEK'));
+      } else {
+        setSelectedCategory('TEÇHİZAT TAKİP');
+        setModalTitle(getCategoryTitle('TEÇHİZAT TAKİP'));
+      }
       setActiveTechizatType(null);
       return;
     }
@@ -2397,6 +3222,105 @@ export default function App() {
     setTimeout(() => {
       setSuccessMessage(null);
     }, 4000);
+  };
+
+  const handleSaveTechizatRow = async (editedRow: string[], techType: string, rIdx: number) => {
+    let updated: string[][] = [];
+    if (techType === 'bell429') {
+      const u = [...techizatBell429Data];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatBell429Data(u);
+      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(u));
+    } else if (techType === 'at802') {
+      const u = [...techizatAt802Data];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatAt802Data(u);
+      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(u));
+    } else if (techType === 't70') {
+      const u = [...techizatT70Data];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatT70Data(u);
+      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(u));
+    } else if (techType === 't70_bumbi_backet') {
+      const u = [...techizatT70BumbiBacketData];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatT70BumbiBacketData(u);
+      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(u));
+    } else if (techType === 'b360') {
+      const u = [...techizatB360Data];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatB360Data(u);
+      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(u));
+    } else if (techType === 'c650') {
+      const u = [...techizatC650Data];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatC650Data(u);
+      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(u));
+    } else if (techType === 'hangar') {
+      const u = [...techizatHangarData];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatHangarData(u);
+      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(u));
+    } else if (techType === 'kara_araclari') {
+      const u = [...techizatKaraAraclariData];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatKaraAraclariData(u);
+      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(u));
+    }
+
+    setIsTechizatSaving(true);
+    showNotification("Canlı Excel Online güncelleniyor, lütfen bekleyiniz...");
+
+    // Sync to Google Sheets online database immediately
+    const unitLabel = getTechizatUnitLabel(techType);
+    if (unitLabel && updated.length > 0) {
+      try {
+        const response = await fetch(GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8"
+          },
+          body: JSON.stringify({
+            action: "updateTumTechizat",
+            unitLabel: unitLabel,
+            data: updated.map(r => [unitLabel, ...r])
+          })
+        });
+        console.log(`Synced individual row edit for ${unitLabel} to TÜM TECHİZAT Google Sheet`);
+        showNotification("Değişiklikler canlı e-tabloya başarıyla senkronize edildi!");
+        // Pull all data again to refresh UI with calculated warning columns from backend
+        await pullAllTechizatFromGoogleSheets(true);
+      } catch (err) {
+        console.error(`Failed to sync individual row edit for ${unitLabel} to Google Sheet:`, err);
+        showNotification("Değişiklikler yerel olarak kaydedildi, ancak çevrimiçi senkronizasyon başarısız oldu.");
+      }
+    }
+    setIsTechizatSaving(false);
+    setActiveTechizatRowEdit(null);
   };
 
   // State to track cloud sync progress
@@ -2491,7 +3415,68 @@ export default function App() {
     if (techType === 'c650') return 'C-650';
     if (techType === 'b360') return 'B-360';
     if (techType === 'hangar') return 'HANGAR YER DESTEK';
+    if (techType === 'kara_araclari') return 'KARA ARAÇLARI';
     return '';
+  };
+
+  const getRealTechType = (unitLabel: string): string => {
+    if (unitLabel === 'BELL 429') return 'bell429';
+    if (unitLabel === 'AT-802F') return 'at802';
+    if (unitLabel === 'T-70 YER DESTEK') return 't70';
+    if (unitLabel === 'T-70 BUMBİ BACKET') return 't70_bumbi_backet';
+    if (unitLabel === 'C-650') return 'c650';
+    if (unitLabel === 'B-360') return 'b360';
+    if (unitLabel === 'HANGAR YER DESTEK') return 'hangar';
+    if (unitLabel === 'KARA ARAÇLARI') return 'kara_araclari';
+    return '';
+  };
+
+  const convertToInputDateFormat = (dateStr: string): string => {
+    if (!dateStr) return "";
+    const cleaned = dateStr.trim();
+    
+    // check if already YYYY-MM-DD
+    const ymdRegex = /^(\d{4})[\.\/-](\d{1,2})[\.\/-](\d{1,2})$/;
+    if (ymdRegex.test(cleaned)) {
+      const m = cleaned.match(ymdRegex);
+      if (m) {
+        const year = m[1];
+        const month = m[2].padStart(2, '0');
+        const day = m[3].padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+    }
+
+    // check if DD.MM.YYYY
+    const dmyRegex = /^(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})$/;
+    const m = cleaned.match(dmyRegex);
+    if (m) {
+      const day = m[1].padStart(2, '0');
+      const month = m[2].padStart(2, '0');
+      const year = m[3];
+      return `${year}-${month}-${day}`;
+    }
+
+    // If not matching, try fallback standard parsing
+    const ts = Date.parse(cleaned);
+    if (!isNaN(ts)) {
+      const d = new Date(ts);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    return "";
+  };
+
+  const convertToDisplayDateFormat = (dateStr: string): string => {
+    if (!dateStr) return "";
+    const ymdRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
+    const m = dateStr.match(ymdRegex);
+    if (m) {
+      return `${m[3]}.${m[2]}.${m[1]}`;
+    }
+    return dateStr;
   };
 
   const pullAllTechizatFromGoogleSheets = async (silent = true) => {
@@ -2512,32 +3497,36 @@ export default function App() {
         const c650Rows: string[][] = [];
         const b360Rows: string[][] = [];
         const hangarRows: string[][] = [];
+        const karaAraclariRows: string[][] = [];
         
         rows.forEach((r: any) => {
           const unit = String(r["AİT OLDUĞU BİRİM"] || r["Ait Olduğu Birim"] || r["AIT OLDUGU BIRIM"] || "").trim().toUpperCase();
           
           const rowData = [
             String(r["SIRA NO"] || r["Sıra No"] || ""),
-            String(r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || r["TECHIZAT ADI"] || ""),
-            String(r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || r["PARÇA NO (P/N)"] || r["PARCA NO (P/N)"] || r["MODEL / TİP"] || r["MODEL / TIP"] || ""),
-            String(r["SERİ NO (S/N)"] || r["Seri No (S/N)"] || r["SERI NO (S/N)"] || ""),
+            String(r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || r["TECHIZAT ADI"] || r["ARAÇ PLAKASI / TANIMI"] || r["ARAÇ PLAKASI / TANIMI"] || r["Arac Plakasi / Tanimi"] || ""),
+            String(r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || r["PARÇA NO (P/N)"] || r["PARCA NO (P/N)"] || r["MODEL / TİP"] || r["MODEL / TIP"] || r["ARAÇ TİPİ"] || r["Arac Tipi"] || r["MARKA / MODEL"] || ""),
+            String(r["SERİ NO (S/N)"] || r["Seri No (S/N)"] || r["SERI NO (S/N)"] || r["MARKA / MODEL"] || r["Marka / Model"] || ""),
             String(r["MİKTAR / KAPASİTE"] || r["Miktar / Kapasite"] || r["MIKTAR / KAPASITE"] || r["MİKTAR"] || r["MIKTAR"] || r["KAPASİTE"] || r["KAPASITE"] || ""),
-            String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || r["BULUNDUGU YER"] || ""),
+            String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || r["BULUNDUGU YER"] || r["BULUNDUĞU GÖREV YERİ"] || r["BULUNDUGU GOREV YERI"] || r["Bulundugu Gorev Yeri"] || ""),
             String(r["DURUMU"] || r["Durumu"] || ""),
-            String(r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL"] || r["SON BAKIM"] || ""),
-            String(r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL"] || r["GELECEK BAKIM"] || ""),
-            String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || r["SON KONTROLÜ YAPAN FIRMA"] || r["SON KONTROLU YAPAN FIRMA"] || ""),
+            String(r["SON KONTROL / KALİBRASYON / BAKIM"] || r["Son Kontrol / Kalibrasyon / Bakım"] || r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL"] || r["SON BAKIM"] || ""),
+            String(r["GELECEK KONTROL / KALİBRASYON / BAKIM"] || r["Gelecek Kontrol / Kalibrasyon / Bakım"] || r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL"] || r["GELECEK BAKIM"] || ""),
+            String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || r["SON KONTROLÜ YAPAN FIRMA"] || r["SON KONTROLU YAPAN FIRMA"] || r["BAKIM YAPAN FİRMA / KURUM"] || r["Bakim Yapan Firma / Kurum"] || ""),
             String(r["AÇIKLAMA"] || r["Açıklama"] || r["ACIKLAMA"] || ""),
-            String(r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] || ""),
-            String(r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] || ""),
-            String(r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] || "")
+            String(
+              r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] ||
+              r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] ||
+              r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] ||
+              ""
+            ).trim()
           ];
 
           if (unit.includes("BELL 429")) {
             bell429Rows.push(rowData);
           } else if (unit.includes("AT-802")) {
             at802Rows.push(rowData);
-          } else if (unit.includes("T-70 YER") || (unit.includes("T-70") && !unit.includes("BUMBİ") && !unit.includes("BAMBI"))) {
+          } else if (unit.includes("T-70 YER") || (unit.includes("T-70") && !unit.includes("BUMBİ") && !unit.includes("BAMBI") && !unit.includes("KARA"))) {
             t70Rows.push(rowData);
           } else if (unit.includes("BUMBİ") || unit.includes("BAMBI") || unit.includes("T-70 BUMBİ")) {
             t70BumbiRows.push(rowData);
@@ -2547,6 +3536,8 @@ export default function App() {
             b360Rows.push(rowData);
           } else if (unit.includes("HANGAR")) {
             hangarRows.push(rowData);
+          } else if (unit.includes("KARA")) {
+            karaAraclariRows.push(rowData);
           }
         });
         
@@ -2578,6 +3569,10 @@ export default function App() {
           setTechizatHangarData(hangarRows);
           localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(hangarRows));
         }
+        if (karaAraclariRows.length > 0) {
+          setTechizatKaraAraclariData(karaAraclariRows);
+          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(karaAraclariRows));
+        }
 
         if (!silent) {
           showNotification("Bütün Teçhizat Verileri Canlı E-Tablodan Senkronize Edildi!");
@@ -2599,9 +3594,7 @@ export default function App() {
             birim: String(row["SORUMLU BİRİM"] || row["Sorumlu Birim"] || "").trim().toUpperCase(),
             adSoyad: String(row["ADI SOYADI"] || row["Adı Soyadı"] || row["AD SOYAD"] || "").trim(),
             eposta: String(row["E-POSTA ADRESİ"] || row["E-posta Adresi"] || row["EPOSTA ADRESI"] || "").trim(),
-            mail90: String(row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["90 Gün Uyarı Mail Gönderim Tarihi"] || row["90 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
-            mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["60 Gün Uyarı Mail Gönderim Tarihi"] || row["60 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
-            mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["30 Gün Uyarı Mail Gönderim Tarihi"] || row["30 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim()
+            mail90: String(row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["90 Gün Uyarı Mail Gönderim Tarihi"] || row["90 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim()
           })).filter((item: any) => item.birim);
           
           if (mapped.length > 0) {
@@ -3063,7 +4056,7 @@ export default function App() {
 
     // 1. Handle Teçhizat Takip Excel Upload
     if (isTechizatTarget) {
-      const techType = syncSelectedTarget.replace('techizat_', '') as 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar';
+      const techType = syncSelectedTarget.replace('techizat_', '') as 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari';
       if (!fileNameLower.endsWith('.xlsx') && !fileNameLower.endsWith('.xls') && !fileNameLower.endsWith('.csv')) {
         alert("Teçhizat Takip güncellemesi için lütfen Excel (.xlsx, .xls) veya CSV belgesi yükleyin.");
         return;
@@ -3165,6 +4158,11 @@ export default function App() {
             setTechizatHangarData(parsedRows);
             localStorage.setItem('excel_techizat_hangar_cols', JSON.stringify(finalHeaders));
             localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(parsedRows));
+          } else if (techType === 'kara_araclari') {
+            setTechizatKaraAraclariColumns(finalHeaders);
+            setTechizatKaraAraclariData(parsedRows);
+            localStorage.setItem('excel_techizat_kara_araclari_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(parsedRows));
           }
 
           // Sync specifically to "TÜM TECHİZAT" online Google Sheet
@@ -3207,6 +4205,8 @@ export default function App() {
                 driveFileName = "hava_araçları_yer_destek_c-650.xlsx";
               } else if (techType === 'hangar') {
                 driveFileName = "hava_araçları_yer_destek_hangar.xlsx";
+              } else if (techType === 'kara_araclari') {
+                driveFileName = "kara_araçları_takip.xlsx";
               }
 
               const prettyUnitName = techType === 'bell429' ? 'BELL 429 YER DESTEK TEÇHİZATLARI'
@@ -3215,6 +4215,7 @@ export default function App() {
                 : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
                 : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
                 : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
+                : techType === 'kara_araclari' ? 'KARA ARAÇLARI TAKİP SİSTEMİ'
                 : 'HANGAR YER DESTEK TEÇHİZATLARI';
 
               const res = await fetch(GOOGLE_SCRIPT_URL, {
@@ -3257,6 +4258,7 @@ export default function App() {
                 : techType === 't70_bumbi_backet' ? 'T-70 Bumbi Backet'
                 : techType === 'b360' ? 'B-360 Yer Destek'
                 : techType === 'c650' ? 'C-650 Yer Destek'
+                : techType === 'kara_araclari' ? 'Kara Araçları Takip'
                 : 'Hangar Yer Destek';
 
               showNotification(`'${prettyName}' Excel verisi başarıyla aktarıldı ve matris oluşturuldu!`);
@@ -3267,6 +4269,7 @@ export default function App() {
                 : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
                 : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
                 : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
+                : techType === 'kara_araclari' ? 'KARA ARAÇLARI TAKİP SİSTEMİ'
                 : 'HANGAR YER DESTEK TEÇHİZATLARI';
 
               // Close sync wizard and automatically open and redirect to matrix screen
@@ -3814,8 +4817,65 @@ export default function App() {
     reader.readAsArrayBuffer(file);
   };
 
+  const vehiclePlates = [
+    "06 CUK 695",
+    "06 FV 2359"
+  ];
+
+  const drivers = excelForm5Data
+    .map(row => ({
+      name: row[1] || "",
+      idNo: row[2] || "",
+      sicilNo: row[3] || "",
+      unvan: row[4] || "",
+      phone: row[7] || "",
+      kanGrubu: row[8] || "",
+      adres: row[9] || ""
+    }))
+    .filter(d => d.name && d.name.trim().length > 0 && d.name !== "Adı Soyadı" && d.name !== "Personel Adı Soyadı")
+    .filter(d => {
+      const lowerUnvan = (d.unvan || "").toLowerCase();
+      return lowerUnvan.includes("şoför") || lowerUnvan.includes("sofor") || lowerUnvan.includes("şöfr") || lowerUnvan.includes("şofor");
+    });
+
   return (
-    <div className="min-h-screen bg-[#0b3d1d] overflow-hidden relative selection:bg-white/20">
+    <div className="min-h-screen bg-[#0b3d1d] overflow-hidden relative selection:bg-emerald-500/25 selection:text-emerald-950">
+      
+      {/* OGM PORTAL REDIRECT TRANSITION SCREEN */}
+      {isRedirectingToPortal && (
+        <motion.div
+          initial={{ y: 0 }}
+          animate={{ y: isSlidingUp ? "-100%" : 0 }}
+          transition={{ duration: 0.8, ease: [0.76, 0, 0.24, 1] }}
+          className="fixed inset-0 bg-white flex flex-col items-center justify-center z-[9999] select-none shadow-[0_-20px_50px_rgba(0,0,0,0.1)]"
+        >
+          <div className="flex flex-col items-center justify-center gap-8 px-6 text-center">
+            <div className="relative flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full bg-emerald-500/15 animate-ping" style={{ animationDuration: '2s' }} />
+              <div className="absolute -inset-4 rounded-full border-4 border-emerald-500/20 animate-pulse" />
+              <div className="w-44 h-44 md:w-52 md:h-52 rounded-full overflow-hidden shadow-2xl relative z-10 border-4 border-emerald-500/30 flex items-center justify-center bg-white animate-pulse">
+                <img
+                  src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExb2k5Z3lsMWRoaDE3NTNmb2w4M3d3cWljYW16NDRwNmZlbGtxN2lwdCZlcD12MV9pbnRlcmcmY3Q9Zw/n7frjzkahqcqyik0o3/giphy.gif"
+                  alt="OGM Logo"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            </div>
+            
+            <div className="flex flex-col gap-4 max-w-lg mt-4">
+              <p className="text-[#0b3d1d] font-black text-base md:text-xl leading-relaxed tracking-tight">
+                Görev emri evrağı yükleme adımına yönlendiriliyorsunuz...
+              </p>
+              <div className="flex items-center justify-center gap-2 mt-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#0b3d1d] animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#0b3d1d] animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#0b3d1d] animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
       
       {/* Immersive Atmospheric Background Glow */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.08)_0%,transparent_65%)] opacity-40 pointer-events-none z-[1]"></div>
@@ -4013,7 +5073,7 @@ export default function App() {
             {/* Action Buttons */}
             <div className="flex items-center gap-2 pointer-events-auto">
               {/* Show Veri Güncelle button on Form/Teçhizat views */}
-              {(selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
+              {(selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedCategory === 'KARA_ARACLARI_MENU' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
                 <button
                   onClick={() => {
                     setPasswordInput('');
@@ -4107,6 +5167,50 @@ export default function App() {
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HANGAR YER DESTEK</span>
                       <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">TEÇHİZATLARALTYAPI</span>
+                    </button>
+
+                    <button
+                      onClick={() => navigateToSubCategory('KARA_ARACLARI_MENU')}
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm">
+                        <Truck className="w-8 h-8 text-[#0b3d1d]" />
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">KARA ARAÇLARI TAKİP</span>
+                      <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">KARA ARAÇ TAKİP MODÜLÜ</span>
+                    </button>
+                  </>
+                )}
+
+                {/* KARA ARAÇLARI MENÜ ALTBİRİMLERİ (KARA_ARACLARI_MENU) */}
+                {selectedCategory === 'KARA_ARACLARI_MENU' && (
+                  <>
+                    <button
+                      onClick={() => {
+                        setKaraAraclariSubTab('list');
+                        openTechizatMatrix('kara_araclari', 'KARA ARAÇ TAKİP LİSTESİ');
+                      }}
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
+                        🚗
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">KARA ARAÇ TAKİP LİSTESİ</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">ARAÇ DURUM & BAKIM</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setKaraAraclariSubTab('mission_order');
+                        openTechizatMatrix('kara_araclari', 'GÖREV EMRİ GİRİŞ');
+                      }}
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
+                        📋
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">GÖREV EMRİ GİRİŞ</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">ADIM ADIM YENİ GÖREV</span>
                     </button>
                   </>
                 )}
@@ -4877,7 +5981,7 @@ export default function App() {
                             <div className="flex-1 overflow-x-auto scrollbar-thin">
                               <table className="w-full border-collapse text-[11px] text-slate-700 min-w-[1100px] table-fixed">
                                 <thead>
-                                  <tr className="bg-slate-900 text-white font-extrabold uppercase tracking-wider select-none text-center text-[10px]">
+                                  <tr className="bg-slate-900 text-white font-extrabold uppercase tracking-wider text-center text-[10px]">
                                     <th className="p-2 border border-slate-200 text-center" style={{ width: '4%' }}>SIRA</th>
                                     <th className="p-2 border border-slate-200 text-left" style={{ width: '13%' }}>ADI SOYADI</th>
                                     <th className="p-2 border border-slate-200 text-center" style={{ width: '10%' }}>T.C. KİMLİK</th>
@@ -4909,8 +6013,8 @@ export default function App() {
 
                                 if (currentFilteredRows.length === 0) {
                                   return (
-                                    <tr>
-                                      <td colSpan={12} className="text-center py-12 text-slate-400 select-none font-mono text-xs uppercase tracking-wider">
+                                    <tr key="no-personnel-row">
+                                      <td colSpan={12} className="text-center py-12 text-slate-400 font-mono text-xs uppercase tracking-wider">
                                         🚫 ARAMA SONUCUNA UYGUN PERSONEL BULUNAMADI!
                                       </td>
                                     </tr>
@@ -4959,7 +6063,7 @@ export default function App() {
                                                 setCopiedCellSuccess(false);
                                               }
                                             }}
-                                            title={cell ? `${label}: ${cIdx === 5 ? formatBirthDateToTurkish(cell) : cell} (Detay için Çift Tıklayın)` : "Boş Veri"}
+                                            title={cell ? `${label}: ${cIdx === 5 ? formatBirthDateToTurkish(cell) : cell} (Detay için Tıklayın)` : "Boş Veri"}
                                             className={`p-2 border border-slate-200 truncate text-center select-text cursor-zoom-in hover:bg-emerald-50 hover:text-emerald-950 transition-all ${
                                               isActiveMatch 
                                                 ? 'bg-blue-600 text-white font-black scale-105 shadow-lg ring-2 ring-blue-400 animate-pulse'
@@ -5251,7 +6355,7 @@ export default function App() {
                             📥 PDF PLAN YÜKLE
                           </button>
                           <a
-                            href="https://drive.google.com/drive/folders/1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
+                            href="https://drive.google.com/drive/folders/1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="px-6 py-3 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-extrabold text-xs uppercase rounded-xl shadow-sm tracking-wider transition-all cursor-pointer inline-flex items-center gap-2"
@@ -5270,6 +6374,7 @@ export default function App() {
 
           {/* TEÇHİZAT TAKİP MATRİS EKRANI */}
           {modalType === 'techizat_matrix' && activeTechizatType && (() => {
+            const isKaraAraci = activeTechizatType === 'kara_araclari';
             const baseColumns = [
               "SIRA NO", 
               "TEÇHİZAT ADI", 
@@ -5278,43 +6383,56 @@ export default function App() {
               "MİKTAR / KAPASİTE", 
               "BULUNDUĞU YER", 
               "DURUMU", 
-              "SON KONTROL / BAKIM", 
-              "GELECEK KONTROL / BAKIM", 
+              "SON KONTROL / KALİBRASYON / BAKIM", 
+              "GELECEK KONTROL / KALİBRASYON / BAKIM", 
               "SON KONTROLÜ YAPAN FİRMA", 
               "AÇIKLAMA", 
-              "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
-              "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
-              "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+              "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
             ];
+
             const cols = activeTechizatType === 'all'
               ? ["AİT OLDUĞU BİRİM", ...baseColumns]
               : baseColumns;
 
-            const formatRowWithMailStatus = (row: string[]) => {
-              const newRow = [...row];
-              while (newRow.length < 14) {
-                newRow.push("");
+            const formatStandardRow = (row: string[]) => {
+              const r = [...row];
+              while (r.length < 12) {
+                r.push("");
               }
-              return newRow.slice(0, 14);
+              return r.slice(0, 12);
+            };
+
+            const formatKaraAraclariRow = (row: string[]) => {
+              const r = [...row];
+              while (r.length < 12) {
+                r.push("");
+              }
+              return r.slice(0, 12);
+            };
+
+            const formatKaraAraciToStandardRow = (row: string[]) => {
+              return formatStandardRow(row);
             };
 
             const rows = activeTechizatType === 'all'
               ? [
-                  ...techizatBell429Data.map(r => ["BELL 429", ...formatRowWithMailStatus(r)]),
-                  ...techizatAt802Data.map(r => ["AT-802F", ...formatRowWithMailStatus(r)]),
-                  ...techizatT70Data.map(r => ["T-70 YER DESTEK", ...formatRowWithMailStatus(r)]),
-                  ...techizatT70BumbiBacketData.map(r => ["T-70 BUMBİ BACKET", ...formatRowWithMailStatus(r)]),
-                  ...techizatC650Data.map(r => ["C-650", ...formatRowWithMailStatus(r)]),
-                  ...techizatB360Data.map(r => ["B-360", ...formatRowWithMailStatus(r)]),
-                  ...techizatHangarData.map(r => ["HANGAR YER DESTEK", ...formatRowWithMailStatus(r)])
+                  ...techizatBell429Data.map(r => ["BELL 429", ...formatStandardRow(r)]),
+                  ...techizatAt802Data.map(r => ["AT-802F", ...formatStandardRow(r)]),
+                  ...techizatT70Data.map(r => ["T-70 YER DESTEK", ...formatStandardRow(r)]),
+                  ...techizatT70BumbiBacketData.map(r => ["T-70 BUMBİ BACKET", ...formatStandardRow(r)]),
+                  ...techizatC650Data.map(r => ["C-650", ...formatStandardRow(r)]),
+                  ...techizatB360Data.map(r => ["B-360", ...formatStandardRow(r)]),
+                  ...techizatHangarData.map(r => ["HANGAR YER DESTEK", ...formatStandardRow(r)]),
+                  ...techizatKaraAraclariData.map(r => ["KARA ARAÇLARI", ...formatKaraAraciToStandardRow(r)])
                 ]
-              : activeTechizatType === 'bell429' ? techizatBell429Data.map(formatRowWithMailStatus)
-              : activeTechizatType === 'at802' ? techizatAt802Data.map(formatRowWithMailStatus)
-              : activeTechizatType === 't70' ? techizatT70Data.map(formatRowWithMailStatus)
-              : activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData.map(formatRowWithMailStatus)
-              : activeTechizatType === 'b360' ? techizatB360Data.map(formatRowWithMailStatus)
-              : activeTechizatType === 'c650' ? techizatC650Data.map(formatRowWithMailStatus)
-              : techizatHangarData.map(formatRowWithMailStatus);
+              : activeTechizatType === 'bell429' ? techizatBell429Data.map(formatStandardRow)
+              : activeTechizatType === 'at802' ? techizatAt802Data.map(formatStandardRow)
+              : activeTechizatType === 't70' ? techizatT70Data.map(formatStandardRow)
+              : activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData.map(formatStandardRow)
+              : activeTechizatType === 'b360' ? techizatB360Data.map(formatStandardRow)
+              : activeTechizatType === 'c650' ? techizatC650Data.map(formatStandardRow)
+              : activeTechizatType === 'kara_araclari' ? techizatKaraAraclariData.map(formatKaraAraclariRow)
+              : techizatHangarData.map(formatStandardRow);
 
             const q = techizatSearchQuery.toLowerCase().trim();
             const matchesList: { r: number; c: number }[] = [];
@@ -5334,34 +6452,38 @@ export default function App() {
             });
 
             const activeMatch = matchesList[activeTechizatMatchIdx];
-            const gelecekBakimColIdx = cols.indexOf("GELECEK KONTROL / BAKIM");
+            const gelecekBakimColIdx = isKaraAraci
+              ? cols.indexOf("BİR SONRAKİ BAKIM TARİHİ")
+              : cols.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
 
-            // Sıralama (Normalde seçili değil, ama basılınca Kırmızı -> Turuncu -> Sarı -> Yeşil sıralasın)
+            // Sıralama (Normalde seçili değil, ama basılınca Turuncu -> Yeşil sıralasın)
             let processedRows = [...filteredRows];
             if (sortByColor && gelecekBakimColIdx !== -1) {
               processedRows.sort((rowA, rowB) => {
-                const valA = rowA[gelecekBakimColIdx] || "";
-                const valB = rowB[gelecekBakimColIdx] || "";
-                
-                const daysA = parseGelecekBakimDays(valA);
-                const daysB = parseGelecekBakimDays(valB);
-                
-                const getPriorityScore = (days: number | null) => {
-                  if (days === null) return 5;
-                  if (days < 30) return 1; // Kırmızı
-                  if (days >= 60 && days <= 90) return 2; // Turuncu
-                  if (days >= 30 && days < 60) return 3; // Sarı
-                  return 4; // Yeşil (>90)
+                const getPriorityScore = (row: string[]) => {
+                  const isBakimaTabiColIdx = cols.indexOf("BAKIMA TABİ Mİ?");
+                  const isBakimaTabi = isBakimaTabiColIdx !== -1 ? row[isBakimaTabiColIdx] : "Evet";
+                  if (isBakimaTabi === "Hayır") return 4; // Bakım gerekmiyorsa en düşük öncelik
+
+                  const val = row[gelecekBakimColIdx] || "";
+                  const days = parseGelecekBakimDays(val);
+                  if (days === null) return 3;
+                  if (days < 90) return 1; // Turuncu
+                  return 2; // Yeşil (>= 90 gün)
                 };
-                
-                const scoreA = getPriorityScore(daysA);
-                const scoreB = getPriorityScore(daysB);
+
+                const scoreA = getPriorityScore(rowA);
+                const scoreB = getPriorityScore(rowB);
                 
                 if (scoreA !== scoreB) {
                   return scoreA - scoreB;
                 }
                 
                 // Aynı gruptakileri en yakın gün sayısına göre artan sırala
+                const valA = rowA[gelecekBakimColIdx] || "";
+                const valB = rowB[gelecekBakimColIdx] || "";
+                const daysA = parseGelecekBakimDays(valA);
+                const daysB = parseGelecekBakimDays(valB);
                 const dJanA = daysA !== null ? daysA : 999999;
                 const dJanB = daysB !== null ? daysB : 999999;
                 return dJanA - dJanB;
@@ -5384,7 +6506,48 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Search and Utility Controls */}
+                    <>
+                      {isKaraAraci && (
+                        <div className="flex justify-center gap-4 mb-6 select-none print:hidden">
+                          <button
+                            onClick={() => setKaraAraclariSubTab('list')}
+                            className={`px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 border shadow-sm ${
+                              karaAraclariSubTab === 'list'
+                                ? 'bg-[#0b3d1d] text-white border-[#0b3d1d] scale-105 shadow-md shadow-emerald-900/20'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 hover:scale-102'
+                            }`}
+                          >
+                            <Truck className="w-4 h-4" />
+                            🚗 KARA ARAÇ TAKİP LİSTESİ
+                          </button>
+                          <button
+                            onClick={() => setKaraAraclariSubTab('mission_order')}
+                            className={`px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 border shadow-sm ${
+                              karaAraclariSubTab === 'mission_order'
+                                ? 'bg-[#0b3d1d] text-white border-[#0b3d1d] scale-105 shadow-md shadow-emerald-900/20'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 hover:scale-102'
+                            }`}
+                          >
+                            <FileText className="w-4 h-4" />
+                            📋 GÖREV EMRİ GİRİŞ
+                          </button>
+                          <button
+                            onClick={() => setKaraAraclariSubTab('past_records')}
+                            className={`px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2 border shadow-sm ${
+                              karaAraclariSubTab === 'past_records'
+                                ? 'bg-[#0b3d1d] text-white border-[#0b3d1d] scale-105 shadow-md shadow-emerald-900/20'
+                                : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 hover:scale-102'
+                            }`}
+                          >
+                            <History className="w-4 h-4" />
+                            📜 GEÇMİŞ KAYITLAR
+                          </button>
+                        </div>
+                      )}
+
+                      {!isKaraAraci || karaAraclariSubTab === 'list' ? (
+                    <>
+                      {/* Search and Utility Controls */}
                   <div className="bg-slate-900 text-slate-200 rounded-3xl p-5 mb-6 flex flex-col xl:flex-row gap-4 items-center justify-between shadow-xl border border-slate-800 print:hidden select-none">
                     <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
                       <div className="bg-slate-800 p-2.5 rounded-2xl border border-slate-700">
@@ -5485,8 +6648,26 @@ export default function App() {
                   <div className="flex-1 bg-white border-2 border-slate-200/60 rounded-[2.5rem] shadow-xl overflow-hidden flex flex-col print:border-none print:shadow-none min-h-[400px]">
                     
                     {/* Table Title Bar */}
-                    <div className="bg-slate-900 px-6 py-4 border-b border-slate-800 flex items-center justify-between select-none print:hidden shrink-0">
-                      <div></div>
+                    <div className="bg-slate-900 px-6 py-4 border-b border-slate-800 flex items-center justify-between print:hidden shrink-0">
+                      {Object.keys(selectedTechizatItems).length > 0 ? (
+                        <div className="flex items-center gap-3 animate-fade-in">
+                          <span className="text-xs font-black text-amber-400 bg-amber-950/40 border border-amber-900 px-3 py-1.5 rounded-xl">
+                            ⚡ {Object.keys(selectedTechizatItems).length} TEÇHİZAT SEÇİLDİ
+                          </span>
+                          <button
+                            onClick={() => {
+                              setBulkModalMode('choice');
+                              setIsEbysModalOpen(true);
+                            }}
+                            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 hover:scale-105 active:scale-95 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-2 shadow-lg shadow-emerald-950/30 border border-emerald-500"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>DÜZENLE / GÖNDER</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div />
+                      )}
                       <span className="text-[10px] font-mono font-black text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
                         {processedRows.length} KALEM TEÇHİZAT LİSTELENDİ
                       </span>
@@ -5496,7 +6677,44 @@ export default function App() {
                     <div className="flex-1 overflow-auto max-h-[60vh] print:max-h-none print:overflow-visible">
                       <table className="w-full border-collapse text-left min-w-[1200px]">
                         <thead>
-                          <tr className="bg-slate-900 border-b border-slate-800 select-none print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10">
+                          <tr className="bg-slate-900 border-b border-slate-800 print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10">
+                            <th className="px-3 py-3.5 text-center text-[10px] font-black text-slate-300 uppercase font-mono border-r border-slate-800 w-[50px] print:hidden">
+                              <input
+                                type="checkbox"
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    const items = { ...selectedTechizatItems };
+                                    processedRows.forEach((row, rIdx) => {
+                                      const isAll = activeTechizatType === 'all';
+                                      const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
+                                      const targetRow = isAll ? row.slice(1) : row;
+                                      if (targetTechType) {
+                                        const key = `${targetTechType}_${rIdx}`;
+                                        items[key] = { techType: targetTechType, row: targetRow };
+                                      }
+                                    });
+                                    setSelectedTechizatItems(items);
+                                  } else {
+                                    const items = { ...selectedTechizatItems };
+                                    processedRows.forEach((row, rIdx) => {
+                                      const isAll = activeTechizatType === 'all';
+                                      const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
+                                      if (targetTechType) {
+                                        const key = `${targetTechType}_${rIdx}`;
+                                        delete items[key];
+                                      }
+                                    });
+                                    setSelectedTechizatItems(items);
+                                  }
+                                }}
+                                checked={processedRows.length > 0 && processedRows.every((row, rIdx) => {
+                                  const isAll = activeTechizatType === 'all';
+                                  const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
+                                  return `${targetTechType}_${rIdx}` in selectedTechizatItems;
+                                })}
+                                className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-700 cursor-pointer bg-slate-800"
+                              />
+                            </th>
                             {cols.map((col, cIdx) => (
                               <th 
                                 key={cIdx} 
@@ -5509,76 +6727,156 @@ export default function App() {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {processedRows.length === 0 ? (
-                            <tr>
-                              <td colSpan={cols.length} className="px-6 py-16 text-center text-slate-400 font-extrabold text-sm select-none">
+                            <tr key="no-equipment-row">
+                              <td colSpan={cols.length + 1} className="px-6 py-16 text-center text-slate-400 font-extrabold text-sm">
                                 🔍 Arama kriterlerine uygun teçhizat kaydı bulunamadı.
                               </td>
                             </tr>
                           ) : (
-                            processedRows.map((row, rIdx) => {
-                              return (
-                                <tr 
-                                  key={rIdx} 
-                                  className="hover:bg-emerald-50/30 transition-colors duration-150 odd:bg-white even:bg-slate-50/50"
-                                >
-                                  {row.map((cell, cIdx) => {
-                                    const label = cols[cIdx] || "Veri";
-                                    const isMatch = q && cell && cell.toLowerCase().includes(q);
-                                    const isActiveMatch = activeMatch && activeMatch.r === rIdx && activeMatch.c === cIdx;
+                             processedRows.map((row, rIdx) => {
+                               return (
+                                 <tr 
+                                   key={rIdx} 
+                                   onClick={() => {
+                                      setMobileEditTab('form');
+                                      const isAll = activeTechizatType === 'all';
+                                      const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
+                                      const targetRow = isAll ? row.slice(1) : row;
 
-                                    let cellStyleClass = cell 
-                                      ? 'text-slate-800 font-sans font-semibold' 
-                                      : 'text-slate-300 italic';
-                                      
-                                    if (cIdx === gelecekBakimColIdx && cell) {
-                                      const days = parseGelecekBakimDays(cell);
-                                      if (days !== null) {
-                                        if (days > 90) {
-                                          cellStyleClass = 'bg-emerald-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
-                                        } else if (days >= 60) {
-                                          cellStyleClass = 'bg-orange-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
-                                        } else if (days >= 30) {
-                                          cellStyleClass = 'bg-yellow-400 text-slate-900 font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                      let resolvedRow = targetRow;
+                                      if (isAll) {
+                                        if (targetTechType === 'kara_araclari') {
+                                          const found = techizatKaraAraclariData.find(kr => (kr[1] || "").trim() === (targetRow[1] || "").trim());
+                                          if (found) resolvedRow = found;
                                         } else {
-                                          cellStyleClass = 'bg-red-600 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center animate-pulse';
+                                          let sourceList: string[][] = [];
+                                          if (targetTechType === 'bell429') sourceList = techizatBell429Data;
+                                          else if (targetTechType === 'at802') sourceList = techizatAt802Data;
+                                          else if (targetTechType === 't70') sourceList = techizatT70Data;
+                                          else if (targetTechType === 't70_bumbi_backet') sourceList = techizatT70BumbiBacketData;
+                                          else if (targetTechType === 'b360') sourceList = techizatB360Data;
+                                          else if (targetTechType === 'c650') sourceList = techizatC650Data;
+                                          else if (targetTechType === 'hangar') sourceList = techizatHangarData;
+                                          
+                                          const found = sourceList.find(sr => (sr[0] || "").trim() === (targetRow[0] || "").trim() && (sr[1] || "").trim() === (targetRow[1] || "").trim());
+                                          if (found) resolvedRow = found;
                                         }
                                       }
-                                    }
 
-                                    return (
-                                      <td 
-                                        key={cIdx} 
-                                        className="px-4 py-3 text-center border-r border-slate-100 last:border-r-0 max-w-[200px]"
-                                      >
-                                        <div 
-                                          onClick={() => {
-                                            if (cell) {
-                                              setActiveModalCell({
-                                                r: rIdx,
-                                                c: cIdx,
-                                                value: cell,
-                                                label: label
-                                              });
-                                              setCopiedCellSuccess(false);
-                                            }
-                                          }}
-                                          title={cell ? `${label}: ${cell} (Detay için Tıklayın)` : "Boş Veri"}
-                                          className={`truncate px-2 py-1 rounded-xl transition-all text-xs text-center select-text cursor-zoom-in hover:bg-emerald-100 hover:text-emerald-950 active:scale-95 ${
-                                            isActiveMatch 
-                                              ? 'bg-blue-600 text-white font-black scale-105 shadow-md ring-2 ring-blue-400 animate-pulse'
-                                              : isMatch
-                                                ? 'bg-blue-200 text-blue-950 font-black border border-blue-400'
-                                                : cellStyleClass
-                                          }`}
-                                        >
-                                          {cell || "-"}
-                                        </div>
-                                      </td>
-                                    );
-                                  })}
-                                </tr>
-                              );
-                            })
+                                      setActiveTechizatRowEdit({
+                                        rIdx,
+                                        techType: targetTechType,
+                                        row: [...resolvedRow]
+                                      });
+                                      const imageKey = targetTechType + "_" + (resolvedRow[1] || "").replace(/\s+/g, '_') + "_" + (resolvedRow[3] || "").replace(/\s+/g, '_');
+                                      setTempImageUrlInput(techizatImages[imageKey] && !techizatImages[imageKey].startsWith('data:') ? techizatImages[imageKey] : "");
+                                      setEditRowValues([...resolvedRow]);
+                                      setTechizatImageScale(1);
+                                      setIsFullScreenImage(false);
+                                      setIsImageUpdateUnlocked(false);
+                                      setImagePasswordInput('');
+                                      setImagePasswordError(false);
+                                      setShowImagePasswordPrompt(false);
+                                      setPendingImageFile(null);
+                                      setPendingImagePreview(null);
+                                      setIsDragging(false);
+                                      setIsImageUploadingToDrive(false);
+                                      setIsDataUpdateUnlocked(false);
+                                      setDataPasswordInput('');
+                                      setDataPasswordError(false);
+                                      setShowSavePasswordPrompt(false);
+                                      setShowImageSavePasswordPrompt(false);
+                                      setTempImageAction(null);
+                                    }}
+                                   className="hover:bg-emerald-50/30 transition-colors duration-150 odd:bg-white even:bg-slate-50/50 cursor-pointer"
+                                   title="Düzenlemek ve görsel eklemek için Tıklayın"
+                                 >
+
+                                   {row.map((cell, cIdx) => {
+                                     const label = cols[cIdx] || "Veri";
+                                     const isMatch = q && cell && cell.toLowerCase().includes(q);
+                                     const isActiveMatch = activeMatch && activeMatch.r === rIdx && activeMatch.c === cIdx;
+ 
+                                     let cellStyleClass = cell 
+                                       ? 'text-slate-800 font-sans font-semibold' 
+                                       : 'text-slate-300 italic';
+                                       
+                                     const isBakimaTabiColIdx = cols.indexOf("BAKIMA TABİ Mİ?");
+                                     const isBakimaTabi = isBakimaTabiColIdx !== -1 ? row[isBakimaTabiColIdx] : "Evet";
+
+                                     const isGelecekBakimCol = cIdx === gelecekBakimColIdx || (isKaraAraci && label === "BİR SONRAKİ MUAYENE TARİHİ");
+
+                                     if (isGelecekBakimCol && cell) {
+                                       if (isBakimaTabi === "Hayır") {
+                                         cellStyleClass = 'text-slate-400 italic font-bold text-center';
+                                       } else {
+                                         const days = parseGelecekBakimDays(cell);
+                                         if (days !== null) {
+                                           if (days >= 90) {
+                                             cellStyleClass = 'bg-emerald-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                           } else {
+                                             cellStyleClass = 'bg-orange-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center animate-pulse';
+                                           }
+                                         }
+                                       }
+                                     }
+ 
+                                     return (
+                                       <React.Fragment key={cIdx}>
+                                         {cIdx === 0 && (
+                                           <td 
+                                             className="px-3 py-3 text-center border-r border-slate-100 print:hidden"
+                                             onClick={(e) => e.stopPropagation()}
+                                           >
+                                             <input
+                                               type="checkbox"
+                                               checked={(() => {
+                                                 const isAll = activeTechizatType === 'all';
+                                                 const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
+                                                 return `${targetTechType}_${rIdx}` in selectedTechizatItems;
+                                               })()}
+                                               onChange={() => {
+                                                 const isAll = activeTechizatType === 'all';
+                                                 const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
+                                                 const targetRow = isAll ? row.slice(1) : row;
+                                                 if (targetTechType) {
+                                                   const key = `${targetTechType}_${rIdx}`;
+                                                   const updated = { ...selectedTechizatItems };
+                                                   if (key in updated) {
+                                                     delete updated[key];
+                                                   } else {
+                                                     updated[key] = { techType: targetTechType, row: targetRow };
+                                                   }
+                                                   setSelectedTechizatItems(updated);
+                                                 }
+                                               }}
+                                               className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
+                                             />
+                                           </td>
+                                         )}
+                                         <td 
+                                           key={cIdx} 
+                                           className="px-4 py-3 text-center border-r border-slate-100 last:border-r-0 max-w-[200px]"
+                                         >
+                                           <div 
+                                             title={cell ? `${label}: ${cell} (Düzenlemek ve görsel eklemek için Tıklayın)` : "Boş Veri"}
+                                             className={`truncate px-2 py-1 rounded-xl transition-all text-xs text-center select-text hover:bg-emerald-100/50 hover:text-emerald-950 ${
+                                               isActiveMatch 
+                                                 ? 'bg-blue-600 text-white font-black scale-105 shadow-md ring-2 ring-blue-400 animate-pulse'
+                                                 : isMatch
+                                                   ? 'bg-blue-200 text-blue-950 font-black border border-blue-400'
+                                                   : cellStyleClass
+                                             }`}
+                                           >
+                                             {cell || "-"}
+                                           </div>
+                                         </td>
+                                       </React.Fragment>
+                                     );
+                                   })}
+                                 </tr>
+                               );
+                             })
                           )}
                         </tbody>
                       </table>
@@ -5586,42 +6884,943 @@ export default function App() {
 
                   </div>
 
-                  {/* Renk Kodları Açıklama Paneli */}
-                  <div className="mt-6 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm print:hidden select-none">
-                    <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider mb-3">
-                      💡 GELECEK BAKIM / KONTROL RENK KODU AÇIKLAMALARI
-                    </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-                      <div className="flex items-center gap-3 p-3 bg-red-50 border border-red-200 rounded-2xl">
-                        <span className="w-5 h-5 rounded-lg bg-red-600 shrink-0 animate-pulse" />
-                        <div>
-                          <p className="text-xs font-bold text-red-950">KIRMIZI</p>
-                          <p className="text-[10px] text-red-700">30 Günden Az (<span className="font-mono">{'<'}30 Gün</span>)</p>
+                   {/* Renk Kodları Açıklama Paneli */}
+                   <div className="mt-6 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm print:hidden select-none">
+                     <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider mb-3">
+                       💡 GELECEK BAKIM / KONTROL RENK KODU AÇIKLAMALARI
+                     </h4>
+                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                       <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-2xl">
+                         <span className="w-5 h-5 rounded-lg bg-emerald-500 shrink-0" />
+                         <div>
+                           <p className="text-xs font-bold text-emerald-950">YEŞİL (BAKIMA UYGUN)</p>
+                           <p className="text-[10px] text-emerald-700">90 Gün ve Fazla (<span className="font-mono">{'>='}90 Gün</span>)</p>
+                         </div>
+                       </div>
+                       <div className="flex items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-2xl">
+                         <span className="w-5 h-5 rounded-lg bg-orange-500 shrink-0 animate-pulse" />
+                         <div>
+                           <p className="text-xs font-bold text-orange-950">TURUNCU (BAKIM YAKLAŞTI / AZALDI)</p>
+                           <p className="text-[10px] text-orange-700">90 Günden Az (<span className="font-mono">{'<'}90 Gün</span>)</p>
+                         </div>
+                       </div>
+                     </div>
+                   </div>
+                 </>
+               ) : (
+                 <div className="flex-1 flex flex-col gap-6 print:hidden">
+                   {/* Left Panel: Yeni Görev Emri (Step-by-Step Wizard) */}
+                   {karaAraclariSubTab === 'mission_order' && (() => {
+                      const handleNextStep = () => {
+                        if (geStep === 1) {
+                          if (!geTarih || !geSeriNo) {
+                            alert("Lütfen tüm alanları (Tarih ve Seri No) doldurunuz.");
+                            return;
+                          }
+                          setGeStep(2);
+                        } else if (geStep === 2) {
+                          if (!gePlaka || !geSoforName) {
+                            alert("Lütfen araç plakasını seçiniz ve sürücü personel adını giriniz.");
+                            return;
+                          }
+                          setGeStep(3);
+                        }
+                      };
+
+                      const handlePrevStep = () => {
+                        if (geStep > 1) {
+                          setGeStep(geStep - 1);
+                        }
+                      };
+
+                      return (
+                        <div className="w-full max-w-3xl mx-auto bg-white border border-slate-200 rounded-[2.5rem] p-4 sm:p-6 shadow-xl flex flex-col gap-5 animate-fade-in">
+                          <div className="border-b border-slate-100 pb-3">
+                            <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse inline-block" />
+                              📝 ADIM ADIM GÖREV EMRİ GİRİŞİ
+                            </h4>
+                          </div>
+
+                          {/* Step Wizard Header Indicator */}
+                          <div className="flex items-center justify-between px-2 py-3 bg-slate-50 rounded-2xl border border-slate-100 select-none">
+                            {[1, 2, 3].map((stepNo) => {
+                              let label = "";
+                              if (stepNo === 1) label = "Genel";
+                              if (stepNo === 2) label = "Sürücü";
+                              if (stepNo === 3) label = "Süreç & KM";
+
+                              const isActive = geStep === stepNo;
+                              const isCompleted = geStep > stepNo;
+
+                              return (
+                                <div key={stepNo} className="flex flex-col items-center flex-1 relative">
+                                  {/* Connector line */}
+                                  {stepNo < 3 && (
+                                    <div className="absolute top-4 left-[50%] right-[-50%] h-0.5 bg-slate-200 -z-0">
+                                      <div 
+                                        className="h-full bg-[#0b3d1d] transition-all duration-300" 
+                                        style={{ width: geStep > stepNo ? "100%" : "0%" }}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {/* Step circle */}
+                                  <div
+                                    className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs border-2 transition-all z-10 ${
+                                      isActive
+                                        ? "bg-[#0b3d1d] text-white border-[#0b3d1d] scale-110 shadow-md shadow-emerald-900/10"
+                                        : isCompleted
+                                        ? "bg-emerald-600 text-white border-emerald-600"
+                                        : "bg-white text-slate-400 border-slate-200"
+                                    }`}
+                                  >
+                                    {isCompleted ? "✓" : stepNo}
+                                  </div>
+                                  <span 
+                                    className={`text-[9px] font-extrabold uppercase mt-1.5 transition-all text-center ${
+                                      isActive ? "text-[#0b3d1d]" : "text-slate-400"
+                                    } max-sm:text-[8px]`}
+                                  >
+                                    {label}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Form Steps */}
+                          <div className="flex-1 flex flex-col justify-between gap-6 min-h-[320px]">
+                            
+                            {/* STEP 1: GENEL BİLGİLER */}
+                            {geStep === 1 && (
+                              <div className="flex flex-col gap-4 animate-fade-in">
+                                <div className="p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                                  <p className="text-xs font-semibold text-emerald-800 leading-relaxed">
+                                    ℹ️ <strong>Adım 1:</strong> Görevin yapılacağı tarihi ve resmi evrak üzerindeki <strong>Görev Seri Numarasını (S/N)</strong> giriniz.
+                                  </p>
+                                </div>
+
+                                <div>
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📅 Görev Tarihi</label>
+                                  <input
+                                    type="date"
+                                    value={geTarih}
+                                    onChange={(e) => setGeTarih(e.target.value)}
+                                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🔢 Görev Seri No (S/N)</label>
+                                  <input
+                                    type="text"
+                                    placeholder="Örn: SERI-772"
+                                    value={geSeriNo}
+                                    onChange={(e) => setGeSeriNo(e.target.value)}
+                                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* STEP 2: ARAÇ & SÜRÜCÜ SEÇİMİ */}
+                            {geStep === 2 && (
+                              <div className="flex flex-col gap-4 animate-fade-in">
+                                <div className="p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                                  <p className="text-xs font-semibold text-emerald-800 leading-relaxed">
+                                    ℹ️ <strong>Adım 2:</strong> Görev aracını seçin ve listeden bir şoför seçerek devam edin.
+                                  </p>
+                                </div>
+
+                                <div>
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🚗 Araç Plakası</label>
+                                  <select
+                                    value={gePlaka}
+                                    onChange={(e) => setGePlaka(e.target.value)}
+                                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-extrabold text-slate-800 transition-all"
+                                  >
+                                    <option value="">-- Lütfen Araç Seçiniz --</option>
+                                    {vehiclePlates.map(plate => (
+                                      <option key={plate} value={plate}>{plate}</option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div className="relative">
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">👨‍✈️ Sürücü Personel (Şoför)</label>
+                                  <div className="relative">
+                                    <input
+                                      type="text"
+                                      placeholder="Personel adı soyadı yazınız veya seçiniz..."
+                                      value={geSoforName}
+                                      onChange={(e) => {
+                                        setGeSoforName(e.target.value);
+                                        setShowDriverSuggestions(true);
+                                      }}
+                                      onFocus={() => setShowDriverSuggestions(true)}
+                                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all"
+                                    />
+                                    {geSoforName && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setGeSoforName("");
+                                          setShowDriverSuggestions(false);
+                                        }}
+                                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                                      >
+                                        ✕
+                                      </button>
+                                    )}
+                                  </div>
+                                  
+                                  {showDriverSuggestions && (
+                                    <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl max-h-48 overflow-y-auto">
+                                      {drivers
+                                        .filter(d => !geSoforName.trim() || d.name.toLowerCase().includes(geSoforName.toLowerCase()))
+                                        .map(d => (
+                                          <button
+                                            key={d.name}
+                                            type="button"
+                                            onClick={() => {
+                                              setGeSoforName(d.name);
+                                              setShowDriverSuggestions(false);
+                                            }}
+                                            className="w-full text-left px-4 py-2.5 text-xs font-bold hover:bg-emerald-50 text-slate-800 transition-all border-b border-slate-100 last:border-b-0 flex justify-between items-center"
+                                          >
+                                            <span>{d.name}</span>
+                                            <span className="text-[10px] text-slate-400 font-semibold">{d.unvan || "Şoför"}</span>
+                                          </button>
+                                        ))
+                                      }
+                                      {drivers.filter(d => !geSoforName.trim() || d.name.toLowerCase().includes(geSoforName.toLowerCase())).length === 0 && (
+                                        <div className="px-4 py-3 text-xs text-slate-400 font-medium">
+                                          Eşleşen şoför bulunamadı. Tamamen manuel yazabilirsiniz.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* STEP 3: KİLOMETRE & SÜREÇ DETAYLARI */}
+                            {geStep === 3 && (
+                              <div className="flex flex-col gap-4 animate-fade-in">
+                                <div className="p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
+                                  <p className="text-xs font-semibold text-emerald-800 leading-relaxed">
+                                    ℹ️ <strong>Adım 3:</strong> Saat ve kilometre verilerini girip <strong>Kaydet ve Yönlendir</strong> butonuna basınız.
+                                  </p>
+                                </div>
+
+                                {/* Nereden - Nereye (Güzergah) Bilgisi */}
+                                <div className="flex flex-col gap-2.5">
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                                    📍 GÜZERGAH / LOKASYON BİLGİSİ
+                                  </label>
+                                  {geRoutes.map((route, rIdx) => (
+                                    <div key={rIdx} className="flex items-center gap-2 animate-fade-in">
+                                      <div className="flex-1">
+                                        <input
+                                          type="text"
+                                          placeholder="Nereden (Örn: Ankara)"
+                                          value={route.from}
+                                          onChange={(e) => {
+                                            const updated = [...geRoutes];
+                                            updated[rIdx].from = e.target.value;
+                                            setGeRoutes(updated);
+                                          }}
+                                          className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all"
+                                        />
+                                      </div>
+                                      <span className="text-slate-400 font-bold px-1">-</span>
+                                      <div className="flex-1">
+                                        <input
+                                          type="text"
+                                          placeholder="Nereye (Örn: İstanbul)"
+                                          value={route.to}
+                                          onChange={(e) => {
+                                            const updated = [...geRoutes];
+                                            updated[rIdx].to = e.target.value;
+                                            setGeRoutes(updated);
+                                          }}
+                                          className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all"
+                                        />
+                                      </div>
+                                      {geRoutes.length > 1 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setGeRoutes(geRoutes.filter((_, i) => i !== rIdx));
+                                          }}
+                                          className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all"
+                                        >
+                                          <X className="w-4 h-4" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => setGeRoutes([...geRoutes, { from: "", to: "" }])}
+                                    className="self-start text-[10px] font-black text-[#0b3d1d] bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 px-3 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1 mt-1"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    Yeni Lokasyon Ekle
+                                  </button>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">⏱️ Çıkış Saati</label>
+                                    <input
+                                      type="time"
+                                      value={geDepartureTime}
+                                      onChange={(e) => setGeDepartureTime(e.target.value)}
+                                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">⏱️ Dönüş Saati</label>
+                                    <input
+                                      type="time"
+                                      value={geReturnTime}
+                                      onChange={(e) => setGeReturnTime(e.target.value)}
+                                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📈 Çıkış KM</label>
+                                    <input
+                                      type="number"
+                                      placeholder="Örn: 15150"
+                                      value={geDepartureKm}
+                                      onChange={(e) => setGeDepartureKm(e.target.value)}
+                                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📈 Dönüş KM</label>
+                                    <input
+                                      type="number"
+                                      placeholder="Örn: 15300"
+                                      value={geReturnKm}
+                                      onChange={(e) => setGeReturnKm(e.target.value)}
+                                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Step Navigation Controls */}
+                            <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
+                              {geStep > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={handlePrevStep}
+                                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 font-extrabold text-xs uppercase tracking-widest rounded-2xl cursor-pointer transition-all flex items-center gap-1.5"
+                                >
+                                  <ChevronLeft className="w-4 h-4" />
+                                  Geri
+                                </button>
+                              )}
+
+                              {geStep < 3 ? (
+                                <button
+                                  type="button"
+                                  onClick={handleNextStep}
+                                  className="flex-1 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-extrabold text-xs uppercase tracking-widest rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-900/10"
+                                >
+                                  İleri
+                                  <ChevronRight className="w-4 h-4 text-emerald-300" />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!geTarih || !gePlaka || !geSoforName || !geSeriNo || !geReturnKm || !geDepartureKm || !geDepartureTime || !geReturnTime) {
+                                      alert("Lütfen form alanlarının tamamını doldurmak için bilgileri kontrol edin.");
+                                      return;
+                                    }
+                                    if (Number(geReturnKm) < Number(geDepartureKm)) {
+                                      alert("Dönüş kilometresi, çıkış kilometresinden küçük olamaz.");
+                                      return;
+                                    }
+
+                                    const routeStr = geRoutes
+                                      .map(r => r.from.trim() && r.to.trim() ? `${r.from.trim()} - ${r.to.trim()}` : '')
+                                      .filter(Boolean)
+                                      .join(", ");
+
+                                    if (!routeStr) {
+                                      alert("Lütfen en az bir güzergah (nereden - nereye) bilgisi giriniz.");
+                                      return;
+                                    }
+
+                                    const activeDriver = drivers.find(d => d.name.toLowerCase() === geSoforName.toLowerCase()) || 
+                                                         drivers.find(d => d.name.toLowerCase().includes(geSoforName.toLowerCase()));
+
+                                    const newOrder = {
+                                      id: Date.now(),
+                                      date: geTarih,
+                                      plate: gePlaka,
+                                      driverName: geSoforName,
+                                      driverId: activeDriver?.idNo || "",
+                                      driverSicil: activeDriver?.sicilNo || "",
+                                      driverPhone: activeDriver?.phone || "",
+                                      driverKanGrubu: activeDriver?.kanGrubu || "",
+                                      driverAdres: activeDriver?.adres || "",
+                                      serialNo: geSeriNo,
+                                      departureTime: geDepartureTime,
+                                      returnTime: geReturnTime,
+                                      departureKm: geDepartureKm,
+                                      returnKm: Number(geReturnKm),
+                                      route: routeStr
+                                    };
+
+                                    const updatedOrders = [newOrder, ...karaAraclariGorevEmirleri];
+                                    setKaraAraclariGorevEmirleri(updatedOrders);
+                                    pushKaraAraclariGorevEmirleri(updatedOrders);
+
+                                    // Automation: update vehicle KM in standard list
+                                    const updatedVehicles = techizatKaraAraclariData.map(row => {
+                                      if (row[1] && row[1].toLowerCase().includes(gePlaka.toLowerCase())) {
+                                        const newRow = [...row];
+                                        const returnKmNum = Number(geReturnKm);
+
+                                        if (newRow.length < 14) {
+                                          while (newRow.length < 14) newRow.push("");
+                                        }
+
+                                        newRow[10] = String(returnKmNum); // Current KM
+                                        newRow[11] = String(returnKmNum + 5000); // Next KM Periyot (+5000 KM)
+
+                                        const today = new Date();
+                                        const todayStr = today.toLocaleDateString('tr-TR');
+                                        const nextMaintenanceDate = new Date();
+                                        nextMaintenanceDate.setMonth(nextMaintenanceDate.getMonth() + 6);
+                                        const nextMaintenanceStr = nextMaintenanceDate.toLocaleDateString('tr-TR');
+
+                                        newRow[6] = todayStr; // SON BAKIM TARİHİ
+                                        newRow[8] = nextMaintenanceStr; // BİR SONRAKİ BAKIM TARİHİ
+
+                                        return newRow;
+                                      }
+                                      return row;
+                                    });
+
+                                    setTechizatKaraAraclariData(updatedVehicles);
+                                    localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
+
+                                    // Reset
+                                    setGeSeriNo("");
+                                    setGeSoforName("");
+                                    setGePlaka("");
+                                    setGeDepartureKm("");
+                                    setGeReturnKm("");
+                                    setGeDepartureTime("08:00");
+                                    setGeReturnTime("17:00");
+                                    setGeRoutes([{ from: "", to: "" }]);
+                                    setGeStep(1);
+
+                                    showNotification("Görev Emri Girişi Başarıyla Tamamlandı! Araç KM'si ve Bakım Periyotları Otomatik Güncellendi.");
+                                    
+                                    // Trigger transition screen
+                                    setIsRedirectingToPortal(true);
+                                    setIsSlidingUp(false);
+                                    
+                                    // Step 1: Wait 2.5 seconds with pulsing logo, then slide the screen up
+                                    setTimeout(() => {
+                                      setIsSlidingUp(true);
+                                      // Step 2: After the slide-up animation (0.8s) finishes, do the redirect
+                                      setTimeout(() => {
+                                        window.location.href = "https://bulut.ogm.gov.tr/gorevemri";
+                                      }, 800);
+                                    }, 2500);
+                                  }}
+                                  className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs uppercase tracking-widest rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/20"
+                                >
+                                  <CheckCircle className="w-4 h-4 text-emerald-200" />
+                                  KAYDET VE YÖNLENDİR
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-2xl">
-                        <span className="w-5 h-5 rounded-lg bg-orange-500 shrink-0" />
-                        <div>
-                          <p className="text-xs font-bold text-orange-950">TURUNCU</p>
-                          <p className="text-[10px] text-orange-700">60 - 90 Gün Arası (<span className="font-mono">60-90 Gün</span>)</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 p-3 bg-yellow-50 border border-yellow-200 rounded-2xl">
-                        <span className="w-5 h-5 rounded-lg bg-yellow-400 shrink-0" />
-                        <div>
-                          <p className="text-xs font-bold text-yellow-950">SARI</p>
-                          <p className="text-[10px] text-yellow-700">30 - 60 Gün Arası (<span className="font-mono">30-60 Gün</span>)</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-2xl">
-                        <span className="w-5 h-5 rounded-lg bg-emerald-500 shrink-0" />
-                        <div>
-                          <p className="text-xs font-bold text-emerald-950">YEŞİL</p>
-                          <p className="text-[10px] text-emerald-700">90 Günden Fazla (<span className="font-mono">{'>'}90 Gün</span>)</p>
-                        </div>
+                      );
+                    })()}
+
+                   {/* HIDDEN OLD FORM */}
+                   {false && (
+                     <div className="w-full xl:w-5/12 bg-white border border-slate-200 rounded-[2.5rem] p-6 shadow-xl flex flex-col gap-5">
+                     <div className="border-b border-slate-100 pb-3">
+                       <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse inline-block" />
+                         📝 YENİ ARAÇ GÖREV EMRİ KAYDI
+                       </h4>
+                     </div>
+
+                     <div className="flex flex-col gap-4">
+                       <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📅 Görev Tarihi</label>
+                         <input
+                           type="date"
+                           value={geTarih}
+                           onChange={(e) => setGeTarih(e.target.value)}
+                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                         />
+                       </div>
+
+                       <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🚗 Araç Plakası</label>
+                         <select
+                           value={gePlaka}
+                           onChange={(e) => setGePlaka(e.target.value)}
+                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-extrabold text-slate-800 transition-all"
+                         >
+                           <option value="">-- Lütfen Araç Seçiniz --</option>
+                           {vehiclePlates.map(p => (
+                             <option key={p} value={p}>{p}</option>
+                           ))}
+                         </select>
+                       </div>
+
+                       <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">👨‍✈️ Sürücü Personel (Şoför)</label>
+                         <select
+                           value={geSoforName}
+                           onChange={(e) => setGeSoforName(e.target.value)}
+                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-extrabold text-slate-800 transition-all"
+                         >
+                           <option value="">-- Lütfen Şoför Seçiniz --</option>
+                           {drivers.map(d => (
+                             <option key={d.name} value={d.name}>{d.name} ({d.unvan})</option>
+                           ))}
+                         </select>
+                       </div>
+
+                       {(() => {
+                         const activeDriver = drivers.find(d => d.name === geSoforName);
+                         if (!activeDriver) return null;
+                         return (
+                           <div className="bg-emerald-50/40 border border-emerald-100 rounded-2xl p-4 flex flex-col gap-2.5 text-xs animate-fade-in">
+                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
+                               <span className="font-extrabold text-slate-500">T.C. Kimlik No:</span>
+                               <span className="font-mono font-bold text-slate-800">{activeDriver.idNo || "Belirtilmemiş"}</span>
+                             </div>
+                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
+                               <span className="font-extrabold text-slate-500">Sicil No:</span>
+                               <span className="font-mono font-bold text-slate-800">{activeDriver.sicilNo || "Belirtilmemiş"}</span>
+                             </div>
+                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
+                               <span className="font-extrabold text-slate-500">Sürücü Telefon:</span>
+                               <span className="font-mono font-bold text-[#0b3d1d]">{activeDriver.phone || "Belirtilmemiş"}</span>
+                             </div>
+                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
+                               <span className="font-extrabold text-slate-500">Kan Grubu:</span>
+                               <span className="font-bold text-red-600 bg-red-50 px-2.5 py-0.5 rounded-lg border border-red-100">{activeDriver.kanGrubu || "Belirtilmemiş"}</span>
+                             </div>
+                             <div className="flex flex-col gap-1">
+                               <span className="font-extrabold text-slate-500">Adres Bilgisi:</span>
+                               <span className="font-semibold text-slate-600 leading-relaxed">{activeDriver.adres || "Belirtilmemiş"}</span>
+                             </div>
+                           </div>
+                         );
+                       })()}
+
+                       <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🔢 Görev Seri No (S/N)</label>
+                         <input
+                           type="text"
+                           placeholder="Örn: SERI-772"
+                           value={geSeriNo}
+                           onChange={(e) => setGeSeriNo(e.target.value)}
+                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                         />
+                       </div>
+
+                       <div>
+                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📈 Dönüş Kilometresi (KM)</label>
+                         <input
+                           type="number"
+                           placeholder="Örn: 15300"
+                           value={geReturnKm}
+                           onChange={(e) => setGeReturnKm(e.target.value)}
+                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
+                         />
+                       </div>
+
+                       <button
+                         onClick={() => {
+                           if (!geTarih || !gePlaka || !geSoforName || !geSeriNo || !geReturnKm) {
+                             alert("Lütfen form alanlarının tamamını doldurunuz.");
+                             return;
+                           }
+                           
+                           const activeDriver = drivers.find(d => d.name === geSoforName);
+                           
+                           const newOrder = {
+                             id: Date.now(),
+                             date: geTarih,
+                             plate: gePlaka,
+                             driverName: geSoforName,
+                             driverId: activeDriver?.idNo || "",
+                             driverSicil: activeDriver?.sicilNo || "",
+                             driverPhone: activeDriver?.phone || "",
+                             driverKanGrubu: activeDriver?.kanGrubu || "",
+                             driverAdres: activeDriver?.adres || "",
+                             serialNo: geSeriNo,
+                             returnKm: Number(geReturnKm)
+                           };
+                           
+                           const updatedOrders = [newOrder, ...karaAraclariGorevEmirleri];
+                           setKaraAraclariGorevEmirleri(updatedOrders);
+                           
+                           // Automation: update vehicle KM in standard list
+                           const updatedVehicles = techizatKaraAraclariData.map(row => {
+                             if (row[1] && row[1].toLowerCase().includes(gePlaka.toLowerCase())) {
+                               const newRow = [...row];
+                               const returnKmNum = Number(geReturnKm);
+                               
+                               if (newRow.length < 14) {
+                                 while (newRow.length < 14) newRow.push("");
+                                }
+                                
+                                newRow[10] = String(returnKmNum); // Current KM
+                                newRow[11] = String(returnKmNum + 5000); // Next KM Periyot (+5000 KM)
+                                
+                                const today = new Date();
+                                const todayStr = today.toLocaleDateString('tr-TR');
+                                const nextMaintenanceDate = new Date();
+                                nextMaintenanceDate.setMonth(nextMaintenanceDate.getMonth() + 6);
+                                const nextMaintenanceStr = nextMaintenanceDate.toLocaleDateString('tr-TR');
+                                
+                                newRow[6] = todayStr; // SON BAKIM TARİHİ
+                                newRow[8] = nextMaintenanceStr; // BİR SONRAKİ BAKIM TARİHİ
+                                
+                                return newRow;
+                              }
+                              return row;
+                            });
+                            
+                            setTechizatKaraAraclariData(updatedVehicles);
+                            localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
+                            
+                            // Clear form fields
+                            setGeSeriNo("");
+                            setGeReturnKm("");
+                            
+                            showNotification("Görev Emri Girişi Başarıyla Tamamlandı! Araç KM'si ve Bakım Periyodu Otomatik Güncellendi.");
+                          }}
+                          className="w-full py-3.5 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-extrabold text-xs uppercase tracking-widest rounded-2xl shadow-lg shadow-emerald-900/10 cursor-pointer transition-all flex items-center justify-center gap-2"
+                        >
+                          <CheckCircle className="w-4 h-4 text-emerald-300" />
+                          GÖREVİ KAYDET VE KM GÜNCELLE
+                        </button>
                       </div>
                     </div>
+                  )}
+
+                    {/* Right Panel: Görev Emri Geçmişi */}
+                    {karaAraclariSubTab === 'past_records' && (
+                      <div className="w-full max-w-4xl mx-auto bg-white border border-slate-200 rounded-[2.5rem] p-6 shadow-xl flex flex-col animate-fade-in">
+                        <div className="border-b border-slate-100 pb-3 mb-4">
+                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                            📋 GÖREV EMRİ GEÇMİŞİ VE KAYITLARI
+                          </h4>
+                        </div>
+
+                        <div className="flex-1 overflow-x-auto min-w-full">
+                          {karaAraclariGorevEmirleri.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                              <FileText className="w-12 h-12 text-slate-300 stroke-1 mb-3" />
+                              <p className="text-xs font-bold">Kayıtlı görev emri bulunmuyor.</p>
+                              <p className="text-[10px] text-slate-400 mt-1">Sol taraftaki formdan yeni bir görev emri ekleyebilirsiniz.</p>
+                            </div>
+                          ) : (
+                            <table className="w-full text-left border-collapse min-w-[750px]">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-100 shrink-0">
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Tarih</th>
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Araç Plakası</th>
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Sürücü Personel</th>
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Görev Seri No</th>
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">KM Bilgisi</th>
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Çıkış / Giriş Saati</th>
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Güzergah</th>
+                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider text-right">İşlemler</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {karaAraclariGorevEmirleri.map((order, oIdx) => (
+                                  <tr 
+                                    key={order.id || oIdx} 
+                                    onDoubleClick={() => {
+                                      setEditGorevEmriValues({ ...order });
+                                      setActiveGorevEmriEdit(order);
+                                    }}
+                                    className="hover:bg-slate-50/50 transition-colors cursor-pointer select-none"
+                                    title="Düzenlemek için Çift Tıklayın"
+                                  >
+                                    <td className="px-4 py-3 text-xs font-mono text-slate-500 whitespace-nowrap">{order.date}</td>
+                                    <td className="px-4 py-3 whitespace-nowrap">
+                                      <span className="text-xs font-black text-[#0b3d1d] bg-emerald-100 px-2.5 py-1 rounded-xl">
+                                        {order.plate}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-3 text-xs font-bold text-slate-700">
+                                      <div className="flex flex-col">
+                                        <span>{order.driverName}</span>
+                                        <span className="text-[10px] text-slate-400 font-medium">Sicil: {order.driverSicil || "-"}</span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-xs font-mono text-slate-600 font-bold whitespace-nowrap">{order.serialNo}</td>
+                                    <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">
+                                      <div className="flex flex-col text-[10px] font-semibold text-slate-500">
+                                        <span>Çıkış: <strong className="text-slate-700 font-mono">{order.departureKm} KM</strong></span>
+                                        <span>Dönüş: <strong className="text-slate-700 font-mono">{order.returnKm} KM</strong></span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">
+                                      <div className="flex flex-col text-[10px] font-semibold text-slate-500">
+                                        <span>Çıkış: <strong className="text-slate-700 font-mono">{order.departureTime || "-"}</strong></span>
+                                        <span>Giriş: <strong className="text-slate-700 font-mono">{order.returnTime || "-"}</strong></span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-xs text-emerald-800 font-bold max-w-xs truncate" title={order.route}>
+                                      {order.route}
+                                    </td>
+                                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                                      <div className="flex items-center justify-end gap-1.5">
+                                        {/* Düzenle Button */}
+                                        <button
+                                          onClick={() => {
+                                            setEditGorevEmriValues({ ...order });
+                                            setActiveGorevEmriEdit(order);
+                                          }}
+                                          className="text-amber-600 hover:text-amber-700 hover:bg-amber-50 p-2 rounded-xl transition-all cursor-pointer active:scale-95"
+                                          title="Kayıt Düzenle"
+                                        >
+                                          <Edit3 className="w-4 h-4" />
+                                        </button>
+                                        {/* Sil Button */}
+                                        <button
+                                          onClick={() => {
+                                            setGeDeleteOrderId(String(order.id));
+                                            setGeDeletePasswordInput("");
+                                            setGeDeletePasswordError(false);
+                                            setShowGeDeletePasswordPrompt(true);
+                                          }}
+                                          className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-xl transition-all cursor-pointer active:scale-95"
+                                          title="Kayıt Sil"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+
+                        {/* Görev Emri Düzenleme Yetkili Şifre Onayı */}
+                        {showGeEditPasswordPrompt && (
+                          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 select-text animate-fade-in">
+                            <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
+                              <div className="absolute top-0 inset-x-0 h-1 bg-amber-600"></div>
+                              <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-amber-600">
+                                <Lock className="w-6 h-6" />
+                              </div>
+                              <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">YETKİLİ DÜZENLEME ONAYI</h4>
+                              <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
+                                Bu görev emri kaydını manuel olarak düzenlemek için lütfen yetkili şifresini giriniz.
+                              </p>
+                              <input
+                                type="password"
+                                placeholder="Şifre"
+                                value={geEditPasswordInput}
+                                onChange={(e) => {
+                                  setGeEditPasswordInput(e.target.value);
+                                  setGeEditPasswordError(false);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    if (geEditPasswordInput === '1839') {
+                                      if (activeGorevEmriEdit) {
+                                        const updated = karaAraclariGorevEmirleri.map(order => {
+                                          if (order.id === pendingGeEditOrder.id) {
+                                            return pendingGeEditOrder;
+                                          }
+                                          return order;
+                                        });
+                                        setKaraAraclariGorevEmirleri(updated);
+                                        localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
+                                        pushKaraAraclariGorevEmirleri(updated);
+                                        
+                                        setActiveGorevEmriEdit(null);
+                                        setEditGorevEmriValues(null);
+                                        setPendingGeEditOrder(null);
+                                        showNotification("Görev emri manuel olarak başarıyla güncellendi ve senkronize edildi!");
+                                      } else {
+                                        setEditGorevEmriValues({ ...pendingGeEditOrder });
+                                        setActiveGorevEmriEdit(pendingGeEditOrder);
+                                      }
+                                      setShowGeEditPasswordPrompt(false);
+                                      setGeEditPasswordInput("");
+                                    } else {
+                                      setGeEditPasswordError(true);
+                                    }
+                                  }
+                                }}
+                                className={`w-full px-4 py-3 bg-slate-50 border-2 rounded-2xl text-center font-bold text-sm focus:outline-none transition-all mb-2 ${
+                                  geEditPasswordError ? 'border-red-500 focus:border-red-500 text-red-600' : 'border-slate-200 focus:border-slate-400'
+                                }`}
+                                autoFocus
+                              />
+                              {geEditPasswordError && (
+                                <p className="text-[10px] text-red-500 font-bold mb-3">⚠️ Hatalı Şifre! Lütfen tekrar deneyiniz.</p>
+                              )}
+                              <div className="flex gap-2.5 mt-4">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (geEditPasswordInput === '1839') {
+                                      if (activeGorevEmriEdit) {
+                                        const updated = karaAraclariGorevEmirleri.map(order => {
+                                          if (order.id === pendingGeEditOrder.id) {
+                                            return pendingGeEditOrder;
+                                          }
+                                          return order;
+                                        });
+                                        setKaraAraclariGorevEmirleri(updated);
+                                        localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
+                                        pushKaraAraclariGorevEmirleri(updated);
+                                        
+                                        setActiveGorevEmriEdit(null);
+                                        setEditGorevEmriValues(null);
+                                        setPendingGeEditOrder(null);
+                                        showNotification("Görev emri manuel olarak başarıyla güncellendi ve senkronize edildi!");
+                                      } else {
+                                        setEditGorevEmriValues({ ...pendingGeEditOrder });
+                                        setActiveGorevEmriEdit(pendingGeEditOrder);
+                                      }
+                                      setShowGeEditPasswordPrompt(false);
+                                      setGeEditPasswordInput("");
+                                    } else {
+                                      setGeEditPasswordError(true);
+                                    }
+                                  }}
+                                  className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs rounded-2xl cursor-pointer shadow-md"
+                                >
+                                  Onayla ve Düzenle
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowGeEditPasswordPrompt(false);
+                                    setGeEditPasswordInput("");
+                                    setGeEditPasswordError(false);
+                                  }}
+                                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-500 font-extrabold text-xs rounded-2xl cursor-pointer"
+                                >
+                                  İptal
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Görev Emri Silme Yetkili Şifre Onayı */}
+                        {showGeDeletePasswordPrompt && (
+                          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 select-text animate-fade-in">
+                            <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
+                              <div className="absolute top-0 inset-x-0 h-1 bg-red-600"></div>
+                              <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-600">
+                                <Trash2 className="w-6 h-6" />
+                              </div>
+                              <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">YETKİLİ SİLME ONAYI</h4>
+                              <p className="text-xs font-semibold mb-4 leading-relaxed text-slate-500">
+                                Bu görev emri kaydını kalıcı olarak silmek için lütfen yetkili şifresini giriniz.
+                              </p>
+                              <input
+                                type="password"
+                                placeholder="Şifre"
+                                value={geDeletePasswordInput}
+                                onChange={(e) => {
+                                  setGeDeletePasswordInput(e.target.value);
+                                  setGeDeletePasswordError(false);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    if (geDeletePasswordInput === '1839') {
+                                      const filtered = karaAraclariGorevEmirleri.filter(o => String(o.id) !== geDeleteOrderId);
+                                      setKaraAraclariGorevEmirleri(filtered);
+                                      pushKaraAraclariGorevEmirleri(filtered);
+                                      setShowGeDeletePasswordPrompt(false);
+                                      setGeDeleteOrderId(null);
+                                      setGeDeletePasswordInput("");
+                                      showNotification("Görev emri kaydı başarıyla silindi ve Excel'e kaydedildi.");
+                                    } else {
+                                      setGeDeletePasswordError(true);
+                                    }
+                                  }
+                                }}
+                                className="w-full px-4 py-2.5 bg-slate-50 border-2 border-red-500/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-red-500 text-slate-900 placeholder-slate-400"
+                                autoFocus
+                              />
+                              {geDeletePasswordError && (
+                                <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
+                              )}
+                              <div className="flex gap-2 justify-center">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowGeDeletePasswordPrompt(false);
+                                    setGeDeleteOrderId(null);
+                                    setGeDeletePasswordInput("");
+                                    setGeDeletePasswordError(false);
+                                  }}
+                                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-black rounded-xl transition-colors cursor-pointer"
+                                >
+                                  İPTAL
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (geDeletePasswordInput === '1839') {
+                                      const filtered = karaAraclariGorevEmirleri.filter(o => String(o.id) !== geDeleteOrderId);
+                                      setKaraAraclariGorevEmirleri(filtered);
+                                      pushKaraAraclariGorevEmirleri(filtered);
+                                      setShowGeDeletePasswordPrompt(false);
+                                      setGeDeleteOrderId(null);
+                                      setGeDeletePasswordInput("");
+                                      showNotification("Görev emri kaydı başarıyla silindi.");
+                                    } else {
+                                      setGeDeletePasswordError(true);
+                                    }
+                                  }}
+                                  className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer shadow-md"
+                                >
+                                  SİL
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
+                )}
+              </>
+
+
 
                   {/* Print Only Representation (High contrast landscape layout) */}
                   <div className="print-only-container hidden print:block bg-white text-black p-6 w-full">
@@ -5736,6 +7935,7 @@ export default function App() {
                           <option value="techizat_b360">TEÇHİZAT ENVANTER TAKİBİ - B-360 (EXCEL)</option>
                           <option value="techizat_c650">TEÇHİZAT ENVANTER TAKİBİ - C-650 (EXCEL)</option>
                           <option value="techizat_hangar">TEÇHİZAT ENVANTER TAKİBİ - HANGAR YER DESTEK (EXCEL)</option>
+                          <option value="techizat_kara_araclari">TEÇHİZAT ENVANTER TAKİBİ - KARA ARAÇLARI TAKİP (EXCEL)</option>
                           <option value="gun_takip">📋 SORUMLU BİRİM VE MAİL AYARLARI (GÜN TAKİP)</option>
                         </select>
                         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-505">
@@ -6069,7 +8269,7 @@ export default function App() {
 
                         <div className="flex gap-3">
                           <a
-                            href="https://drive.google.com/drive/folders/1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
+                            href="https://drive.google.com/drive/folders/1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex-1 py-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-center font-extrabold text-[10px] rounded-xl tracking-wider uppercase transition-all block shadow-sm cursor-pointer"
@@ -6284,6 +8484,1802 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* GÖREV EMRİ MANUEL DÜZENLEME MODALİ */}
+      <AnimatePresence>
+        {activeGorevEmriEdit && editGorevEmriValues && (
+          <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[2100] flex items-center justify-center p-4 select-text">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white border-2 border-slate-200/50 rounded-[2.5rem] shadow-2xl max-w-lg w-full p-6 relative overflow-hidden"
+            >
+              <div className="absolute top-0 inset-x-0 h-1.5 bg-amber-500"></div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveGorevEmriEdit(null);
+                  setEditGorevEmriValues(null);
+                  setPendingGeEditOrder(null);
+                }}
+                className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-xl transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <h3 className="text-slate-800 font-black text-sm uppercase mb-4 flex items-center gap-2">
+                ✏️ GÖREV EMRİ MANUEL DÜZENLEME PANELİ
+              </h3>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Görev Tarihi</label>
+                  <input
+                    type="date"
+                    value={convertToInputDateFormat(editGorevEmriValues.date || "")}
+                    onChange={(e) => {
+                      const formatted = convertToDisplayDateFormat(e.target.value);
+                      setEditGorevEmriValues({ ...editGorevEmriValues, date: formatted });
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none cursor-pointer"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Araç Plakası</label>
+                  <input
+                    type="text"
+                    value={editGorevEmriValues.plate || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, plate: e.target.value.toUpperCase() })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Sürücü Personel Ad Soyad</label>
+                  <input
+                    type="text"
+                    value={editGorevEmriValues.driverName || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, driverName: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Sürücü Sicil No</label>
+                  <input
+                    type="text"
+                    value={editGorevEmriValues.driverSicil || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, driverSicil: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Görev Seri No</label>
+                  <input
+                    type="text"
+                    value={editGorevEmriValues.serialNo || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, serialNo: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Çıkış KM</label>
+                  <input
+                    type="number"
+                    value={editGorevEmriValues.departureKm || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, departureKm: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Dönüş KM</label>
+                  <input
+                    type="number"
+                    value={editGorevEmriValues.returnKm || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, returnKm: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Güzergah</label>
+                  <input
+                    type="text"
+                    value={editGorevEmriValues.route || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, route: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Çıkış Saati</label>
+                  <input
+                    type="text"
+                    placeholder="örn: 08:00"
+                    value={editGorevEmriValues.departureTime || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, departureTime: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Dönüş Saati</label>
+                  <input
+                    type="text"
+                    placeholder="örn: 17:00"
+                    value={editGorevEmriValues.returnTime || ""}
+                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, returnTime: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 justify-end mt-6 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveGorevEmriEdit(null);
+                    setEditGorevEmriValues(null);
+                    setPendingGeEditOrder(null);
+                  }}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 font-extrabold text-xs rounded-2xl transition-all cursor-pointer"
+                >
+                  İPTAL
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingGeEditOrder(editGorevEmriValues);
+                    setGeEditPasswordInput("");
+                    setGeEditPasswordError(false);
+                    setShowGeEditPasswordPrompt(true);
+                  }}
+                  className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white font-extrabold text-xs uppercase tracking-wider rounded-2xl transition-all cursor-pointer shadow-md"
+                >
+                  KAYDET VE SENKRONİZE ET
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* 4.5. TEÇHİZAT SATIR DÜZENLEME VE GÖRSEL YÜKLEME MODALİ */}
+      <AnimatePresence>
+        {activeTechizatRowEdit && (() => {
+          const { rIdx, techType, row } = activeTechizatRowEdit;
+          const isKaraAraciEdit = techType === 'kara_araclari';
+          const colsList = [
+            "SIRA NO", 
+            "TEÇHİZAT ADI", 
+            "PARÇA NO (P/N) / MODEL", 
+            "SERİ NO (S/N)", 
+            "MİKTAR / KAPASİTE", 
+            "BULUNDUĞU YER", 
+            "DURUMU", 
+            "SON KONTROL / KALİBRASYON / BAKIM", 
+            "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+            "SON KONTROLÜ YAPAN FİRMA", 
+            "AÇIKLAMA", 
+            "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+          ];
+
+          const imageKey = techType + "_" + (row[1] || "").replace(/\s+/g, '_') + "_" + (row[3] || "").replace(/\s+/g, '_');
+          const hasImage = !!techizatImages[imageKey];
+
+          return (
+            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md flex items-start lg:items-center justify-center z-[2100] p-4 overflow-y-auto animate-fade-in select-text">
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white border-2 border-slate-200/50 rounded-[2.5rem] shadow-2xl max-w-5xl w-full p-5 md:p-8 relative flex flex-col lg:flex-row gap-8 my-4 lg:my-8 lg:max-h-[92vh] lg:overflow-hidden select-text"
+              >
+                {/* Decorative top strip */}
+                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-700"></div>
+
+                {/* Close Button */}
+                <button
+                  onClick={() => {
+                    setActiveTechizatRowEdit(null);
+                    setPendingImageFile(null);
+                    setPendingImagePreview(null);
+                    setPendingImageBase64(null);
+                    setPendingImageMimeType(null);
+                    setIsDragging(false);
+                    setIsImageUploadingToDrive(false);
+                    setIsDataUpdateUnlocked(false);
+                    setDataPasswordInput('');
+                    setDataPasswordError(false);
+                  }}
+                  className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-50 z-20"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                {/* Mobile / Tablet Segment/Tab Switcher */}
+                <div className="flex lg:hidden bg-slate-100 p-1.5 rounded-2xl gap-1 w-full mt-4 shrink-0 select-none">
+                  <button
+                    type="button"
+                    onClick={() => setMobileEditTab('form')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
+                      mobileEditTab === 'form'
+                        ? 'bg-[#0b3d1d] text-white shadow-md'
+                        : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                    }`}
+                  >
+                    📝 Kayıt Bilgileri
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobileEditTab('image')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
+                      mobileEditTab === 'image'
+                        ? 'bg-[#0b3d1d] text-white shadow-md'
+                        : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
+                    }`}
+                  >
+                    📷 Teçhizat Görseli
+                  </button>
+                </div>
+
+                {/* Left Side: Dynamic Form Fields */}
+                <div className={`flex-1 lg:overflow-y-auto pr-2 lg:max-h-[82vh] flex flex-col text-left ${mobileEditTab === 'form' ? 'flex' : 'hidden lg:flex'}`}>
+                  <div className="mb-6">
+                    <h3 className="text-base font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                      🛠️ KAYIT DÜZENLEME PANELİ
+                    </h3>
+                    <p className="text-[11px] text-slate-400 font-semibold mt-1">
+                      {isKaraAraciEdit ? "Kara Aracı" : "Standart Teçhizat"} listesindeki seçili kalemin tüm teknik özelliklerini ve tarihlerini güncelleyebilirsiniz.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {colsList.map((col, idx) => {
+                      // Skip Sıra No (index 0) - make it read-only
+                      if (idx === 0) {
+                        return (
+                          <div key={idx} className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
+                            <input
+                              type="text"
+                              value={editRowValues[idx] || ""}
+                              disabled
+                              className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
+                            />
+                          </div>
+                        );
+                      }
+
+                      // Special field: BAKIMA TABİ Mİ? (Dropdown selection Evet / Hayır)
+                      if (col === "BAKIMA TABİ Mİ?") {
+                        return (
+                          <div key={idx} className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                              ⚙️ {col}
+                            </label>
+                            <select
+                              value={editRowValues[idx] || "Evet"}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const cloned = [...editRowValues];
+                                cloned[idx] = val;
+                                // If "Hayır" is selected, clear maintenance/control dates
+                                if (val === "Hayır") {
+                                  if (!isKaraAraciEdit) {
+                                    cloned[8] = "-"; // SON KONTROL
+                                    cloned[9] = "-"; // GELECEK KONTROL
+                                  } else {
+                                    cloned[6] = "-"; // SON BAKIM
+                                    cloned[7] = "-"; // SON MUAYENE
+                                    cloned[8] = "-"; // GELECEK BAKIM
+                                    cloned[9] = "-"; // GELECEK MUAYENE
+                                  }
+                                }
+                                setEditRowValues(cloned);
+                              }}
+                              className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                            >
+                              <option value="Evet">Evet (Bakıma Tabi)</option>
+                              <option value="Hayır">Hayır (Bakım Gerekmiyor)</option>
+                            </select>
+                          </div>
+                        );
+                      }
+
+                      // Check if maintenance is disabled (Hayır is active)
+                      const isBakimaTabiColIdx = colsList.indexOf("BAKIMA TABİ Mİ?");
+                      const isBakimaTabi = isBakimaTabiColIdx !== -1 ? editRowValues[isBakimaTabiColIdx] : "Evet";
+                      const isMaintenanceField = !isKaraAraciEdit
+                        ? idx === 8 || idx === 9 // SON KONTROL, GELECEK KONTROL
+                        : idx === 6 || idx === 7 || idx === 8 || idx === 9; // SON BAKIM, SON MUAYENE, GELECEK BAKIM, GELECEK MUAYENE
+
+                      if (isBakimaTabi === "Hayır" && isMaintenanceField) {
+                        return (
+                          <div key={idx} className="flex flex-col gap-1.5 opacity-40">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
+                            <input
+                              type="text"
+                              value="MUAFIYET (BAKIM YOK)"
+                              disabled
+                              className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-400 cursor-not-allowed"
+                            />
+                          </div>
+                        );
+                      }
+
+                      const isDateField = col.includes("TARİH") || col.includes("KONTROL / KALİBRASYON / BAKIM");
+                      const isMailSendDate = col === "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ" || 
+                        col.toUpperCase().includes("MAİL GÖNDERİM") || 
+                        col.toUpperCase().includes("MAIL GONDERIM") || 
+                        col.toUpperCase().includes("MAİL GÖNDERİLDİĞİ") || 
+                        col.toUpperCase().includes("MAIL GONDERILDI") || 
+                        col.toLowerCase().includes("mail") || 
+                        col.toLowerCase().includes("e-posta");
+
+                      if (isMailSendDate) {
+                        return (
+                          <div key={idx} className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
+                            <input
+                              type="text"
+                              value={editRowValues[idx] || "Belirtilmemiş"}
+                              disabled
+                              className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
+                            />
+                          </div>
+                        );
+                      }
+
+                      if (isDateField) {
+                        const dateVal = convertToInputDateFormat(editRowValues[idx] || "");
+                        return (
+                          <div key={idx} className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">📅 {col}</label>
+                            <input
+                              type="date"
+                              value={dateVal}
+                              onChange={(e) => {
+                                const formatted = convertToDisplayDateFormat(e.target.value);
+                                const cloned = [...editRowValues];
+                                cloned[idx] = formatted;
+                                setEditRowValues(cloned);
+                              }}
+                              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
+                            />
+                          </div>
+                        );
+                      }
+
+                      // Render normal input fields
+                      return (
+                        <div key={idx} className="flex flex-col gap-1.5">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">{col}</label>
+                          <input
+                            type="text"
+                            value={editRowValues[idx] || ""}
+                            placeholder="Belirtilmemiş"
+                            onChange={(e) => {
+                              const cloned = [...editRowValues];
+                              cloned[idx] = e.target.value;
+                              setEditRowValues(cloned);
+                            }}
+                            className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Save buttons */}
+                  <div className="flex flex-col gap-3 mt-8 border-t border-slate-100 pt-5">
+                    <div className="flex gap-3 justify-end items-center">
+                      {isDataUpdateUnlocked && (
+                        <span className="text-[10px] font-black text-emerald-800 flex items-center gap-1.5 mr-auto">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          GÜNCELLEME YETKİSİ ONAYLANDI
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        disabled={isTechizatSaving}
+                        onClick={() => {
+                          setActiveTechizatRowEdit(null);
+                          setPendingImageFile(null);
+                          setPendingImagePreview(null);
+                          setIsDragging(false);
+                          setIsImageUploadingToDrive(false);
+                          setDataPasswordInput('');
+                          setDataPasswordError(false);
+                          setShowSavePasswordPrompt(false);
+                        }}
+                        className={`px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-2xl transition-colors cursor-pointer ${isTechizatSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        Kapat / İptal
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isTechizatSaving}
+                        onClick={async () => {
+                          if (isDataUpdateUnlocked) {
+                            await handleSaveTechizatRow(editRowValues, techType, rIdx);
+                          } else {
+                            setDataPasswordInput('');
+                            setDataPasswordError(false);
+                            setShowSavePasswordPrompt(true);
+                          }
+                        }}
+                        className={`px-8 py-3 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-widest rounded-2xl shadow-lg transition-all cursor-pointer active:scale-95 flex items-center gap-2 ${isTechizatSaving ? 'opacity-70 cursor-not-allowed' : ''}`}
+                      >
+                        {isTechizatSaving ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin text-white" />
+                            <span>SENKRONİZE EDİLİYOR...</span>
+                          </>
+                        ) : (
+                          <span>KAYDET VE GÜNCELLE</span>
+                        )}
+                      </button>
+                    </div>
+
+                    {showSavePasswordPrompt && (
+                      <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text">
+                        <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden animate-fade-in">
+                          <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
+                          <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
+                            <Lock className="w-6 h-6" />
+                          </div>
+                          <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">KAYIT DEĞİŞİKLİK ONAYI</h4>
+                          <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
+                            Yapılan değişiklikleri kaydetmek için lütfen yetkili şifresini giriniz.
+                          </p>
+                          <input
+                            type="password"
+                            placeholder="Şifre"
+                            value={dataPasswordInput}
+                            onChange={(e) => {
+                              setDataPasswordInput(e.target.value);
+                              setDataPasswordError(false);
+                            }}
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter') {
+                                if (dataPasswordInput === '1839') {
+                                  setIsDataUpdateUnlocked(true);
+                                  setDataPasswordInput('');
+                                  setDataPasswordError(false);
+                                  setShowSavePasswordPrompt(false);
+                                  await handleSaveTechizatRow(editRowValues, techType, rIdx);
+                                } else {
+                                  setDataPasswordError(true);
+                                }
+                              }
+                            }}
+                            className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
+                            autoFocus
+                          />
+                          {dataPasswordError && (
+                            <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
+                          )}
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowSavePasswordPrompt(false);
+                                setDataPasswordInput('');
+                                setDataPasswordError(false);
+                              }}
+                              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                            >
+                              İptal
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (dataPasswordInput === '1839') {
+                                  setIsDataUpdateUnlocked(true);
+                                  setDataPasswordInput('');
+                                  setDataPasswordError(false);
+                                  setShowSavePasswordPrompt(false);
+                                  await handleSaveTechizatRow(editRowValues, techType, rIdx);
+                                } else {
+                                  setDataPasswordError(true);
+                                }
+                              }}
+                              className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer"
+                            >
+                              Onayla ve Kaydet
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right Side: Image Upload, Background Removal and Manual Retouch Panel */}
+                <div className={`w-full lg:w-5/12 border-t lg:border-t-0 lg:border-l border-slate-200 pt-6 lg:pt-0 lg:pl-8 flex flex-col gap-6 text-left ${mobileEditTab === 'image' ? 'flex' : 'hidden lg:flex'}`}>
+                  <ImageEditorAndRetoucher
+                    imageKey={imageKey}
+                    currentImageUrl={techizatImages[imageKey] || null}
+                    hasImage={hasImage}
+                    isImageUpdateUnlocked={isImageUpdateUnlocked}
+                    isUploadingToDrive={isImageUploadingToDrive}
+                    partName={row[1] || ""}
+                    manufacturer={row[3] || ""}
+                    onUnlockImageUpdate={() => {
+                      setTempImageAction('unlock_only');
+                      setImagePasswordInput('');
+                      setImagePasswordError(false);
+                      setShowImageSavePasswordPrompt(true);
+                    }}
+                    onLockImageUpdate={() => {
+                      setIsImageUpdateUnlocked(false);
+                    }}
+                    onRemoveImage={() => {
+                      if (isImageUpdateUnlocked) {
+                        setTechizatImages(prev => {
+                          const cloned = { ...prev };
+                          delete cloned[imageKey];
+                          localStorage.setItem('techizat_images', JSON.stringify(cloned));
+                          return cloned;
+                        });
+                        showNotification("Görsel kaldırıldı.");
+                      } else {
+                        setTempImageAction('remove');
+                        setImagePasswordInput('');
+                        setImagePasswordError(false);
+                        setShowImageSavePasswordPrompt(true);
+                      }
+                    }}
+                    onSaveImage={async (base64Data, mimeType) => {
+                      if (isImageUpdateUnlocked) {
+                        try {
+                          setIsImageUploadingToDrive(true);
+                          showNotification("Görsel Google Drive'a yükleniyor...");
+                          const driveFileName = `tech_img_${imageKey}.png`;
+                          const res = await fetch(GOOGLE_SCRIPT_URL, {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "text/plain;charset=utf-8"
+                            },
+                            body: JSON.stringify({
+                              action: "uploadPdfToDrive",
+                              fileName: driveFileName,
+                              base64Data: base64Data,
+                              mimeType: mimeType
+                            })
+                          });
+                          if (!res.ok) {
+                            throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
+                          }
+                          const result = await res.json();
+                          if (result.status === "success" && result.viewUrl) {
+                            setTechizatImages(prev => {
+                              const updated = {
+                                ...prev,
+                                [imageKey]: result.viewUrl
+                              };
+                              localStorage.setItem('techizat_images', JSON.stringify(updated));
+                              return updated;
+                            });
+                            showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                          } else {
+                            throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                          }
+                        } catch (err: any) {
+                          console.error("Yükleme Hatası:", err);
+                          showNotification(`Yükleme başarısız: ${err.message}`);
+                        } finally {
+                          setIsImageUploadingToDrive(false);
+                        }
+                      } else {
+                        setPendingImageBase64(base64Data);
+                        setPendingImageMimeType(mimeType);
+                        setTempImageAction('upload');
+                        setImagePasswordInput('');
+                        setImagePasswordError(false);
+                        setShowImageSavePasswordPrompt(true);
+                      }
+                    }}
+                    onSaveImageUrl={(url) => {
+                      if (isImageUpdateUnlocked) {
+                        setTechizatImages(prev => {
+                          const updated = {
+                            ...prev,
+                            [imageKey]: url
+                          };
+                          localStorage.setItem('techizat_images', JSON.stringify(updated));
+                          return updated;
+                        });
+                        showNotification("Görsel bağlantısı başarıyla kaydedildi!");
+                      } else {
+                        setTempImageUrlInput(url);
+                        setTempImageAction('link');
+                        setImagePasswordInput('');
+                        setImagePasswordError(false);
+                        setShowImageSavePasswordPrompt(true);
+                      }
+                    }}
+                  />
+
+                  {showImageSavePasswordPrompt && (
+                    <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text animate-fade-in">
+                      <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
+                        <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
+                        <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
+                          <Lock className="w-6 h-6" />
+                        </div>
+                        <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">GÖRSEL İŞLEM ONAYI</h4>
+                        <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
+                          {tempImageAction === 'upload' && "Görseli Google Drive'a kaydetmek için lütfen yetkili şifresini giriniz."}
+                          {tempImageAction === 'unlock_only' && "Görsel güncelleme kilidini açmak için lütfen yetkili şifresini giriniz."}
+                          {tempImageAction === 'remove' && "Görseli kaldırmak için lütfen yetkili şifresini giriniz."}
+                        </p>
+                        <input
+                          type="password"
+                          placeholder="Şifre"
+                          value={imagePasswordInput}
+                          onChange={(e) => {
+                            setImagePasswordInput(e.target.value);
+                            setImagePasswordError(false);
+                          }}
+                          onKeyDown={async (e) => {
+                            if (e.key === 'Enter') {
+                              if (imagePasswordInput === '1839') {
+                                setIsImageUpdateUnlocked(true);
+                                setImagePasswordInput('');
+                                setImagePasswordError(false);
+                                setShowImageSavePasswordPrompt(false);
+                                if (tempImageAction === 'upload' && pendingImageBase64) {
+                                  try {
+                                    setIsImageUploadingToDrive(true);
+                                    showNotification("Görsel Google Drive'a yükleniyor...");
+                                    const driveFileName = `tech_img_${imageKey}.png`;
+                                    const res = await fetch(GOOGLE_SCRIPT_URL, {
+                                      method: "POST",
+                                      headers: {
+                                        "Content-Type": "text/plain;charset=utf-8"
+                                      },
+                                      body: JSON.stringify({
+                                        action: "uploadPdfToDrive",
+                                        fileName: driveFileName,
+                                        base64Data: pendingImageBase64,
+                                        mimeType: pendingImageMimeType || "image/png"
+                                      })
+                                    });
+                                    if (!res.ok) {
+                                      throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
+                                    }
+                                    const result = await res.json();
+                                    if (result.status === "success" && result.viewUrl) {
+                                      setTechizatImages(prev => {
+                                        const updated = {
+                                          ...prev,
+                                          [imageKey]: result.viewUrl
+                                        };
+                                        localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                        return updated;
+                                      });
+                                      setPendingImageBase64(null);
+                                      setPendingImageMimeType(null);
+                                      showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                                    } else {
+                                      throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                                    }
+                                  } catch (err: any) {
+                                    console.error("Yükleme Hatası:", err);
+                                    showNotification(`Yükleme başarısız: ${err.message}`);
+                                  } finally {
+                                    setIsImageUploadingToDrive(false);
+                                  }
+                                } else if (tempImageAction === 'remove') {
+                                  setTechizatImages(prev => {
+                                    const cloned = { ...prev };
+                                    delete cloned[imageKey];
+                                    localStorage.setItem('techizat_images', JSON.stringify(cloned));
+                                    return cloned;
+                                  });
+                                  showNotification("Görsel kaldırıldı.");
+                                } else if (tempImageAction === 'unlock_only') {
+                                  showNotification("Görsel güncelleme kilidi kaldırıldı!");
+                                }
+                              } else {
+                                setImagePasswordError(true);
+                              }
+                            }
+                          }}
+                          className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
+                          autoFocus
+                        />
+                        {imagePasswordError && (
+                          <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
+                        )}
+                        <div className="flex gap-2 justify-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowImageSavePasswordPrompt(false);
+                              setImagePasswordInput('');
+                              setImagePasswordError(false);
+                              setTempImageAction(null);
+                            }}
+                            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                          >
+                            İptal
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (imagePasswordInput === '1839') {
+                                setIsImageUpdateUnlocked(true);
+                                setImagePasswordInput('');
+                                setImagePasswordError(false);
+                                setShowImageSavePasswordPrompt(false);
+                                if (tempImageAction === 'upload' && pendingImageBase64) {
+                                  try {
+                                    setIsImageUploadingToDrive(true);
+                                    showNotification("Görsel Google Drive'a yükleniyor...");
+                                    const driveFileName = `tech_img_${imageKey}.png`;
+                                    const res = await fetch(GOOGLE_SCRIPT_URL, {
+                                      method: "POST",
+                                      headers: {
+                                        "Content-Type": "text/plain;charset=utf-8"
+                                      },
+                                      body: JSON.stringify({
+                                        action: "uploadPdfToDrive",
+                                        fileName: driveFileName,
+                                        base64Data: pendingImageBase64,
+                                        mimeType: pendingImageMimeType || "image/png"
+                                      })
+                                    });
+                                    if (!res.ok) {
+                                      throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
+                                    }
+                                    const result = await res.json();
+                                    if (result.status === "success" && result.viewUrl) {
+                                      setTechizatImages(prev => {
+                                        const updated = {
+                                          ...prev,
+                                          [imageKey]: result.viewUrl
+                                        };
+                                        localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                        return updated;
+                                      });
+                                      setPendingImageBase64(null);
+                                      setPendingImageMimeType(null);
+                                      showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                                    } else {
+                                      throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                                    }
+                                  } catch (err: any) {
+                                    console.error("Yükleme Hatası:", err);
+                                    showNotification(`Yükleme başarısız: ${err.message}`);
+                                  } finally {
+                                    setIsImageUploadingToDrive(false);
+                                  }
+                                } else if (tempImageAction === 'remove') {
+                                  setTechizatImages(prev => {
+                                    const cloned = { ...prev };
+                                    delete cloned[imageKey];
+                                    localStorage.setItem('techizat_images', JSON.stringify(cloned));
+                                    return cloned;
+                                  });
+                                  showNotification("Görsel kaldırıldı.");
+                                } else if (tempImageAction === 'unlock_only') {
+                                  showNotification("Görsel güncelleme kilidi kaldırıldı!");
+                                }
+                              } else {
+                                setImagePasswordError(true);
+                              }
+                            }}
+                            className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer"
+                          >
+                            Onayla
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* OLD IMAGE STUFF CLEANED */}
+                <div className="hidden" style={{ display: 'none' }}>
+                  <div className="w-full aspect-square bg-slate-50 rounded-[2rem] border-2 border-slate-200 overflow-hidden relative flex flex-col items-center justify-center p-2 shadow-inner group">
+                    {pendingImagePreview ? (
+                      <div className="w-full h-full relative">
+                        <img
+                          src={pendingImagePreview}
+                          alt="Teçhizat Görseli Önizleme"
+                          referrerPolicy="no-referrer"
+                          style={{ transform: `scale(${techizatImageScale})` }}
+                          className="w-full h-full object-contain rounded-3xl transition-transform duration-150"
+                        />
+                        <div className="absolute top-4 left-4 bg-emerald-700 text-white text-[10px] font-black px-3 py-1.5 rounded-xl uppercase tracking-wider shadow-md animate-pulse z-20">
+                          Önizleme Aşamasında
+                        </div>
+                        {/* Zoom controls on hover */}
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                          <button
+                            type="button"
+                            onClick={() => setTechizatImageScale(prev => Math.min(prev + 0.25, 3))}
+                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
+                            title="Yakınlaştır (+)"
+                          >
+                            ＋
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTechizatImageScale(prev => Math.max(prev - 0.25, 0.5))}
+                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
+                            title="Uzaklaştır (-)"
+                          >
+                            －
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTechizatImageScale(1)}
+                            className="px-2 py-0.5 bg-white/20 hover:bg-white/40 text-white rounded-full text-[10px] font-bold cursor-pointer transition-colors"
+                            title="Sıfırla"
+                          >
+                            SIFIRLA
+                          </button>
+                        </div>
+                      </div>
+                    ) : hasImage ? (
+                      <div className="w-full h-full relative">
+                        <CachedDriveImage
+                          src={techizatImages[imageKey]}
+                          alt="Teçhizat Görseli"
+                          referrerPolicy="no-referrer"
+                          style={{ transform: `scale(${techizatImageScale})` }}
+                          className="w-full h-full object-contain rounded-3xl transition-transform duration-150"
+                        />
+                        
+                        {/* Zoom controls on hover */}
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                          <button
+                            type="button"
+                            onClick={() => setTechizatImageScale(prev => Math.min(prev + 0.25, 3))}
+                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
+                            title="Yakınlaştır (+)"
+                          >
+                            ＋
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTechizatImageScale(prev => Math.max(prev - 0.25, 0.5))}
+                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
+                            title="Uzaklaştır (-)"
+                          >
+                            －
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTechizatImageScale(1)}
+                            className="px-2 py-0.5 bg-white/20 hover:bg-white/40 text-white rounded-full text-[10px] font-bold cursor-pointer transition-colors"
+                            title="Sıfırla"
+                          >
+                            SIFIRLA
+                          </button>
+                        </div>
+
+                        {/* Top-Right Fullscreen Icon */}
+                        <button
+                          type="button"
+                          onClick={() => setIsFullScreenImage(true)}
+                          className="absolute top-4 right-4 w-10 h-10 bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white rounded-xl flex items-center justify-center shadow-lg cursor-pointer transition-all active:scale-95 z-20 border border-white/10"
+                          title="Tam Ekran Görüntüle"
+                        >
+                          <Maximize2 className="w-5 h-5 text-emerald-400" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-center p-6 text-slate-400">
+                        <span className="text-5xl mb-3 block select-none">📷</span>
+                        <p className="text-xs font-black uppercase text-slate-500 mb-1">Görsel Bulunmamaktadır</p>
+                        <p className="text-[10px] text-slate-400 leading-relaxed max-w-xs mx-auto">
+                          Bu ürün için yüklenmiş bir görsel yok. Aşağıdaki "Görsel Güncelle" butonu ile yeni görsel ekleyebilirsiniz.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action buttons under image */}
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-col gap-4 border border-slate-100 bg-slate-50/25 rounded-[2rem] p-5 animate-fade-in">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                          {isImageUpdateUnlocked ? (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                              <span className="text-emerald-800 font-extrabold text-[10px]">GÖRSEL GÜNCELLEME YETKİSİ AKTİF</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-2 h-2 rounded-full bg-slate-400" />
+                              <span className="text-slate-500 font-extrabold text-[10px]">GÖRSEL GÜNCELLEME KİLİDİ AKTİF</span>
+                            </>
+                          )}
+                        </span>
+                        <div className="flex items-center gap-3">
+                          {hasImage && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (isImageUpdateUnlocked) {
+                                  setTechizatImages(prev => {
+                                    const cloned = { ...prev };
+                                    delete cloned[imageKey];
+                                    localStorage.setItem('techizat_images', JSON.stringify(cloned));
+                                    return cloned;
+                                  });
+                                  setPendingImageFile(null);
+                                  setPendingImagePreview(null);
+                                  setTempImageUrlInput('');
+                                  showNotification("Görsel kaldırıldı.");
+                                } else {
+                                  setTempImageAction('remove');
+                                  setImagePasswordInput('');
+                                  setImagePasswordError(false);
+                                  setShowImageSavePasswordPrompt(true);
+                                }
+                              }}
+                              className="text-[10px] font-extrabold text-red-500 hover:text-red-700 hover:underline cursor-pointer flex items-center gap-1"
+                            >
+                              🗑️ Görseli Kaldır
+                            </button>
+                          )}
+                          {isImageUpdateUnlocked && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsImageUpdateUnlocked(false);
+                                setImagePasswordInput('');
+                              }}
+                              className="text-[10px] font-bold text-slate-400 hover:text-slate-600 hover:underline cursor-pointer"
+                            >
+                              Kilitle
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Drag and Drop Upload Area - Always visible */}
+                      <div className="flex flex-col gap-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                          Görsel Yükleme (Sürükle & Bırak veya Tıkla)
+                        </label>
+
+                        {isImageUploadingToDrive ? (
+                          <div className="border-2 border-dashed border-emerald-300 bg-emerald-50/20 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[140px]">
+                            <div className="w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mb-1" />
+                            <p className="text-xs font-black text-emerald-800 animate-pulse">BULUTA YÜKLENİYOR...</p>
+                            <p className="text-[10px] text-emerald-600 font-semibold">Görsel Google Drive'a kaydediliyor, lütfen bekleyiniz.</p>
+                          </div>
+                        ) : pendingImagePreview ? (
+                          <div className="border-2 border-solid border-emerald-400 bg-emerald-50/10 rounded-2xl p-4 flex flex-col gap-3 min-h-[140px] animate-fade-in">
+                            <div className="flex items-center gap-3">
+                              <img
+                                src={pendingImagePreview}
+                                alt="Seçilen Görsel"
+                                className="w-16 h-16 object-contain rounded-xl border border-emerald-200 bg-white shadow-sm"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold text-slate-800 truncate">{pendingImageFile?.name}</p>
+                                <p className="text-[10px] text-slate-400 font-semibold font-mono">
+                                  {(pendingImageFile ? pendingImageFile.size / 1024 : 0).toFixed(1)} KB
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!pendingImageFile) return;
+                                  if (isImageUpdateUnlocked) {
+                                    // Upload directly
+                                    try {
+                                      setIsImageUploadingToDrive(true);
+                                      showNotification("Görsel Google Drive'a yükleniyor...");
+                                      const base64Str = await fileToBase64(pendingImageFile);
+                                      
+                                      const extension = pendingImageFile.name.split('.').pop() || 'png';
+                                      const driveFileName = `tech_img_${imageKey}.${extension}`;
+                                      
+                                      const res = await fetch(GOOGLE_SCRIPT_URL, {
+                                        method: "POST",
+                                        headers: {
+                                          "Content-Type": "text/plain;charset=utf-8"
+                                        },
+                                        body: JSON.stringify({
+                                          action: "uploadPdfToDrive",
+                                          fileName: driveFileName,
+                                          base64Data: base64Str,
+                                          mimeType: pendingImageFile.type
+                                        })
+                                      });
+                                      
+                                      if (!res.ok) {
+                                        throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
+                                      }
+                                      
+                                      const result = await res.json();
+                                      if (result.status === "success" && result.viewUrl) {
+                                        setTechizatImages(prev => {
+                                          const updated = {
+                                            ...prev,
+                                            [imageKey]: result.viewUrl
+                                          };
+                                          localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                          return updated;
+                                        });
+                                        setPendingImageFile(null);
+                                        setPendingImagePreview(null);
+                                        setTempImageUrlInput(result.viewUrl);
+                                        showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                                      } else {
+                                        throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                                      }
+                                    } catch (err) {
+                                      console.error("Yükleme Hatası:", err);
+                                      showNotification(`Yükleme başarısız: ${err.message}`);
+                                    } finally {
+                                      setIsImageUploadingToDrive(false);
+                                    }
+                                  } else {
+                                    setTempImageAction('upload');
+                                    setImagePasswordInput('');
+                                    setImagePasswordError(false);
+                                    setShowImageSavePasswordPrompt(true);
+                                  }
+                                }}
+                                className="flex-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md text-center active:scale-95"
+                              >
+                                ☁️ BULUTA GÖNDER VE KAYDET
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPendingImageFile(null);
+                                  setPendingImagePreview(null);
+                                }}
+                                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                              >
+                                İPTAL
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              setIsDragging(true);
+                            }}
+                            onDragLeave={(e) => {
+                              e.preventDefault();
+                              setIsDragging(false);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setIsDragging(false);
+                              const file = e.dataTransfer.files?.[0];
+                              if (file && file.type.startsWith('image/')) {
+                                setPendingImageFile(file);
+                                setPendingImagePreview(URL.createObjectURL(file));
+                              }
+                            }}
+                            onClick={() => {
+                              const inputEl = document.getElementById('drag-drop-image-input');
+                              inputEl?.click();
+                            }}
+                            className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 text-center cursor-pointer transition-all min-h-[140px] ${
+                              isDragging
+                                ? 'border-emerald-500 bg-emerald-50/40 text-emerald-800 scale-[0.98]'
+                                : 'border-slate-300 hover:border-emerald-600 hover:bg-emerald-50/10 text-slate-500'
+                            }`}
+                          >
+                            <span className="text-2xl animate-bounce">📥</span>
+                            <p className="text-[10px] font-black uppercase tracking-wider text-slate-700">
+                              Görseli Sürükleyip Buraya Bırakın
+                            </p>
+                            <p className="text-[9px] text-slate-400 font-semibold leading-relaxed">
+                              veya bilgisayarınızdan seçmek için <strong>TIKLAYIN</strong>
+                            </p>
+                            <input
+                              id="drag-drop-image-input"
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  setPendingImageFile(file);
+                                  setPendingImagePreview(URL.createObjectURL(file));
+                                }
+                              }}
+                              className="hidden"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {showImageSavePasswordPrompt && (
+                      <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text animate-fade-in">
+                        <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
+                          <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
+                          <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
+                            <Lock className="w-6 h-6" />
+                          </div>
+                          <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">GÖRSEL İŞLEM ONAYI</h4>
+                          <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
+                            {tempImageAction === 'upload' && "Görseli Google Drive'a kaydetmek için lütfen yetkili şifresini giriniz."}
+                            {tempImageAction === 'link' && "Görsel bağlantısını kaydetmek için lütfen yetkili şifresini giriniz."}
+                            {tempImageAction === 'remove' && "Görseli kaldırmak için lütfen yetkili şifresini giriniz."}
+                          </p>
+                          <input
+                            type="password"
+                            placeholder="Şifre"
+                            value={imagePasswordInput}
+                            onChange={(e) => {
+                              setImagePasswordInput(e.target.value);
+                              setImagePasswordError(false);
+                            }}
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter') {
+                                if (imagePasswordInput === '1839') {
+                                  setIsImageUpdateUnlocked(true);
+                                  setImagePasswordInput('');
+                                  setImagePasswordError(false);
+                                  setShowImageSavePasswordPrompt(false);
+                                  if (tempImageAction === 'upload' && pendingImageFile) {
+                                    try {
+                                      setIsImageUploadingToDrive(true);
+                                      showNotification("Görsel Google Drive'a yükleniyor...");
+                                      const base64Str = await fileToBase64(pendingImageFile);
+                                      const extension = pendingImageFile.name.split('.').pop() || 'png';
+                                      const driveFileName = `tech_img_${imageKey}.${extension}`;
+                                      const res = await fetch(GOOGLE_SCRIPT_URL, {
+                                        method: "POST",
+                                        headers: {
+                                          "Content-Type": "text/plain;charset=utf-8"
+                                        },
+                                        body: JSON.stringify({
+                                          action: "uploadPdfToDrive",
+                                          fileName: driveFileName,
+                                          base64Data: base64Str,
+                                          mimeType: pendingImageFile.type
+                                        })
+                                      });
+                                      if (!res.ok) {
+                                        throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
+                                      }
+                                      const result = await res.json();
+                                      if (result.status === "success" && result.viewUrl) {
+                                        setTechizatImages(prev => {
+                                          const updated = {
+                                            ...prev,
+                                            [imageKey]: result.viewUrl
+                                          };
+                                          localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                          return updated;
+                                        });
+                                        setPendingImageFile(null);
+                                        setPendingImagePreview(null);
+                                        setTempImageUrlInput(result.viewUrl);
+                                        showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                                      } else {
+                                        throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                                      }
+                                    } catch (err) {
+                                      console.error("Yükleme Hatası:", err);
+                                      showNotification(`Yükleme başarısız: ${err.message}`);
+                                    } finally {
+                                      setIsImageUploadingToDrive(false);
+                                    }
+                                  } else if (tempImageAction === 'link') {
+                                    setTechizatImages(prev => {
+                                      const updated = {
+                                        ...prev,
+                                        [imageKey]: tempImageUrlInput
+                                      };
+                                      localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                      return updated;
+                                    });
+                                    showNotification("Görsel bağlantısı kaydedildi.");
+                                  } else if (tempImageAction === 'remove') {
+                                    setTechizatImages(prev => {
+                                      const cloned = { ...prev };
+                                      delete cloned[imageKey];
+                                      localStorage.setItem('techizat_images', JSON.stringify(cloned));
+                                      return cloned;
+                                    });
+                                    setPendingImageFile(null);
+                                    setPendingImagePreview(null);
+                                    setTempImageUrlInput('');
+                                    showNotification("Görsel kaldırıldı.");
+                                  }
+                                } else {
+                                  setImagePasswordError(true);
+                                }
+                              }
+                            }}
+                            className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
+                            autoFocus
+                          />
+                          {imagePasswordError && (
+                            <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
+                          )}
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowImageSavePasswordPrompt(false);
+                                setImagePasswordInput('');
+                                setImagePasswordError(false);
+                                setTempImageAction(null);
+                              }}
+                              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                            >
+                              İptal
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (imagePasswordInput === '1839') {
+                                  setIsImageUpdateUnlocked(true);
+                                  setImagePasswordInput('');
+                                  setImagePasswordError(false);
+                                  setShowImageSavePasswordPrompt(false);
+                                  if (tempImageAction === 'upload' && pendingImageFile) {
+                                    try {
+                                      setIsImageUploadingToDrive(true);
+                                      showNotification("Görsel Google Drive'a yükleniyor...");
+                                      const base64Str = await fileToBase64(pendingImageFile);
+                                      const extension = pendingImageFile.name.split('.').pop() || 'png';
+                                      const driveFileName = `tech_img_${imageKey}.${extension}`;
+                                      const res = await fetch(GOOGLE_SCRIPT_URL, {
+                                        method: "POST",
+                                        headers: {
+                                          "Content-Type": "text/plain;charset=utf-8"
+                                        },
+                                        body: JSON.stringify({
+                                          action: "uploadPdfToDrive",
+                                          fileName: driveFileName,
+                                          base64Data: base64Str,
+                                          mimeType: pendingImageFile.type
+                                        })
+                                      });
+                                      if (!res.ok) {
+                                        throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
+                                      }
+                                      const result = await res.json();
+                                      if (result.status === "success" && result.viewUrl) {
+                                        setTechizatImages(prev => {
+                                          const updated = {
+                                            ...prev,
+                                            [imageKey]: result.viewUrl
+                                          };
+                                          localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                          return updated;
+                                        });
+                                        setPendingImageFile(null);
+                                        setPendingImagePreview(null);
+                                        setTempImageUrlInput(result.viewUrl);
+                                        showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                                      } else {
+                                        throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                                      }
+                                    } catch (err) {
+                                      console.error("Yükleme Hatası:", err);
+                                      showNotification(`Yükleme başarısız: ${err.message}`);
+                                    } finally {
+                                      setIsImageUploadingToDrive(false);
+                                    }
+                                  } else if (tempImageAction === 'link') {
+                                    setTechizatImages(prev => {
+                                      const updated = {
+                                        ...prev,
+                                        [imageKey]: tempImageUrlInput
+                                      };
+                                      localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                      return updated;
+                                    });
+                                    showNotification("Görsel bağlantısı kaydedildi.");
+                                  } else if (tempImageAction === 'remove') {
+                                    setTechizatImages(prev => {
+                                      const cloned = { ...prev };
+                                      delete cloned[imageKey];
+                                      localStorage.setItem('techizat_images', JSON.stringify(cloned));
+                                      return cloned;
+                                    });
+                                    setPendingImageFile(null);
+                                    setPendingImagePreview(null);
+                                    setTempImageUrlInput('');
+                                    showNotification("Görsel kaldırıldı.");
+                                  }
+                                } else {
+                                  setImagePasswordError(true);
+                                }
+                              }}
+                              className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer"
+                            >
+                              Onayla
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* Fullscreen view modal overlay inside */}
+              {isFullScreenImage && hasImage && (
+                <div 
+                  className="fixed inset-0 bg-black/95 z-[3000] flex items-center justify-center p-6 animate-fade-in animate-duration-150"
+                  title="Geri dönmek için X butonuna veya dışarıya tıklayabilirsiniz"
+                >
+                  {/* Click overlay helper */}
+                  <div className="absolute inset-0 cursor-zoom-out" onClick={() => setIsFullScreenImage(false)} />
+                  
+                  <CachedDriveImage
+                    src={techizatImages[imageKey]}
+                    alt="Tam Ekran Görsel"
+                    referrerPolicy="no-referrer"
+                    className="max-w-full max-h-full object-contain rounded-xl select-none relative z-10"
+                  />
+                  
+                  {/* Close X Button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsFullScreenImage(false)}
+                    className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 hover:scale-105 active:scale-95 text-white rounded-full flex items-center justify-center shadow-xl cursor-pointer transition-all z-20 border border-white/10"
+                    title="Kapat"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </AnimatePresence>
+
+      {/* EBYS DÜZENLE / GÖNDER TOPLU İŞLEM MODALİ */}
+      <AnimatePresence>
+        {isEbysModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md flex items-center justify-center z-[2100] p-4 select-text animate-fade-in overflow-y-auto">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white border-2 border-slate-200/50 rounded-[2.5rem] shadow-2xl max-w-4xl w-full p-6 md:p-8 relative overflow-hidden my-8"
+            >
+              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-[#0b3d1d] to-[#125c2c]"></div>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEbysModalOpen(false);
+                  setBulkModalMode('choice');
+                  setBulkEditYer("");
+                  setBulkEditDurum("");
+                  setBulkEditFirma("");
+                }}
+                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-50 z-10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {bulkModalMode === 'choice' && (
+                <div className="text-center py-6">
+                  <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
+                    <Sparkles className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-wider">TEÇHİZAT TOPLU İŞLEM MERKEZİ</h3>
+                  <p className="text-xs text-slate-400 font-semibold mt-1 mb-8">
+                    Seçtiğiniz <strong>{Object.keys(selectedTechizatItems).length} adet</strong> teçhizat üzerinde uygulamak istediğiniz işlemi seçiniz.
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-2xl mx-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkModalMode('edit');
+                      }}
+                      className="border-2 border-slate-200/60 hover:border-[#0b3d1d] hover:bg-slate-50/50 p-6 rounded-3xl text-left transition-all duration-250 cursor-pointer hover:shadow-lg flex flex-col gap-3 group"
+                    >
+                      <div className="w-10 h-10 bg-slate-100 group-hover:bg-emerald-50 text-slate-600 group-hover:text-[#0b3d1d] rounded-xl flex items-center justify-center transition-colors">
+                        <Edit3 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">Toplu Düzenle</h4>
+                        <p className="text-[11px] text-slate-400 font-semibold mt-1 leading-relaxed">
+                          Seçilen özel teçhizatların "BULUNDUĞU YER", "DURUMU" ve "SON KONTROLÜ YAPAN FİRMA" verilerini toplu olarak düzenleyin. (Onay Şifresi: 1839)
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkModalMode('send');
+                        fetchTasklineEbysList();
+                      }}
+                      className="border-2 border-slate-200/60 hover:border-[#0b3d1d] hover:bg-slate-50/50 p-6 rounded-3xl text-left transition-all duration-250 cursor-pointer hover:shadow-lg flex flex-col gap-3 group"
+                    >
+                      <div className="w-10 h-10 bg-slate-100 group-hover:bg-emerald-50 text-slate-600 group-hover:text-[#0b3d1d] rounded-xl flex items-center justify-center transition-colors">
+                        <Send className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">Görevline'a Gönder</h4>
+                        <p className="text-[11px] text-slate-400 font-semibold mt-1 leading-relaxed">
+                          Seçili teçhizatları EBYS numarası ile eşleştirerek online sisteme gönderin ve durumlarını "BAKIM / KALİBRASYON" yapın.
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {bulkModalMode === 'edit' && (
+                <div>
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-700">
+                      <Edit3 className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-800 uppercase tracking-wider">TOPLU VERİ GÜNCELLEME</h3>
+                      <p className="text-[11px] text-slate-400 font-semibold mt-0.5">
+                        Seçilen <strong>{Object.keys(selectedTechizatItems).length}</strong> teçhizatın boş bırakmadığınız alanları ortak değerle güncellenecektir.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 text-left">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Yeni Bulunduğu Yer</label>
+                      <input
+                        type="text"
+                        placeholder="Değiştirmek istemiyorsanız boş bırakın"
+                        value={bulkEditYer}
+                        onChange={(e) => setBulkEditYer(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none"
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Yeni Durumu</label>
+                      <input
+                        type="text"
+                        placeholder="Değiştirmek istemiyorsanız boş bırakın"
+                        value={bulkEditDurum}
+                        onChange={(e) => setBulkEditDurum(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none"
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Yeni Son Kontrolü Yapan Firma</label>
+                      <input
+                        type="text"
+                        placeholder="Değiştirmek istemiyorsanız boş bırakın"
+                        value={bulkEditFirma}
+                        onChange={(e) => setBulkEditFirma(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl mb-6 max-h-[160px] overflow-y-auto">
+                    <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">Güncellenecek Teçhizatlar ({Object.keys(selectedTechizatItems).length})</h5>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.values(selectedTechizatItems).map((item: any, i) => (
+                        <span key={`${item.techType}-${item.row[1] || ""}-${item.row[3] || ""}-${i}`} className="text-[10px] font-bold text-[#0b3d1d] bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100">
+                          {item.row[1] || "Bilinmiyor"}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 justify-end border-t border-slate-100 pt-5">
+                    <button
+                      type="button"
+                      onClick={() => setBulkModalMode('choice')}
+                      className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-2xl transition-colors cursor-pointer"
+                    >
+                      Geri Dön
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bulkEditYer.trim() === "" && bulkEditDurum.trim() === "" && bulkEditFirma.trim() === ""}
+                      onClick={() => {
+                        setBulkEditPasswordInput("");
+                        setBulkEditPasswordError(false);
+                        setShowBulkEditPasswordPrompt(true);
+                      }}
+                      className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-widest rounded-2xl shadow-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Topluca Güncelle
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {bulkModalMode === 'send' && (
+                <div className="text-left">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-700">
+                      <Send className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-800 uppercase tracking-wider">EBYS GÖREVLİNE SİSTEMİNE GÖNDER</h3>
+                      <p className="text-[11px] text-slate-400 font-semibold mt-0.5">
+                        Seçilen teçhizatları ilgili birimin EBYS görev satırı kaydı ile eşleştirerek Görevline Excel'e gönderin.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* EBYS Autocomplete / Search input */}
+                  <div className="flex flex-col gap-1.5 mb-5 relative">
+                    <label className="text-[10px] font-black text-[#0b3d1d] uppercase tracking-wider">EBYS No / İşlem Numarası Yazın</label>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          placeholder="EBYS No veya Başlık aramak için yazın..."
+                          value={ebysSearchQuery}
+                          onChange={(e) => {
+                            setEbysSearchQuery(e.target.value);
+                            setSelectedEbysRow(null);
+                            setIsEbysSelectDropdownOpen(true);
+                          }}
+                          onFocus={() => setIsEbysSelectDropdownOpen(true)}
+                          className="w-full px-4 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 focus:border-[#0b3d1d] rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
+                        />
+                        {ebysSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEbysSearchQuery("");
+                              setSelectedEbysRow(null);
+                              setEbysBaslik("");
+                              setEbysAciklama("");
+                              setEbysTalepTuru("");
+                            }}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[10px] font-black"
+                          >
+                            TEMİZLE
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Suggestions list */}
+                    {isEbysSelectDropdownOpen && !selectedEbysRow && (
+                      <div className="absolute top-[100%] left-0 right-0 bg-white border border-slate-200/80 rounded-2xl shadow-xl max-h-56 overflow-y-auto z-50 mt-1 select-text">
+                        {isLoadingEbys ? (
+                          <p className="p-4 text-xs text-slate-400 font-semibold flex items-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin text-[#0b3d1d]" />
+                            <span>EBYS listesi yükleniyor...</span>
+                          </p>
+                        ) : ebysError ? (
+                          <div className="p-4 text-xs text-rose-600 font-medium select-text">
+                            <p className="font-bold text-rose-700 mb-1">Bağlantı/Script Hatası:</p>
+                            <p className="text-slate-600 leading-relaxed font-mono text-[11px] bg-rose-50/50 p-2 rounded-lg border border-rose-100/60 mb-2">{ebysError}</p>
+                            <p className="text-slate-500 leading-relaxed">
+                              Lütfen Google Apps Script projenizin doğru çalıştığından ve web uygulaması izinlerinin "Anyone" (Herkes) olarak ayarlandığından emin olun.
+                            </p>
+                          </div>
+                        ) : (() => {
+                          const normalize = (str: string) => {
+                            return String(str || "")
+                              .toLowerCase()
+                              .replace(/ı/g, 'i')
+                              .replace(/ğ/g, 'g')
+                              .replace(/ü/g, 'u')
+                              .replace(/ş/g, 's')
+                              .replace(/ö/g, 'o')
+                              .replace(/ç/g, 'c')
+                              .replace(/[^a-z0-9]/g, '');
+                          };
+                          const query = normalize(ebysSearchQuery);
+                          const filtered = ebysList.filter(item => {
+                            const parsed = parseEbysItem(item);
+                            if (!parsed) return false;
+                            const no = normalize(parsed.ebysNo);
+                            if (!no || no === "na") return false;
+                            const baslik = normalize(parsed.baslik);
+                            return no.includes(query) || baslik.includes(query);
+                          });
+
+                          if (filtered.length === 0) {
+                            return <p className="p-4 text-xs text-slate-400 font-semibold">Sonuç bulunamadı.</p>;
+                          }
+
+                          return filtered.map((item, idx) => {
+                            const parsed = parseEbysItem(item);
+                            if (!parsed) return null;
+                            const ebysNo = parsed.ebysNo;
+                            const baslik = parsed.baslik;
+                            const aciklama = parsed.aciklama;
+                            const tur = parsed.talepTuru;
+
+                            return (
+                              <div
+                                key={`${ebysNo}-${idx}`}
+                                onClick={() => {
+                                  setSelectedEbysRow(item);
+                                  setEbysSearchQuery(ebysNo);
+                                  setEbysBaslik(baslik);
+                                  setEbysAciklama(aciklama);
+                                  setEbysTalepTuru(tur);
+                                  setIsEbysSelectDropdownOpen(false);
+                                }}
+                                className="p-3 hover:bg-emerald-50/50 border-b border-slate-50 last:border-b-0 cursor-pointer transition-colors text-left"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-black text-[#0b3d1d]">{ebysNo}</span>
+                                  <span className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 px-2 py-0.5 rounded-full">{tur}</span>
+                                </div>
+                                <h6 className="text-[11px] font-extrabold text-slate-800 mt-0.5 leading-tight">{baslik}</h6>
+                                <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">{aciklama}</p>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Render Selected EBYS Request Details Card */}
+                  {selectedEbysRow && (
+                    <div className="bg-emerald-50/40 border border-emerald-100/60 p-4 rounded-3xl mb-5 text-left animate-fade-in select-text">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest bg-emerald-100/80 px-2.5 py-1 rounded-lg">SEÇİLİ EBYS TALEBİ</span>
+                          <h4 className="text-sm font-black text-[#0b3d1d] mt-2">{ebysSearchQuery}</h4>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedEbysRow(null);
+                            setEbysSearchQuery("");
+                            setEbysBaslik("");
+                            setEbysAciklama("");
+                            setEbysTalepTuru("");
+                          }}
+                          className="text-[10px] font-black text-red-600 hover:text-red-700 hover:underline cursor-pointer"
+                        >
+                          Temizle / Değiştir
+                        </button>
+                      </div>
+                      <div className="mt-3 space-y-1 text-xs">
+                        <p className="text-slate-700"><strong>📋 Başlık:</strong> {ebysBaslik || "-"}</p>
+                        <p className="text-slate-700"><strong>📝 Açıklama:</strong> {ebysAciklama || "-"}</p>
+                        <p className="text-slate-700"><strong>🏷️ Talep Türü:</strong> {ebysTalepTuru || "-"}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Scrollable list of Teçhizat items */}
+                  <div className="bg-slate-50 border border-slate-100 p-4 rounded-3xl mb-6">
+                    <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">GÖNDERİLECEK TEÇHİZAT LİSTESİ ({Object.keys(selectedTechizatItems).length})</h5>
+                    <div className="max-h-[160px] overflow-y-auto space-y-2">
+                      {Object.values(selectedTechizatItems).map((item: any, i) => (
+                        <div key={`${item.techType}-${item.row[1] || ""}-${item.row[3] || ""}-${i}`} className="bg-white border border-slate-150 p-2.5 rounded-xl flex justify-between items-center text-xs">
+                          <div>
+                            <p className="font-extrabold text-slate-800">{item.row[1] || "Bilinmiyor"}</p>
+                            <p className="text-[10px] text-slate-400 font-semibold">P/N: {item.row[2] || "N/A"} • S/N: {item.row[3] || "N/A"}</p>
+                          </div>
+                          <span className="text-[10px] font-black text-[#0b3d1d] bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
+                            {getTechUnitName(item.techType)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 justify-end border-t border-slate-100 pt-5">
+                    <button
+                      type="button"
+                      onClick={() => setBulkModalMode('choice')}
+                      className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-2xl transition-colors cursor-pointer"
+                    >
+                      Geri Dön
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!selectedEbysRow || isBulkSaving}
+                      onClick={submitEbysRequests}
+                      className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-widest rounded-2xl shadow-lg transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isBulkSaving ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          <span>GÖNDERİLİYOR...</span>
+                        </>
+                      ) : (
+                        <span>Sisteme Gönder</span>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* TOPLU DÜZENLEME ŞİFRE MODALİ */}
+      <AnimatePresence>
+        {showBulkEditPasswordPrompt && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text">
+            <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden animate-fade-in">
+              <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
+              <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
+                <Lock className="w-6 h-6" />
+              </div>
+              <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">TOPLU İŞLEM DEĞİŞİKLİK ONAYI</h4>
+              <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
+                Toplu kayıt değişikliğini onaylamak için lütfen yetkili şifresini giriniz.
+              </p>
+              <input
+                type="password"
+                placeholder="Şifre"
+                value={bulkEditPasswordInput}
+                onChange={(e) => {
+                  setBulkEditPasswordInput(e.target.value);
+                  setBulkEditPasswordError(false);
+                }}
+                onKeyDown={async (e) => {
+                  if (e.key === 'Enter') {
+                    if (bulkEditPasswordInput === '1839') {
+                      setShowBulkEditPasswordPrompt(false);
+                      setBulkEditPasswordInput('');
+                      setBulkEditPasswordError(false);
+                      await handleBulkEditTechizatRows();
+                    } else {
+                      setBulkEditPasswordError(true);
+                    }
+                  }
+                }}
+                className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
+                autoFocus
+              />
+              {bulkEditPasswordError && (
+                <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı yetkili şifresi girdiniz!</p>
+              )}
+              <div className="flex gap-2 justify-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowBulkEditPasswordPrompt(false);
+                    setBulkEditPasswordInput('');
+                    setBulkEditPasswordError(false);
+                  }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  İptal
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (bulkEditPasswordInput === '1839') {
+                      setShowBulkEditPasswordPrompt(false);
+                      setBulkEditPasswordInput('');
+                      setBulkEditPasswordError(false);
+                      await handleBulkEditTechizatRows();
+                    } else {
+                      setBulkEditPasswordError(true);
+                    }
+                  }}
+                  className="px-5 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                >
+                  Onayla
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* 5. GÜN TAKİP SORUMLU BİRİM AYARLARI MODALİ */}
       <AnimatePresence>
         {isSorumluModalOpen && (
@@ -6314,20 +10310,18 @@ export default function App() {
               </div>
 
               <p className="text-xs text-slate-500 font-semibold leading-relaxed mb-6 text-left border-b border-slate-100 pb-4">
-                TÜM TEÇHİZAT sayfasındaki teçhizatların Gelecek Bakım günlerine 90, 60 veya 30 gün kala sistem tarafından otomatik e-posta hatırlatması gönderilecek birim yetkililerini ve mail adreslerini buradan güncelleyebilirsiniz. Değişiklikler canlı "GÜN TAKİP" e-tablosuyla eşleşecektir.
+                TÜM TEÇHİZAT sayfasındaki teçhizatların Gelecek Bakım günlerine 90 günden az kalması durumunda sistem tarafından otomatik e-posta uyarısı hatırlatması gönderilecek birim yetkililerini ve mail adreslerini buradan güncelleyebilirsiniz. Değişiklikler canlı "GÜN TAKİP" e-tablosuyla eşleşecektir.
               </p>
 
               {/* Sorumlular Düzenleme Listesi */}
               <div className="overflow-x-auto max-h-[45vh] border border-slate-200 rounded-3xl mb-6 shadow-inner">
-                <table className="w-full border-collapse text-left min-w-[800px]">
+                <table className="w-full border-collapse text-left min-w-[650px]">
                   <thead>
                     <tr className="bg-slate-900 border-b border-slate-800">
-                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[20%] border-r border-slate-800">SORUMLU BİRİM</th>
-                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[25%] border-r border-slate-800">ADI SOYADI</th>
-                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[25%] border-r border-slate-800">E-POSTA ADRESİ</th>
-                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-green-400 uppercase font-mono w-[10%] border-r border-slate-800">SON 90G MAİL</th>
-                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-orange-400 uppercase font-mono w-[10%] border-r border-slate-800">SON 60G MAİL</th>
-                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-red-400 uppercase font-mono w-[10%]">SON 30G MAİL</th>
+                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[25%] border-r border-slate-800">SORUMLU BİRİM</th>
+                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[30%] border-r border-slate-800">ADI SOYADI</th>
+                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[30%] border-r border-slate-800">E-POSTA ADRESİ</th>
+                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-green-400 uppercase font-mono w-[15%]">SON 90G MAİL</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -6362,23 +10356,9 @@ export default function App() {
                             placeholder="eposta@adres.com"
                           />
                         </td>
-                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 border-r border-slate-100 bg-green-50/20">
+                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 bg-green-50/20">
                           {item.mail90 ? (
                             <span className="text-emerald-700 bg-emerald-100/60 px-2 py-0.5 rounded-md font-bold block">{item.mail90}</span>
-                          ) : (
-                            <span className="text-slate-400 italic font-medium">-</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 border-r border-slate-100 bg-orange-50/20">
-                          {item.mail60 ? (
-                            <span className="text-orange-700 bg-orange-100/60 px-2 py-0.5 rounded-md font-bold block">{item.mail60}</span>
-                          ) : (
-                            <span className="text-slate-400 italic font-medium">-</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 bg-red-50/20">
-                          {item.mail30 ? (
-                            <span className="text-red-700 bg-red-100/60 px-2 py-0.5 rounded-md font-bold block">{item.mail30}</span>
                           ) : (
                             <span className="text-slate-400 italic font-medium">-</span>
                           )}

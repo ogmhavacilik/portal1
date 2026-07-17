@@ -14,10 +14,40 @@ body {
   color: white;
 }
 
-/* Başlıklar ve Metinler imleç ile seçilebilir olsun (Copy için) */
-h1, h2, h3, h4, h5, h6, p, span, li, td, th {
+/* Her şey imleç ile seçilebilir ve kopyalanabilir olsun */
+* {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Girdi alanlarında seçim ve yazma engellerini kaldır */
+input, select, textarea {
   user-select: text !important;
   -webkit-user-select: text !important;
+}
+
+/* Butonlar ve görseller sürüklenirken seçilmesin */
+button, svg, img {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Tablo hücrelerindeki metinlerin seçilebilir olması ve yazı imleci (sağ tık ve seçim için) */
+td, th, .select-text {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text !important;
+}
+
+/* Özelleştirilmiş Seçim Vurgusu (Her arka planda görünecek şekilde) */
+::selection {
+  background-color: rgba(16, 185, 129, 0.3) !important; /* Emerald-500 %30 şeffaflık */
+  color: inherit !important;
+}
+
+::-moz-selection {
+  background-color: rgba(16, 185, 129, 0.3) !important;
+  color: inherit !important;
 }
 
 /* Cam Efekti Kartlar ve Butonlar */
