@@ -77,8 +77,10 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
   const [aiBgCleanChecked, setAiBgCleanChecked] = useState<boolean>(true);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [urlInput, setUrlInput] = useState<string>('');
-  const [removalMode, setRemovalMode] = useState<'photoroom' | 'local_ai'>('photoroom');
+  const [removalMode, setRemovalMode] = useState<'photoroom' | 'local_ai'>('local_ai');
   const [photoRoomProcessedFile, setPhotoRoomProcessedFile] = useState<File | null>(null);
+  const [localAiThreshold, setLocalAiThreshold] = useState<number>(45);
+  const [localAiBgType, setLocalAiBgType] = useState<'transparent' | 'white'>('white');
 
   useEffect(() => {
     setUrlInput(currentImageUrl && !currentImageUrl.startsWith('data:') ? currentImageUrl : '');
@@ -136,7 +138,7 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
       // Only auto trigger simulated AI background removal if local_ai is active
       if (removalMode === 'local_ai') {
         if (aiBgCleanChecked) {
-          runAIBackgroundRemoval(url);
+          runAIBackgroundRemoval(url, localAiThreshold, localAiBgType, false);
         } else {
           setProcessedSrc(url);
         }
@@ -153,12 +155,27 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
     }
   }, [photoRoomProcessedFile]);
 
+  // Trigger instant background removal when sliders change
+  const handleThresholdChange = (val: number) => {
+    setLocalAiThreshold(val);
+    if (originalSrc && removalMode === 'local_ai') {
+      runAIBackgroundRemoval(originalSrc, val, localAiBgType, true);
+    }
+  };
+
+  const handleBgTypeChange = (val: 'transparent' | 'white') => {
+    setLocalAiBgType(val);
+    if (originalSrc && removalMode === 'local_ai') {
+      runAIBackgroundRemoval(originalSrc, localAiThreshold, val, true);
+    }
+  };
+
   // Handle auto-cleansing when checkbox is toggled with an existing image
   const handleBgCleanToggle = (checked: boolean) => {
     setAiBgCleanChecked(checked);
     if (originalSrc) {
       if (checked) {
-        runAIBackgroundRemoval(originalSrc);
+        runAIBackgroundRemoval(originalSrc, localAiThreshold, localAiBgType, false);
       } else {
         setProcessedSrc(originalSrc);
       }
@@ -166,11 +183,12 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
   };
 
   // Run AI center-weighted background removal algorithm
-  const runAIBackgroundRemoval = (src: string) => {
-    setIsProcessing(true);
+  const runAIBackgroundRemoval = (src: string, thresholdVal: number = localAiThreshold, bgTypeVal: 'transparent' | 'white' = localAiBgType, isInstant: boolean = false) => {
+    if (!isInstant) {
+      setIsProcessing(true);
+    }
     
-    // Simulate Lens scanning overlay animation for high-fidelity experience
-    setTimeout(() => {
+    const processImage = () => {
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.onload = () => {
@@ -206,8 +224,6 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
         const centerY = height / 2;
         const maxDist = Math.sqrt(centerX * centerX + centerY * centerY);
 
-        const threshold = 48; // balanced sensitivity threshold
-
         for (let i = 0; i < data.length; i += 4) {
           const r = data[i];
           const g = data[i+1];
@@ -221,14 +237,19 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
           const distFromCenter = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
           const ratio = distFromCenter / maxDist; // 0 at center, 1 at edges
 
-          const adaptiveThreshold = threshold * (0.35 + 0.65 * ratio);
+          const adaptiveThreshold = thresholdVal * (0.35 + 0.65 * ratio);
 
           const colorDist = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
 
           if (colorDist < adaptiveThreshold) {
-            data[i] = 255;   // Pure White
-            data[i+1] = 255;
-            data[i+2] = 255;
+            if (bgTypeVal === 'transparent') {
+              data[i+3] = 0; // Fully transparent alpha
+            } else {
+              data[i] = 255;   // Pure White
+              data[i+1] = 255;
+              data[i+2] = 255;
+              data[i+3] = 255;
+            }
           }
         }
 
@@ -242,7 +263,13 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
         setIsProcessing(false);
       };
       img.src = src;
-    }, 1200);
+    };
+
+    if (isInstant) {
+      processImage();
+    } else {
+      setTimeout(processImage, 1200);
+    }
   };
 
   // Initialize the Retouching Canvas with processed or original image
@@ -256,14 +283,17 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
         canvas.width = img.naturalWidth || 600;
         canvas.height = img.naturalHeight || 600;
         if (ctx) {
-          ctx.fillStyle = '#FFFFFF';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          if (localAiBgType === 'white') {
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+          }
           ctx.drawImage(img, 0, 0);
         }
       };
       img.src = processedSrc;
     }
-  }, [isRetouchingActive, processedSrc]);
+  }, [isRetouchingActive, processedSrc, localAiBgType]);
 
   // Touch & Mouse Event Handlers for Canvas Drawing
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -306,10 +336,14 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
 
     ctx.save();
     if (retouchTool === 'brush') {
-      // White Paint Eraser tool
       ctx.beginPath();
       ctx.arc(x, y, brushSize, 0, Math.PI * 2);
-      ctx.fillStyle = '#FFFFFF';
+      if (localAiBgType === 'transparent') {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(0,0,0,1)';
+      } else {
+        ctx.fillStyle = '#FFFFFF';
+      }
       ctx.fill();
     } else {
       // Restore pixels from original image
@@ -480,20 +514,22 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
                 </div>
               </div>
 
-              {/* Right Pane: PhotoRoom Portal (Iframe) */}
-              <div className="border-2 border-dashed border-slate-200 bg-slate-50 rounded-2xl overflow-hidden flex flex-col h-full min-h-[320px]">
-                {/* Embedded Web Frame */}
-                <div className="flex-1 w-full relative h-full">
-                  <iframe
-                    src="https://www.photoroom.com/tr/tools/background-remover"
-                    title="PhotoRoom Background Remover"
-                    className="w-full h-full border-none"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                  />
+              {/* Right Pane: PhotoRoom Portal (Iframe) - Cropped to focus on the upload container */}
+              <div className="border-2 border-dashed border-slate-200 bg-slate-50 rounded-2xl overflow-hidden flex flex-col h-full min-h-[340px]">
+                {/* Embedded Web Frame - Offset-cropped for optimal centering of PhotoRoom upload dropzone */}
+                <div className="flex-1 w-full relative h-[260px] overflow-hidden bg-white">
+                  <div className="absolute w-[100%] h-[155%] -top-[95px] left-0 scale-100 origin-top">
+                    <iframe
+                      src="https://www.photoroom.com/tr/tools/background-remover"
+                      title="PhotoRoom Background Remover"
+                      className="w-full h-full border-none"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                    />
+                  </div>
                 </div>
-                <div className="bg-slate-100 p-2 border-t border-slate-200/60 flex justify-between items-center px-4">
-                  <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">
-                    PhotoRoom.com Web Portalı
+                <div className="bg-slate-100 p-2.5 border-t border-slate-200/60 flex justify-between items-center px-4">
+                  <span className="text-[9px] font-black text-[#0b3d1d] uppercase tracking-wider flex items-center gap-1">
+                    🎯 PhotoRoom Yükleme Bölgesi
                   </span>
                   <a
                     href="https://www.photoroom.com/tr/tools/background-remover"
@@ -782,7 +818,7 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
                   type="button"
                   onClick={() => {
                     setRemovalMode('local_ai');
-                    runAIBackgroundRemoval(originalSrc);
+                    runAIBackgroundRemoval(originalSrc, localAiThreshold, localAiBgType, false);
                   }}
                   className={`py-2 px-3 text-[10px] font-black uppercase rounded-xl border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                     removalMode === 'local_ai'
@@ -797,19 +833,74 @@ export const ImageEditorAndRetoucher: React.FC<ImageEditorAndRetoucherProps> = (
             </div>
 
             {removalMode === 'local_ai' && (
-              <div className="flex items-center justify-between border-t border-emerald-100/50 pt-2.5">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input 
-                    type="checkbox"
-                    checked={aiBgCleanChecked}
-                    onChange={(e) => handleBgCleanToggle(e.target.checked)}
-                    className="w-4 h-4 accent-emerald-600 rounded"
-                  />
-                  <span className="text-[11px] font-black text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-emerald-600 animate-pulse" />
-                    Google Lens Teknolojisi ile Parçayı Tespit Et ve Arka Planı Temizle (Beyaz Yap)
-                  </span>
-                </label>
+              <div className="flex flex-col gap-3.5 border-t border-emerald-100/50 pt-3">
+                {/* Auto Detection / Lens Checkbox */}
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input 
+                      type="checkbox"
+                      checked={aiBgCleanChecked}
+                      onChange={(e) => handleBgCleanToggle(e.target.checked)}
+                      className="w-4 h-4 accent-emerald-600 rounded"
+                    />
+                    <span className="text-[11px] font-black text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-emerald-600 animate-pulse" />
+                      Yapay Zeka Arka Plan Temizleyici Aktif
+                    </span>
+                  </label>
+                </div>
+
+                {aiBgCleanChecked && (
+                  <div className="flex flex-col gap-3.5 bg-white/60 p-3.5 rounded-xl border border-emerald-100/40">
+                    {/* Sensitivity (Threshold) Slider */}
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-wider text-slate-500">
+                        <span>Hassasiyet (Eşik Değeri)</span>
+                        <span className="font-mono text-emerald-800">{localAiThreshold}</span>
+                      </div>
+                      <input 
+                        type="range"
+                        min="10"
+                        max="110"
+                        value={localAiThreshold}
+                        onChange={(e) => handleThresholdChange(Number(e.target.value))}
+                        className="w-full h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-700"
+                      />
+                      <span className="text-[9px] text-slate-400 font-medium leading-tight">
+                        Arka plandaki gölgeleri ve benzer renkleri silmek için hassasiyeti artırabilirsiniz.
+                      </span>
+                    </div>
+
+                    {/* Background Color Mode Toggle */}
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-0.5">Arka Plan Tarzı</span>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleBgTypeChange('white')}
+                          className={`py-1.5 px-2.5 text-[9px] font-black uppercase rounded-lg border transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                            localAiBgType === 'white'
+                              ? 'bg-emerald-800 border-emerald-800 text-white shadow-sm'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          ⬜ Temiz Beyaz
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleBgTypeChange('transparent')}
+                          className={`py-1.5 px-2.5 text-[9px] font-black uppercase rounded-lg border transition-all cursor-pointer flex items-center justify-center gap-1 ${
+                            localAiBgType === 'transparent'
+                              ? 'bg-emerald-800 border-emerald-800 text-white shadow-sm'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          🏁 Şeffaf (PNG)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

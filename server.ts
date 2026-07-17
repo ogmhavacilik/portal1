@@ -66,6 +66,51 @@ async function startServer() {
     }
   });
 
+  // API Route: Taskline Submit Proxy
+  app.post("/api/taskline-submit", async (req, res) => {
+    try {
+      const { ebysNo, data, scriptUrl } = req.body;
+      
+      const targetUrl = scriptUrl || "https://script.google.com/macros/s/AKfycbsqDITjd3ZddAvRKQhpNF3ymQncNfzgC0IHCvm-rUi/exec";
+      // Ensure we target the production /exec deployment if the user accidentally copied the /dev URL
+      const finalUrl = targetUrl.replace(/\/dev$/, "/exec");
+      
+      console.log(`[Proxy Taskline Submit] Posting to ${finalUrl} with EBYS: ${ebysNo}`);
+      
+      const response = await fetch(finalUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8"
+        },
+        body: JSON.stringify({
+          action: "appendEbysTable",
+          ebysNo: ebysNo,
+          data: data
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Google Apps Script returned status: ${response.status}`);
+      }
+
+      const responseText = await response.text();
+      console.log(`[Proxy Taskline Submit] Response from GAS:`, responseText.substring(0, 500));
+
+      return res.json({
+        status: "success",
+        message: "Data successfully sent to Taskline Google Sheet.",
+        gasStatus: response.status,
+        response: responseText
+      });
+    } catch (err: any) {
+      console.error("[Proxy Taskline Submit] Error:", err.message);
+      return res.status(500).json({
+        status: "error",
+        message: `Taskline submission error: ${err.message}`
+      });
+    }
+  });
+
   // Vite middleware for development or static file serving for production
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

@@ -68,6 +68,7 @@ import { ImageEditorAndRetoucher } from './components/ImageEditorAndRetoucher';
 import { CachedDriveImage } from './components/CachedDriveImage';
 
 export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzkHiSK2lW0tSElLoIJbqquOjIgE1AZlKrFmoajhYeneVAdvYcMy7fnd2A5-ShKpTXbOw/exec";
+export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbsqDITjd3ZddAvRKQhpNF3ymQncNfzgC0IHCvm-rUi/exec";
 
 // Convert a File object to Base64 string for Drive uploading
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -941,7 +942,7 @@ export default function App() {
     }
   };
 
-  // Fetch Sayfa1 from Görevline script
+  // Fetch Sayfa1 from TASKLINE script
   const fetchSubmittedEbysRequests = async () => {
     setIsLoadingSubmitted(true);
     try {
@@ -958,7 +959,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.error("Görevline Sayfa1 listesi çekme hatası:", err);
+      console.error("TASKLINE Sayfa1 listesi çekme hatası:", err);
       const saved = localStorage.getItem('submitted_ebys_requests');
       if (saved) {
         setSubmittedEbysRequests(JSON.parse(saved));
@@ -968,32 +969,55 @@ export default function App() {
     }
   };
 
-  // Submit selected equipment rows to Görevline (Sayfa1)
+  // Submit selected equipment rows to TASKLINE (Sayfa1)
   const submitEbysRequests = async () => {
     if (!ebysSearchQuery) {
       showNotification("Lütfen bir EBYS numarası seçin veya girin.");
       return;
     }
 
-    const rowsToAppend = Object.values(selectedTechizatItems).map((item: { techType: string; row: string[] }) => {
+    const tableRows = Object.values(selectedTechizatItems).map((item: { techType: string; row: string[] }, idx: number) => {
       const row = item.row;
-      const aitOlduguBirim = getTechUnitName(item.techType);
       const malzemeAdi = row[1] || "";
-      const parcaNo = row[2] || "";
-      const seriNo = row[3] || "";
+      const parcaNo = row[2] || "-";
       const miktarKapasite = row[4] || "1";
-      const aciklama = row[10] || "";
+
+      // Dynamically detect Birim from material name
+      let birim = "ADET";
+      const lowerName = malzemeAdi.toLowerCase();
+      if (lowerName.includes("set") || lowerName.includes("istasyon")) {
+        birim = "SET";
+      } else if (lowerName.includes("kutu") || lowerName.includes("gres") || lowerName.includes("yağ") || lowerName.includes("grease")) {
+        birim = "KUTU";
+      } else if (lowerName.includes("takım")) {
+        birim = "TAKIM";
+      } else if (lowerName.includes("litre") || lowerName.includes(" lt")) {
+        birim = "LİTRE";
+      } else if (lowerName.includes("metre") || lowerName.includes(" mt")) {
+        birim = "METRE";
+      } else if (lowerName.includes("rulo")) {
+        birim = "RULO";
+      }
 
       return [
-        aitOlduguBirim,
-        malzemeAdi,
-        parcaNo,
-        seriNo,
-        miktarKapasite,
-        "", // SON KONTROLÜ YAPAN FİRMA (initially empty)
-        aciklama
+        String(idx + 1),        // SIRA NO. (Column A)
+        malzemeAdi,             // MALZEME ADI (Column B)
+        parcaNo,                // PARÇA NUMARASI (Column C)
+        birim,                  // BİRİM (Column D)
+        miktarKapasite,         // İSTEK MİKTARI (Column E)
+        ""                      // TESLİM TARİHİ (Column F)
       ];
     });
+
+    // Bu excel online'a girer, orada en son yazılı satırı bulur, sonra bir satır boşluk atar,
+    // sonraki satıra "EBYS NO:" (A sütunu), ebys no (B sütunu) ve talep türü (C sütunu) şeklinde başlık satırını atar,
+    // ve hemen altına tablo başlığı ile birlikte seçilen teçhizat tablosunu ekler.
+    const rowsToAppend = [
+      ["", "", "", "", "", ""], // Boş satır (1 satır boşluk atar)
+      ["EBYS NO:", ebysSearchQuery, ebysTalepTuru || "MALZEME", "", "", ""], // EBYS Başlık Bilgisi (A, B, C sütunları)
+      ["SIRA NO.", "MALZEME ADI", "PARÇA NUMARASI", "BİRİM", "İSTEK MİKTARI", "TESLİM TARİHİ"], // Tablo Başlık Satırı
+      ...tableRows // Altına teçhizat tablosunu ekler
+    ];
 
     try {
       showNotification("Talepleriniz online Excel sayfasına aktarılıyor ve durumları 'BAKIM / KALİBRASYON' olarak güncelleniyor...");
@@ -1081,22 +1105,30 @@ export default function App() {
         }
       });
 
-      // 3. Post selected rows to Taskline/Görevline
-      await fetch(GOOGLE_SCRIPT_URL, {
+      // 3. Post selected rows to TASKLINE Submit Script via backend proxy
+      const proxyResponse = await fetch("/api/taskline-submit", {
         method: "POST",
-        mode: "no-cors",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          action: "appendEbysTable",
           ebysNo: ebysSearchQuery,
-          data: rowsToAppend
+          data: rowsToAppend,
+          scriptUrl: TASKLINE_SUBMIT_SCRIPT_URL
         })
       });
 
-      // Show instant feedback since it's no-cors
-      showNotification("Seçilen teçhizatlar başarıyla Görevline Sayfa1 sistemine gönderildi ve durumları 'BAKIM / KALİBRASYON' olarak güncellendi!");
+      if (!proxyResponse.ok) {
+        throw new Error(`Proxy sunucusu hata döndürdü: ${proxyResponse.status}`);
+      }
+
+      const proxyResult = await proxyResponse.json();
+      if (proxyResult.status === "error") {
+        throw new Error(proxyResult.message || "Bilinmeyen sunucu proxy hatası");
+      }
+
+      // Show instant feedback
+      showNotification("Seçilen teçhizatlar başarıyla TASKLINE Sayfa1 sistemine gönderildi ve durumları 'BAKIM / KALİBRASYON' olarak güncellendi!");
       setSelectedTechizatItems({});
       setIsEbysModalOpen(false);
       setEbysSearchQuery("");
@@ -1110,9 +1142,9 @@ export default function App() {
         pullAllTechizatFromGoogleSheets(true);
       }, 1500);
 
-    } catch (err) {
-      console.error("Görevline yazma hatası:", err);
-      showNotification("Gönderim sırasında bir hata oluştu, lütfen tekrar deneyiniz.");
+    } catch (err: any) {
+      console.error("TASKLINE yazma hatası:", err);
+      showNotification(`Gönderim sırasında hata oluştu: ${err.message || err}`);
     }
   };
 
@@ -1234,7 +1266,7 @@ export default function App() {
     }
   };
 
-  // Update a specific request's KONTROLÜ YAPAN FİRMA column on Görevline Sayfa1 online sheet
+  // Update a specific request's KONTROLÜ YAPAN FİRMA column on TASKLINE Sayfa1 online sheet
   const updateEbysFirmaOnline = async (indexToUpdate: number, newFirma: string) => {
     const item = submittedEbysRequests[indexToUpdate];
     if (!item) return;
@@ -3134,6 +3166,11 @@ export default function App() {
 
   // Modal control functions
   const openSystem = (url: string, title: string) => {
+    if (url.includes('netlify.app') || url.includes('github') || url.includes('google.com/spreadsheets')) {
+      window.open(url, '_blank');
+      showNotification(`${title} portalı yeni sekmede güvenli bir şekilde açıldı.`);
+      return;
+    }
     setModalTitle(title);
     setIframeLoading(true);
     setModalUrl(url);
@@ -8395,16 +8432,41 @@ export default function App() {
 
           {/* Iframe Penceresi Kendisi */}
           {modalType === 'iframe' && modalUrl && (
-            <iframe
-              id="system-iframe"
-              src={modalUrl}
-              className="w-full h-full border-none bg-white"
-              title={modalTitle}
-              referrerPolicy="no-referrer"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              onLoad={() => setIframeLoading(false)}
-            ></iframe>
+            <div className="w-full h-full relative flex flex-col items-center justify-center bg-slate-50">
+              {/* If it's a Netlify or external site, we show a highly visible helpful banner at the top */}
+              <div className="absolute top-20 max-w-lg w-11/12 mx-auto z-[120] bg-white/95 border-2 border-emerald-800/10 backdrop-blur-md shadow-2xl p-5 rounded-[2rem] flex flex-col gap-3 select-none text-slate-800 pointer-events-auto text-center">
+                <div className="flex items-center justify-center gap-2 text-emerald-800">
+                  <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping" />
+                  <span className="text-[10px] font-black uppercase tracking-widest">GÜVENLİ ENTEGRASYON SİSTEMİ</span>
+                </div>
+                <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-tight">
+                  {modalTitle} Portalı Hazır
+                </h4>
+                <p className="text-[10px] text-slate-500 leading-relaxed font-sans px-2">
+                  Dış platform güvenlik politikaları (Netlify/GitHub) nedeniyle bu pencere içinde yüklenemeyebilir. Doğrudan ve tam erişim için lütfen aşağıdaki butona tıklayın:
+                </p>
+                <div className="flex gap-2 justify-center mt-1">
+                  <button
+                    onClick={() => window.open(modalUrl, '_blank')}
+                    className="px-5 py-2.5 bg-emerald-800 hover:bg-emerald-900 active:scale-95 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <ExternalLink className="w-4 h-4 text-emerald-100" />
+                    <span>YENİ SEKMEDE DOĞRUDAN AÇ</span>
+                  </button>
+                </div>
+              </div>
+
+              <iframe
+                id="system-iframe"
+                src={modalUrl}
+                className="w-full h-full border-none bg-white"
+                title={modalTitle}
+                referrerPolicy="no-referrer"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                onLoad={() => setIframeLoading(false)}
+              ></iframe>
+            </div>
           )}
 
         </div>
@@ -9908,7 +9970,7 @@ export default function App() {
                         <Send className="w-5 h-5" />
                       </div>
                       <div>
-                        <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">Görevline'a Gönder</h4>
+                        <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">TASKLINE'a Gönder</h4>
                         <p className="text-[11px] text-slate-400 font-semibold mt-1 leading-relaxed">
                           Seçili teçhizatları EBYS numarası ile eşleştirerek online sisteme gönderin ve durumlarını "BAKIM / KALİBRASYON" yapın.
                         </p>
@@ -10009,9 +10071,9 @@ export default function App() {
                       <Send className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-base font-black text-slate-800 uppercase tracking-wider">EBYS GÖREVLİNE SİSTEMİNE GÖNDER</h3>
+                      <h3 className="text-base font-black text-slate-800 uppercase tracking-wider">EBYS TASKLINE SİSTEMİNE GÖNDER</h3>
                       <p className="text-[11px] text-slate-400 font-semibold mt-0.5">
-                        Seçilen teçhizatları ilgili birimin EBYS görev satırı kaydı ile eşleştirerek Görevline Excel'e gönderin.
+                        Seçilen teçhizatları ilgili birimin EBYS görev satırı kaydı ile eşleştirerek TASKLINE Excel'e gönderin.
                       </p>
                     </div>
                   </div>
