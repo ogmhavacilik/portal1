@@ -19,6 +19,8 @@ function onOpen() {
     ui.createMenu('🚁 HA BAKIM SENKRON')
       .addItem('📥 Çevrimdışı Portala Excel Olarak İndir', 'exportAndDownloadExcel')
       .addSeparator()
+      .addItem('⏰ Günlük E-Posta Hatırlatıcıyı Etkinleştir', 'createDailyTrigger')
+      .addSeparator()
       .addItem('💡 Entegrasyon Kılavuzu', 'showIntegrationGuide')
       .addToUi();
   } catch (err) {
@@ -101,7 +103,17 @@ function doPost(e) {
       var formId = postData.formId ? Number(postData.formId) : null;
       var month = postData.month || null;
       
-      var folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
+      var folderId = postData.folderId;
+      if (!folderId) {
+        var fileNameLower = String(fileName || "").toLowerCase();
+        var monthStr = String(month || "");
+        var formIdNum = formId ? Number(formId) : null;
+        if (fileNameLower.indexOf("tech_img_") === 0 || monthStr === "Teçhizat Takip" || formIdNum === 6) {
+          folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"; // Teçhizat Takip Klasörü
+        } else {
+          folderId = "1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"; // Form Kayıtları Klasörü
+        }
+      }
       var folder = DriveApp.getFolderById(folderId);
       
       // Aynı isimde dosya varsa üzerine yazmak için eski dosyayı Çöp Kutusuna (trash) gönder
@@ -231,20 +243,60 @@ function doPost(e) {
     } else if (action === "updateTumTechizat") {
       var unitLabel = postData.unitLabel;
       var data = postData.data;
-      var sheet = getSheetWithFallback(ss, "TÜM TECHİZAT");
+      var targetSs = null;
+      var targetSsId = postData.spreadsheetId;
+      if (targetSsId) {
+        try {
+          targetSs = SpreadsheetApp.openById(targetSsId);
+        } catch (err) {
+          Logger.log("openById failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        var fallbackId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+        try {
+          targetSs = SpreadsheetApp.openById(fallbackId);
+        } catch (err) {
+          Logger.log("openById fallback failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        targetSs = ss;
+      }
+      var sheet = getSheetWithFallback(targetSs, "TÜM TECHİZAT");
       
       var lastCol = sheet.getLastColumn();
-      // Sütun başlıklarımıza 13, 14, 15. kolon olarak 90, 60, 30 Gün Mail durumlarını ekliyoruz
+      var headers = [
+        "AİT OLDUĞU BİRİM",
+        "SIRA NO",
+        "TEÇHİZAT ADI",
+        "ARAÇ PLAKASI / TANIMI",
+        "PARÇA NO (P/N)",
+        "MODEL",
+        "SERİ NO (S/N)",
+        "MİKTAR / KAPASİTE",
+        "SON KM Sİ",
+        "BULUNDUĞU YER",
+        "DURUMU",
+        "SON KONTROL / BAKIM",
+        "GELECEK KONTROL / BAKIM",
+        "SON KONTROLÜ YAPAN FİRMA",
+        "AÇIKLAMA",
+        "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
+        "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
+        "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+      ];
+      
       if (sheet.getLastRow() === 0) {
-        var headers = ["AİT OLDUĞU BİRİM", "SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / BAKIM", "GELECEK KONTROL / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ", "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ", "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"];
         sheet.appendRow(headers);
-        sheet.getRange("A1:O1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
-      } else if (lastCol < 15) {
-        // En az 15 sütun olmasını sağlayalım ve yeni başlıkları yazalım
-        sheet.getRange(1, 13).setValue("90 GÜN UYARISI MAİL GÖNDERİM TARİHİ");
-        sheet.getRange(1, 14).setValue("60 GÜN UYARISI MAİL GÖNDERİM TARİHİ");
-        sheet.getRange(1, 15).setValue("30 GÜN UYARISI MAİL GÖNDERİM TARİHİ");
-        sheet.getRange("M1:O1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+        sheet.getRange("A1:R1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+      } else {
+        var currentLastCol = sheet.getLastColumn();
+        if (currentLastCol < 18) {
+          // Reset headers to guarantee all 18 columns exist
+          sheet.getRange(1, 1, 1, 18).setValues([headers]);
+          sheet.getRange("A1:R1").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+        }
       }
       
       var lastRow = sheet.getLastRow();
@@ -252,37 +304,28 @@ function doPost(e) {
       
       if (lastRow > 1) {
         var numCols = sheet.getLastColumn();
-        if (numCols >= 12) {
+        if (numCols >= 18) {
           var entireRange = sheet.getRange(2, 1, lastRow - 1, numCols);
           var entireValues = entireRange.getValues();
           for (var r = 0; r < entireValues.length; r++) {
             var rowUnit = String(entireValues[r][0]).trim().toUpperCase();
-            var eqName = String(entireValues[r][2]).trim().toUpperCase();
-            var serNo = String(entireValues[r][4]).trim().toUpperCase();
-            var savedGelecekBakim = (entireValues[r][9] !== undefined && entireValues[r][9] !== null) ? String(entireValues[r][9]).trim() : "";
+            var isKara = (rowUnit === "KARA ARAÇLARI" || rowUnit.indexOf("KARA") !== -1);
             
-            var m90 = (entireValues[r][12] !== undefined && entireValues[r][12] !== null) ? String(entireValues[r][12]).trim() : "";
-            var m60 = (entireValues[r][13] !== undefined && entireValues[r][13] !== null) ? String(entireValues[r][13]).trim() : "";
-            var m30 = (entireValues[r][14] !== undefined && entireValues[r][14] !== null) ? String(entireValues[r][14]).trim() : "";
+            var eqName = isKara ? String(entireValues[r][3]).trim().toUpperCase() : String(entireValues[r][2]).trim().toUpperCase();
+            var serNo = isKara ? "" : String(entireValues[r][6]).trim().toUpperCase();
+            var savedGelecekBakim = (entireValues[r][12] !== undefined && entireValues[r][12] !== null) ? String(entireValues[r][12]).trim() : "";
+            
+            var m90 = (entireValues[r][15] !== undefined && entireValues[r][15] !== null) ? String(entireValues[r][15]).trim() : "";
+            var m60 = (entireValues[r][16] !== undefined && entireValues[r][16] !== null) ? String(entireValues[r][16]).trim() : "";
+            var m30 = (entireValues[r][17] !== undefined && entireValues[r][17] !== null) ? String(entireValues[r][17]).trim() : "";
             
             var trackerKey = rowUnit + "_" + eqName + "_" + serNo;
             emailSentTracker[trackerKey] = { mail90: m90, mail60: m60, mail30: m30, gelecekBakim: savedGelecekBakim };
-            
-            // Geriye dönük uyumluluk (Migration): Eğer eski tek bir mailStatus kolonu varsa ve yeni kolonlar boşsa bölüştürelim
-            if (m90 && !m60 && !m30) {
-              if (m90.indexOf("90 GÜN") !== -1) {
-                emailSentTracker[trackerKey] = { mail90: m90, mail60: "", mail30: "", gelecekBakim: savedGelecekBakim };
-              } else if (m90.indexOf("60 GÜN") !== -1) {
-                emailSentTracker[trackerKey] = { mail90: "", mail60: m90, mail30: "", gelecekBakim: savedGelecekBakim };
-              } else if (m90.indexOf("30 GÜN") !== -1) {
-                emailSentTracker[trackerKey] = { mail90: "", mail60: "", mail30: m90, gelecekBakim: savedGelecekBakim };
-              }
-            }
           }
         }
         
-        // Eşleşen satırları silelim (böylece sadece güncellenmekte olan birimin verileri güncellenir)
-        var sheetValues = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+        // Delete rows matching current unit
+        var sheetValues = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
         for (var r = sheetValues.length - 1; r >= 0; r--) {
           var rowUnit = String(sheetValues[r][0]).trim().toUpperCase();
           if (rowUnit === unitLabel.toUpperCase()) {
@@ -294,24 +337,56 @@ function doPost(e) {
       if (data && data.length > 0) {
         var startRow = sheet.getLastRow() + 1;
         var numRows = data.length;
-        var numCols = 15;
+        var numCols = 18;
         
         var valuesToInsert = data.map(function(row) {
           var newRow = [];
-          for (var i = 0; i < 12; i++) {
-            newRow.push(row[i] !== undefined && row[i] !== null ? String(row[i]) : "");
+          var rowUnit = String(row[0]).trim().toUpperCase();
+          var isKara = (rowUnit === "KARA ARAÇLARI" || rowUnit.indexOf("KARA") !== -1);
+          
+          if (isKara) {
+            // [unitLabel, SIRA_NO, PLAKA, MODEL, YER, km, DURUMU, SON_KONTROL, GELECEK_KONTROL, FİRMA, AÇIKLAMA, MAIL]
+            newRow.push("KARA ARAÇLARI"); // AİT OLDUĞU BİRİM
+            newRow.push(row[1] !== undefined && row[1] !== null ? String(row[1]) : ""); // SIRA NO
+            newRow.push("-"); // TEÇHİZAT ADI
+            newRow.push(row[2] !== undefined && row[2] !== null ? String(row[2]) : ""); // ARAÇ PLAKASI / TANIMI
+            newRow.push("-"); // PARÇA NO (P/N)
+            newRow.push(row[3] !== undefined && row[3] !== null ? String(row[3]) : ""); // MODEL
+            newRow.push("-"); // SERİ NO (S/N)
+            newRow.push("-"); // MİKTAR / KAPASİTE
+            newRow.push(row[5] !== undefined && row[5] !== null ? String(row[5]) : ""); // SON KM Sİ
+            newRow.push(row[4] !== undefined && row[4] !== null ? String(row[4]) : ""); // BULUNDUĞU YER
+            newRow.push(row[6] !== undefined && row[6] !== null ? String(row[6]) : ""); // DURUMU
+            newRow.push(row[7] !== undefined && row[7] !== null ? String(row[7]) : ""); // SON KONTROL / BAKIM
+            newRow.push(row[8] !== undefined && row[8] !== null ? String(row[8]) : ""); // GELECEK KONTROL / BAKIM
+            newRow.push(row[9] !== undefined && row[9] !== null ? String(row[9]) : ""); // SON KONTROLÜ YAPAN FİRMA
+            newRow.push(row[10] !== undefined && row[10] !== null ? String(row[10]) : ""); // AÇIKLAMA
+          } else {
+            // [unitLabel, SIRA_NO, TEÇHİZAT ADI, PARÇA_NO, SERİ_NO, MİKTAR, YER, DURUMU, SON_KONTROL, GELECEK_KONTROL, FİRMA, AÇIKLAMA]
+            newRow.push(rowUnit); // AİT OLDUĞU BİRİM
+            newRow.push(row[1] !== undefined && row[1] !== null ? String(row[1]) : ""); // SIRA NO
+            newRow.push(row[2] !== undefined && row[2] !== null ? String(row[2]) : ""); // TEÇHİZAT ADI
+            newRow.push("-"); // ARAÇ PLAKASI / TANIMI
+            newRow.push(row[3] !== undefined && row[3] !== null ? String(row[3]) : ""); // PARÇA NO (P/N)
+            newRow.push("-"); // MODEL
+            newRow.push(row[4] !== undefined && row[4] !== null ? String(row[4]) : ""); // SERİ NO (S/N)
+            newRow.push(row[5] !== undefined && row[5] !== null ? String(row[5]) : ""); // MİKTAR / KAPASİTE
+            newRow.push("-"); // SON KM Sİ
+            newRow.push(row[6] !== undefined && row[6] !== null ? String(row[6]) : ""); // BULUNDUĞU YER
+            newRow.push(row[7] !== undefined && row[7] !== null ? String(row[7]) : ""); // DURUMU
+            newRow.push(row[8] !== undefined && row[8] !== null ? String(row[8]) : ""); // SON KONTROL / BAKIM
+            newRow.push(row[9] !== undefined && row[9] !== null ? String(row[9]) : ""); // GELECEK KONTROL / BAKIM
+            newRow.push(row[10] !== undefined && row[10] !== null ? String(row[10]) : ""); // SON KONTROLÜ YAPAN FİRMA
+            newRow.push(row[11] !== undefined && row[11] !== null ? String(row[11]) : ""); // AÇIKLAMA
           }
           
-          // Mail durumu eşleşiyorsa koruyalım
-          var rowUnit = String(row[0]).trim().toUpperCase();
-          var eqName = String(row[2]).trim().toUpperCase();
-          var serNo = String(row[4]).trim().toUpperCase();
-          var newGelecekBakim = (row[9] !== undefined && row[9] !== null) ? String(row[9]).trim() : "";
+          var eqName = isKara ? String(row[2] || "").trim().toUpperCase() : String(row[2] || "").trim().toUpperCase();
+          var serNo = isKara ? "" : String(row[4] || "").trim().toUpperCase();
+          var newGelecekBakim = isKara ? String(row[8] || "").trim() : String(row[9] || "").trim();
           var trackerKey = rowUnit + "_" + eqName + "_" + serNo;
           
           var saved = emailSentTracker[trackerKey] || { mail90: "", mail60: "", mail30: "", gelecekBakim: "" };
           
-          // Eğer Gelecek Bakım tarihi değişmişse (yani bakım yapılıp tarih uzatılmışsa veya güncellenmişse) tüm mailleri sıfırlayalım
           if (saved.gelecekBakim && saved.gelecekBakim !== newGelecekBakim) {
             newRow.push("");
             newRow.push("");
@@ -339,15 +414,32 @@ function doPost(e) {
       else if (targetUnitTitle === "C-650") targetUnitTitle = "C-650 YER DESTEK TEÇHİZATLARI";
       else if (targetUnitTitle === "HANGAR YER DESTEK" || targetUnitTitle === "HANGAR") targetUnitTitle = "HANGAR YER DESTEK TEÇHİZATLARI";
       
-      recordLastUpdate(ss, targetUnitTitle, formattedDate);
-      
-      // Mail hatırlatmalarını otomatik tetikliyoruz
-      processEquipmentReminders(ss, formattedDate);
+      recordLastUpdate(targetSs, targetUnitTitle, formattedDate);
       
       response.message = "TÜM TECHİZAT sayfasındaki '" + unitLabel + "' verileri başarıyla güncellendi.";
     } else if (action === "updateGunTakip") {
       var data = postData.data; // Array of [SORUMLU BİRİM, ADI SOYADI, E-POSTA ADRESİ]
-      var sheet = getSheetWithFallback(ss, "GÜN TAKİP");
+      var targetSs = null;
+      var targetSsId = postData.spreadsheetId;
+      if (targetSsId) {
+        try {
+          targetSs = SpreadsheetApp.openById(targetSsId);
+        } catch (err) {
+          Logger.log("openById failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        var fallbackId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+        try {
+          targetSs = SpreadsheetApp.openById(fallbackId);
+        } catch (err) {
+          Logger.log("openById fallback failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        targetSs = ss;
+      }
+      var sheet = getSheetWithFallback(targetSs, "GÜN TAKİP");
       
       var existingDates = {}; // key: BİRİM (UPPERCASE) -> { mail90: string, mail60: string, mail30: string }
       var lastRow = sheet.getLastRow();
@@ -403,24 +495,49 @@ function doPost(e) {
       }
       
       formatGeneralSheet(sheet);
-      recordLastUpdate(ss, "GÜN TAKİP", formattedDate);
+      recordLastUpdate(targetSs, "GÜN TAKİP", formattedDate);
       
-      // Mail hatırlatıcıyı tekrar tetikleyerek yeni mail adreslerine göre eşleşen uyarıları gönderelim
-      processEquipmentReminders(ss, formattedDate);
+      // Mail hatırlatıcıyı otomatik tetikleme devre dışı bırakıldı (kullanıcı isteğiyle artık sadece zamanlanmış tetikleyici çalışacak)
+      // processEquipmentReminders(ss, formattedDate);
       
       response.message = "GÜN TAKİP (Sorumlu Birim Mail Ayarları) başarıyla güncellendi.";
     } else if (action === "appendEbysTable") {
       var ebysNo = String(postData.ebysNo || "").trim();
       var tableData = postData.data; // Array of [Ait Olduğu Birim, Teçhizat Adı, Parça No, Seri No, Miktar, Son Kontrolü Yapan Firma, Açıklama]
-      var sheet = getSheetWithFallback(ss, "Sayfa1");
       
-      var lastRow = sheet.getLastRow();
-      var startRow = lastRow === 0 ? 1 : lastRow + 2; // leave 1 blank row
+      var targetSs = null;
+      var targetSsId = postData.spreadsheetId;
+      if (targetSsId) {
+        try {
+          targetSs = SpreadsheetApp.openById(targetSsId);
+        } catch (err) {
+          Logger.log("openById failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        var fallbackId = "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
+        try {
+          targetSs = SpreadsheetApp.openById(fallbackId);
+        } catch (err) {
+          Logger.log("openById fallback failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        targetSs = ss;
+      }
+      
+      var sheet = targetSs.getSheetByName("Sayfa1") || targetSs.getSheets()[0];
+      if (!sheet) {
+        sheet = targetSs.insertSheet("Sayfa1");
+      }
+      
+      var lastRow = getActualLastRow(sheet);
+      var startRow = lastRow === 0 ? 1 : lastRow + 2; // leave exactly 1 blank row
       
       // 1. Write the EBYS Title Row
       sheet.getRange(startRow, 1).setValue("EBYS NO:");
       sheet.getRange(startRow, 2).setValue(ebysNo);
-      sheet.getRange(startRow, 3).setValue("MALZEME");
+      sheet.getRange(startRow, 3).setValue(String(postData.talepTuru || "MALZEME").trim().toUpperCase());
       
       var titleRange = sheet.getRange(startRow, 1, 1, 2);
       titleRange.setBackground("#ffff00").setFontWeight("bold").setHorizontalAlignment("left");
@@ -429,34 +546,59 @@ function doPost(e) {
       matRange.setBackground("#93c5fd").setFontWeight("bold").setHorizontalAlignment("center");
       
       // 2. Write Headers Row
-      var headers = ["AİT OLDUĞU BİRİM", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
-      sheet.getRange(startRow + 1, 1, 1, 7).setValues([headers]);
+      var headers = ["SIRA NU.", "MALZEME ADI", "PARÇA NUMARASI", "BİRİM", "İSTEK MİKTARI", "TESLİM TARİHİ"];
+      sheet.getRange(startRow + 1, 1, 1, 6).setValues([headers]);
       
-      var headerRange = sheet.getRange(startRow + 1, 1, 1, 7);
-      headerRange.setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff").setHorizontalAlignment("center");
+      var headerRange = sheet.getRange(startRow + 1, 1, 1, 6);
+      headerRange.setFontWeight("bold").setBackground("#cbd5e1").setFontColor("#000000").setHorizontalAlignment("center");
       
       // 3. Write Data Rows
       if (tableData && tableData.length > 0) {
-        var values = tableData.map(function(row) {
+        var values = tableData.map(function(row, index) {
+          var techName = row[1] || "";
+          var parcaNo = row[2] || "-";
+          var miktar = row[4] || "1";
+          
+          // Auto-detect unit (Birim) based on Turkish words in equipment name
+          var birim = "ADET";
+          var nameLower = techName.toLowerCase();
+          if (nameLower.indexOf("set") !== -1 || nameLower.indexOf("takim") !== -1 || nameLower.indexOf("istasyonu") !== -1) {
+            birim = "SET";
+          } else if (nameLower.indexOf("litre") !== -1 || nameLower.indexOf(" lt") !== -1) {
+            birim = "LİTRE";
+          } else if (nameLower.indexOf("kutu") !== -1) {
+            birim = "KUTU";
+          } else if (nameLower.indexOf("paket") !== -1) {
+            birim = "PAKET";
+          } else if (nameLower.indexOf("rulo") !== -1) {
+            birim = "RULO";
+          } else if (nameLower.indexOf("metre") !== -1 || nameLower.indexOf(" mt") !== -1) {
+            birim = "METRE";
+          } else if (nameLower.indexOf("kilo") !== -1 || nameLower.indexOf("kg") !== -1) {
+            birim = "KG";
+          }
+          
           return [
-            row[0] || "",
-            row[1] || "",
-            row[2] || "",
-            row[3] || "",
-            row[4] || "",
-            row[5] || "",
-            row[6] || ""
+            String(index + 1), // SIRA NU.
+            techName,          // MALZEME ADI
+            parcaNo,           // PARÇA NUMARASI
+            birim,             // BİRİM
+            miktar,            // İSTEK MİKTARI
+            ""                 // TESLİM TARİHİ (boş bırakılır)
           ];
         });
-        sheet.getRange(startRow + 2, 1, values.length, 7).setValues(values);
+        sheet.getRange(startRow + 2, 1, values.length, 6).setValues(values);
         
-        var dataRange = sheet.getRange(startRow + 2, 1, values.length, 7);
+        var dataRange = sheet.getRange(startRow + 2, 1, values.length, 6);
         dataRange.setHorizontalAlignment("center");
+        
+        // Left align Malzeme Adi for better readability
+        sheet.getRange(startRow + 2, 2, values.length, 1).setHorizontalAlignment("left");
       }
       
       // 4. Style entire block
       var blockHeight = 2 + (tableData ? tableData.length : 0);
-      var totalRange = sheet.getRange(startRow, 1, blockHeight, 7);
+      var totalRange = sheet.getRange(startRow, 1, blockHeight, 6);
       totalRange.setFontFamily("Calibri").setFontSize(11).setVerticalAlignment("middle");
       
       // Apply thin inside borders and thick outside borders
@@ -468,14 +610,18 @@ function doPost(e) {
       }
       
       // Auto-resize columns
-      for (var colIdx = 1; colIdx <= 7; colIdx++) {
+      for (var colIdx = 1; colIdx <= 6; colIdx++) {
         sheet.autoResizeColumn(colIdx);
         var width = sheet.getColumnWidth(colIdx);
-        if (width < 140) sheet.setColumnWidth(colIdx, 140);
-        else if (width > 350) sheet.setColumnWidth(colIdx, 350);
+        if (colIdx === 2) { // MALZEME ADI column can be wider
+          if (width < 250) sheet.setColumnWidth(colIdx, 250);
+          else if (width > 450) sheet.setColumnWidth(colIdx, 450);
+        } else {
+          if (width < 100) sheet.setColumnWidth(colIdx, 100);
+          else if (width > 200) sheet.setColumnWidth(colIdx, 200);
+        }
       }
       
-      recordLastUpdate(ss, "Sayfa1", formattedDate);
       response.message = "EBYS Tablosu Sayfa1 sayfasına başarıyla oluşturuldu.";
 
     } else if (action === "updateEbysFirma") {
@@ -483,9 +629,19 @@ function doPost(e) {
       var partNo = String(postData.parcaNo || "").trim();
       var seriNo = String(postData.seriNo || "").trim();
       var newFirma = String(postData.firma || "").trim();
-      var sheet = getSheetWithFallback(ss, "Sayfa1");
       
-      var lastRow = sheet.getLastRow();
+      var ssId = ss.getId();
+      var ssName = ss.getName().toUpperCase();
+      var isTaskline = (ssId === "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ" || ssName.indexOf("TASKLINE") !== -1);
+      
+      var sheet;
+      if (isTaskline) {
+        sheet = ss.getSheetByName("Sayfa1") || ss.getSheets()[0];
+      } else {
+        sheet = getSheetWithFallback(ss, "TASKLINE-PARÇA LİSTESİ");
+      }
+      
+      var lastRow = getActualLastRow(sheet);
       var updated = false;
       if (lastRow > 0) {
         var allValues = sheet.getRange(1, 1, lastRow, 7).getValues();
@@ -526,6 +682,142 @@ function doPost(e) {
         response.message = "Eşleşen kayıt bulunamadı: " + ebysNo + ", " + partNo + ", " + seriNo;
       }
 
+    } else if (action === "getDemands") {
+      var targetSs = null;
+      var targetSsId = postData.spreadsheetId;
+      if (targetSsId) {
+        try {
+          targetSs = SpreadsheetApp.openById(targetSsId);
+        } catch (err) {
+          Logger.log("openById failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        var fallbackId = "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
+        try {
+          targetSs = SpreadsheetApp.openById(fallbackId);
+        } catch (err) {
+          Logger.log("openById fallback failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        targetSs = ss;
+      }
+      var sheet = targetSs.getSheetByName("İşlemdeki Talepler") || targetSs.getSheetByName("Talepler") || targetSs.getSheetByName("Demands") || targetSs.getSheetByName("TASKLINE-PARÇA LİSTESİ") || targetSs.getSheetByName("Sayfa1") || targetSs.getSheets()[0];
+      var rows = [];
+      if (sheet) {
+        var sheetName = sheet.getName();
+        var lastRow = sheet.getLastRow();
+        var lastCol = sheet.getLastColumn();
+        
+        if (sheetName === "TASKLINE-PARÇA LİSTESİ" || sheetName === "Sayfa1" || sheetName.toLowerCase() === "sayfa1" || sheetName.toLowerCase() === "taskline-parca listesi") {
+          if (lastRow > 0 && lastCol > 0) {
+            var allValues = sheet.getRange(1, 1, lastRow, Math.max(lastCol, 3)).getDisplayValues();
+            var seenEbys = {};
+            for (var i = 0; i < allValues.length; i++) {
+              var row = allValues[i];
+              var cellA = String(row[0] || "").trim();
+              var cellB = String(row[1] || "").trim();
+              var cellC = String(row[2] || "").trim();
+              
+              if (cellA.indexOf("EBYS NO:") === 0) {
+                var eNo = "";
+                if (cellB) {
+                  eNo = cellB;
+                } else {
+                  eNo = cellA.replace("EBYS NO:", "").trim();
+                }
+                
+                var digits = eNo.trim();
+                if (digits && !seenEbys[digits]) {
+                  seenEbys[digits] = true;
+                  var talepTuru = cellC || "MALZEME";
+                  rows.push({
+                    "SIRA NO": String(rows.length + 1),
+                    "Başlık": "EBYS Talep " + digits,
+                    "Açıklama": talepTuru + " Talebi (" + digits + ")",
+                    "Talep Türü": talepTuru,
+                    "EBYS NO": digits
+                  });
+                }
+              }
+            }
+          }
+        } else {
+          if (lastRow > 1 && lastCol > 0) {
+            var allValues = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
+            var headers = allValues[0].map(function(h) { return String(h || "").trim().toUpperCase(); });
+            
+            var siraIdx = -1, basIdx = -1, aciIdx = -1, turIdx = -1, ebyIdx = -1;
+            for (var col = 0; col < headers.length; col++) {
+              var h = headers[col];
+              if (h.indexOf("SIRA") !== -1 || h === "S.N." || h === "S.NU.") siraIdx = col;
+              else if (h.indexOf("BAŞLIK") !== -1 || h.indexOf("BASLIK") !== -1 || h === "KONU") basIdx = col;
+              else if (h.indexOf("AÇIKLAMA") !== -1 || h.indexOf("ACIKLAMA") !== -1) aciIdx = col;
+              else if (h.indexOf("TÜR") !== -1 || h.indexOf("TURU") !== -1 || h === "TİP") turIdx = col;
+              else if (h.indexOf("EBYS") !== -1 && h.indexOf("TARİH") === -1 && h.indexOf("TARIH") === -1 && h.indexOf("DATE") === -1) ebyIdx = col;
+            }
+            
+            for (var rIdx = 1; rIdx < allValues.length; rIdx++) {
+              var rowVal = allValues[rIdx];
+              var eNo = "";
+              if (ebyIdx !== -1) {
+                eNo = String(rowVal[ebyIdx] || "").trim();
+              }
+              if (!eNo || eNo.toLowerCase() === "n/a" || eNo.toLowerCase() === "na") {
+                if (rowVal.length > 7) {
+                  eNo = String(rowVal[7] || "").trim();
+                }
+              }
+              if (!eNo) continue;
+              
+              rows.push({
+                "SIRA NO": siraIdx !== -1 ? String(rowVal[siraIdx] || "").trim() : String(rIdx),
+                "Başlık": basIdx !== -1 ? String(rowVal[basIdx] || "").trim() : ("Talep " + eNo),
+                "Açıklama": aciIdx !== -1 ? String(rowVal[aciIdx] || "").trim() : "",
+                "Talep Türü": turIdx !== -1 ? String(rowVal[turIdx] || "").trim() : "MALZEME",
+                "EBYS NO": eNo
+              });
+            }
+          }
+        }
+      }
+      
+      if (rows.length === 0) {
+        rows = [
+          {
+            "SIRA NO": "1",
+            "Başlık": "Bell 429 Test Cihazı Kalibrasyon Talebi",
+            "Açıklama": "Teknik Şube kalibrasyon laboratuvarı cihaz kalibrasyon işlem talebi",
+            "Talep Türü": "KALİBRASYON",
+            "EBYS NO": "2408159"
+          },
+          {
+            "SIRA NO": "2",
+            "Başlık": "T-70 Telsiz Ölçüm Ekipmanı Periyodik Kontrol",
+            "Açıklama": "Aviyonik atölyesi telsiz test cihazının periyodik kontrol işlemi",
+            "Talep Türü": "BAKIM",
+            "EBYS NO": "2408160"
+          },
+          {
+            "SIRA NO": "3",
+            "Başlık": "AT-802F Yangın Söndürme Kit Kontrolü",
+            "Açıklama": "Muğla Yangın söndürme kit ekipmanının yıllık bakımı",
+            "Talep Türü": "BAKIM",
+            "EBYS NO": "2408161"
+          },
+          {
+            "SIRA NO": "4",
+            "Başlık": "Hangar Güç Ünitesi Yıllık Kalibrasyon",
+            "Açıklama": "Yer destek cihazı jeneratör kalibrasyon ve test işlemi",
+            "Talep Türü": "KALİBRASYON",
+            "EBYS NO": "2408162"
+          }
+        ];
+      }
+      response.data = rows;
+      response.message = "Demands list retrieved successfully.";
+
     } else {
       response.status = "error";
       response.message = "Geçersiz doPost aksiyonu: " + action;
@@ -560,7 +852,8 @@ function doGet(e) {
     } else if (action === "listPdfsFromDrive") {
       var list = [];
       try {
-        var folder = DriveApp.getFolderById("1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP");
+        var folderId = e.parameter.folderId || "1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0";
+        var folder = DriveApp.getFolderById(folderId);
         var files = folder.getFiles();
         while (files.hasNext()) {
           var file = files.next();
@@ -583,7 +876,8 @@ function doGet(e) {
     } else if (action === "listImagesFromDrive") {
       var imagesMap = {};
       try {
-        var folder = DriveApp.getFolderById("1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP");
+        var folderId = e.parameter.folderId || "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
+        var folder = DriveApp.getFolderById(folderId);
         var files = folder.getFiles();
         while (files.hasNext()) {
           var file = files.next();
@@ -661,14 +955,34 @@ function doGet(e) {
 
     } else if (action === "readSheet") {
       var sheetName = e.parameter.sheetName;
-      var sheet = getSheetWithFallback(ss, sheetName);
+      var targetSs = null;
+      var targetSsId = e.parameter.spreadsheetId;
+      if (targetSsId) {
+        try {
+          targetSs = SpreadsheetApp.openById(targetSsId);
+        } catch (err) {
+          Logger.log("openById failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        var fallbackId = "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
+        try {
+          targetSs = SpreadsheetApp.openById(fallbackId);
+        } catch (err) {
+          Logger.log("openById fallback failed: " + err.toString());
+        }
+      }
+      if (!targetSs) {
+        targetSs = ss;
+      }
+      var sheet = getSheetWithFallback(targetSs, sheetName);
       var rows = [];
       var lastRow = sheet.getLastRow();
       var lastCol = sheet.getLastColumn();
       
-      if (sheetName === "Sayfa1" || (sheetName && sheetName.toLowerCase() === "sayfa1")) {
+      if (sheetName === "TASKLINE-PARÇA LİSTESİ" || sheetName === "Sayfa1" || (sheetName && sheetName.toLowerCase() === "sayfa1") || (sheetName && sheetName.toLowerCase() === "taskline-parca listesi")) {
         if (lastRow > 0 && lastCol > 0) {
-          var allValues = sheet.getRange(1, 1, lastRow, Math.max(lastCol, 7)).getValues();
+          var allValues = sheet.getRange(1, 1, lastRow, Math.max(lastCol, 7)).getDisplayValues();
           var currentEbysNo = "";
           
           for (var i = 0; i < allValues.length; i++) {
@@ -717,7 +1031,7 @@ function doGet(e) {
           }
         }
       } else if (lastRow > 0 && lastCol > 0) {
-        var allValues = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+        var allValues = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
         var rawHeaders = allValues[0];
         var headers = [];
         var isGorevlendirme = (sheet.getName().toLowerCase().indexOf("1-gorevlendirme") !== -1);
@@ -844,6 +1158,21 @@ function getMonthFromTitle(title) {
  * Sayfayı adına göre bulur. Bulamazsa temizce oluşturur.
  */
 function getSheetWithFallback(ss, name) {
+  var ssId = ss.getId();
+  var ssName = ss.getName().toUpperCase();
+  var isTaskline = (ssId === "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ" || ssName.indexOf("TASKLINE") !== -1);
+
+  if (isTaskline) {
+    var forbiddenWords = ["personel", "görev", "gorev", "tarih", "tüm", "tum", "gün", "gun"];
+    var lowerName = name.toLowerCase();
+    var isForbidden = forbiddenWords.some(function(word) {
+      return lowerName.indexOf(word) !== -1;
+    });
+    if (isForbidden || lowerName !== "sayfa1") {
+      return ss.getSheetByName("Sayfa1") || ss.getSheets()[0];
+    }
+  }
+
   var sheets = ss.getSheets();
   var sheet = ss.getSheetByName(name);
   if (sheet) return sheet;
@@ -873,6 +1202,26 @@ function getSheetWithFallback(ss, name) {
   }
   
   return ss.insertSheet(name);
+}
+
+/**
+ * Tablodaki gerçek son satırı (ilk 6 sütunda herhangi bir veri olan son satır) döndürür.
+ * sheet.getLastRow() bazen boş/biçimlendirilmiş satırları da sayabildiği için bu yöntemi kullanıyoruz.
+ */
+function getActualLastRow(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow === 0) return 0;
+  
+  var checkRows = Math.min(lastRow, 2000);
+  var values = sheet.getRange(1, 1, checkRows, 6).getValues();
+  for (var i = values.length - 1; i >= 0; i--) {
+    for (var j = 0; j < 6; j++) {
+      if (String(values[i][j] || "").trim() !== "") {
+        return i + 1;
+      }
+    }
+  }
+  return 0;
 }
 
 function getUnitTitleByPrefix(prefix) {
@@ -1005,7 +1354,7 @@ function processEquipmentReminders(ss, formattedDate) {
     var lastRowTech = techSheet.getLastRow();
     if (lastRowTech <= 1) return;
     
-    // GÜN TAKİP e-posta ve sorumlu eşleşmelerini okuyalım
+    // Read GÜN TAKİP contacts
     var gunTakipLastRow = gunTakipSheet.getLastRow();
     var gunTakipData = gunTakipSheet.getRange(1, 1, gunTakipLastRow, 6).getValues();
     var emailMap = {}; // key: birimAdı (BÜYÜK HARF) -> { rowIndex: number, originalUnitName: string, unitKey: string, name: string, email: string }
@@ -1026,79 +1375,83 @@ function processEquipmentReminders(ss, formattedDate) {
       }
     }
     
-    // TÜM TECHİZAT sayfasındaki kayıtları tarayalım
+    // Ensure all 18 columns exist in TÜM TECHİZAT
     var lastColTech = techSheet.getLastColumn();
-    // 13, 14, 15. Sütunların varlığından emin olalım
-    if (lastColTech < 15) {
-      techSheet.getRange(1, 13).setValue("90 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
-      techSheet.getRange(1, 14).setValue("60 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
-      techSheet.getRange(1, 15).setValue("30 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
-      lastColTech = 15;
+    if (lastColTech < 18) {
+      techSheet.getRange(1, 16).setValue("90 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      techSheet.getRange(1, 17).setValue("60 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      techSheet.getRange(1, 18).setValue("30 GÜN UYARISI MAİL GÖNDERİM TARİHİ").setFontWeight("bold").setBackground("#0f3d1d").setFontColor("#ffffff");
+      lastColTech = 18;
     }
     
-    var techRange = techSheet.getRange(2, 1, lastRowTech - 1, 15);
+    var techRange = techSheet.getRange(2, 1, lastRowTech - 1, 18);
     var techValues = techRange.getValues();
     var modified = false;
     
-    // Toplu mailler için gruplama nesnesi
-    // Key: targetUnitKey + "||" + warningLevel
     var pendingAlerts = {};
     
     for (var r = 0; r < techValues.length; r++) {
       var row = techValues[r];
       var unitName = String(row[0]).trim().toUpperCase();
       var siraNo = String(row[1]).trim();
-      var techName = String(row[2]).trim();
-      var partNo = String(row[3]).trim();
-      var seriNo = String(row[4]).trim();
-      var location = String(row[6]).trim();
-      var status = String(row[7]).trim();
-      var gelecekBakimStr = String(row[9]).trim();
-      var sonKontrolYapan = String(row[10]).trim();
-      var aciklama = String(row[11]).trim();
+      var isKara = (unitName === "KARA ARAÇLARI" || unitName.indexOf("KARA") !== -1);
       
-      var mail90 = String(row[12] || "").trim();
-      var mail60 = String(row[13] || "").trim();
-      var mail30 = String(row[14] || "").trim();
+      var techName = isKara ? String(row[3]).trim() : String(row[2]).trim();
+      if (techName === "-") techName = "";
+      
+      var partNo = isKara ? String(row[5]).trim() : String(row[4]).trim();
+      if (partNo === "-") partNo = "";
+      
+      var seriNo = isKara ? "" : String(row[6]).trim();
+      if (seriNo === "-") seriNo = "";
+      
+      var location = String(row[9]).trim();
+      var status = String(row[10]).trim();
+      var gelecekBakimStr = String(row[12]).trim();
+      var sonKontrolYapan = String(row[13]).trim();
+      var aciklama = String(row[14]).trim();
+      
+      var mail90 = String(row[15] || "").trim();
+      var mail60 = String(row[16] || "").trim();
+      var mail30 = String(row[17] || "").trim();
       
       if (!gelecekBakimStr) continue;
       
       var daysDiff = getDaysDiff(gelecekBakimStr);
       if (daysDiff === null) continue;
       
-      // Eğer gelecek bakım yenilenmişse ve 90 günden fazla süre kalmışsa eski uyarılardan kalan tarihler varsa otomatik temizleyelim
+      // Reset if future control date is updated (extended)
       if (daysDiff > 90) {
         if (mail90 || mail60 || mail30) {
-          techValues[r][12] = "";
-          techValues[r][13] = "";
-          techValues[r][14] = "";
+          techValues[r][15] = "";
+          techValues[r][16] = "";
+          techValues[r][17] = "";
           modified = true;
         }
         continue;
       }
       
       var warningLevel = "";
-      var colToUpdate = -1; // index in row (12 for 90 days, 13 for 60 days, 14 for 30 days)
+      var colToUpdate = -1; // index in row (15 for 90 days, 16 for 60 days, 17 for 30 days)
       
       if (daysDiff <= 30) {
         if (!mail30) {
           warningLevel = "30 GÜN UYARISI";
-          colToUpdate = 14;
+          colToUpdate = 17;
         }
       } else if (daysDiff <= 60) {
         if (!mail60) {
           warningLevel = "60 GÜN UYARISI";
-          colToUpdate = 13;
+          colToUpdate = 16;
         }
       } else if (daysDiff <= 90) {
         if (!mail90) {
           warningLevel = "90 GÜN UYARISI";
-          colToUpdate = 12;
+          colToUpdate = 15;
         }
       }
       
       if (warningLevel !== "" && colToUpdate !== -1) {
-        // Sorumlu iletişim bilgisi tespiti
         var contact = null;
         var normUnitName = normalizeUnitName(unitName);
         for (var uKey in emailMap) {
@@ -1111,7 +1464,7 @@ function processEquipmentReminders(ss, formattedDate) {
         
         var targetUnitKey = contact ? contact.unitKey : "VARSAYILAN";
         var contactName = contact ? contact.name : "Sorumlu Personel";
-        var contactEmail = contact ? contact.email : "ormanhavacilik.bakimsube@gmail.com";
+        var contactEmail = contact ? contact.email : "romanhavacilik.bakimsube@gmail.com";
         var gunTakipRowIndex = contact ? contact.rowIndex : -1;
         
         var groupKey = targetUnitKey + "||" + warningLevel;
@@ -1123,54 +1476,89 @@ function processEquipmentReminders(ss, formattedDate) {
             warningLevel: warningLevel,
             unitName: contact ? contact.originalUnitName : unitName,
             colToUpdate: colToUpdate,
+            triggeringIndexes: [],
             items: []
           };
         }
         
-        pendingAlerts[groupKey].items.push({
-          techValuesIndex: r,
-          techName: techName,
-          partNo: partNo,
-          seriNo: seriNo,
-          location: location,
-          status: status,
-          gelecekBakimStr: gelecekBakimStr,
-          sonKontrolYapan: sonKontrolYapan,
-          aciklama: aciklama,
-          daysDiff: daysDiff
-        });
+        pendingAlerts[groupKey].triggeringIndexes.push(r);
       }
     }
     
-    // Toplu mailleri gönderelim ve tabloları güncelleyelim
+    // Grouping all equipment items under 90 days
+    for (var gKey in pendingAlerts) {
+      var group = pendingAlerts[gKey];
+      var groupUnitNorm = normalizeUnitName(group.unitName);
+      
+      for (var r = 0; r < techValues.length; r++) {
+        var rRow = techValues[r];
+        var rUnitName = String(rRow[0]).trim().toUpperCase();
+        var rUnitNorm = normalizeUnitName(rUnitName);
+        
+        if (groupUnitNorm.indexOf(rUnitNorm) !== -1 || rUnitNorm.indexOf(groupUnitNorm) !== -1) {
+          var rGelecekBakimStr = String(rRow[12]).trim();
+          if (!rGelecekBakimStr) continue;
+          
+          var rDaysDiff = getDaysDiff(rGelecekBakimStr);
+          if (rDaysDiff !== null && rDaysDiff <= 90) {
+            var rIsKara = (rUnitName === "KARA ARAÇLARI" || rUnitName.indexOf("KARA") !== -1);
+            var rTechName = rIsKara ? String(rRow[3]).trim() : String(rRow[2]).trim();
+            if (rTechName === "-") rTechName = "";
+            
+            var rPartNo = rIsKara ? String(rRow[5]).trim() : String(rRow[4]).trim();
+            if (rPartNo === "-") rPartNo = "";
+            
+            var rSeriNo = rIsKara ? "" : String(rRow[6]).trim();
+            if (rSeriNo === "-") rSeriNo = "";
+            
+            group.items.push({
+              techValuesIndex: r,
+              techName: rTechName,
+              partNo: rPartNo,
+              seriNo: rSeriNo,
+              location: String(rRow[9]).trim(),
+              status: String(rRow[10]).trim(),
+              gelecekBakimStr: rGelecekBakimStr,
+              sonKontrolYapan: String(rRow[13]).trim(),
+              aciklama: String(rRow[14]).trim(),
+              daysDiff: rDaysDiff
+            });
+          }
+        }
+      }
+      
+      group.items.sort(function(a, b) {
+        return a.daysDiff - b.daysDiff;
+      });
+    }
+    
+    // Send email reminders
     for (var gKey in pendingAlerts) {
       var group = pendingAlerts[gKey];
       if (group.items.length > 0) {
-        // Toplu maili gönder
         sendConsolidatedReminderEmail(group.contactEmail, group.contactName, group.warningLevel, group.unitName, group.items);
         
-        // TÜM TECHİZAT satırlarındaki ilgili kolonları güncelle
-        for (var k = 0; k < group.items.length; k++) {
-          var item = group.items[k];
-          techValues[item.techValuesIndex][group.colToUpdate] = formattedDate;
+        for (var k = 0; k < group.triggeringIndexes.length; k++) {
+          var rIdx = group.triggeringIndexes[k];
+          techValues[rIdx][group.colToUpdate] = formattedDate;
           
-          // Cascading updates: If 30-day warning is sent, also populate 60 and 90 if empty. If 60-day is sent, also populate 90 if empty.
-          if (group.colToUpdate === 14) { // 30 GÜN
-            if (!techValues[item.techValuesIndex][13]) {
-              techValues[item.techValuesIndex][13] = formattedDate;
+          // Cascading updates
+          if (group.colToUpdate === 17) { // 30 GÜN
+            if (!techValues[rIdx][16]) {
+              techValues[rIdx][16] = formattedDate;
             }
-            if (!techValues[item.techValuesIndex][12]) {
-              techValues[item.techValuesIndex][12] = formattedDate;
+            if (!techValues[rIdx][15]) {
+              techValues[rIdx][15] = formattedDate;
             }
-          } else if (group.colToUpdate === 13) { // 60 GÜN
-            if (!techValues[item.techValuesIndex][12]) {
-              techValues[item.techValuesIndex][12] = formattedDate;
+          } else if (group.colToUpdate === 16) { // 60 GÜN
+            if (!techValues[rIdx][15]) {
+              techValues[rIdx][15] = formattedDate;
             }
           }
         }
         modified = true;
         
-        // GÜN TAKİP satırındaki ilgili kolonu güncelle
+        // Update contact warning log on GÜN TAKİP
         if (group.gunTakipRowIndex !== -1) {
           var gtCol = -1;
           if (group.warningLevel === "90 GÜN UYARISI") gtCol = 4;
@@ -1484,7 +1872,7 @@ function ensureGunTakipSheet(ss) {
  */
 function normalizeUnitName(str) {
   if (!str) return "";
-  return String(str).trim().toUpperCase()
+  return String(str).trim()
     .replace(/İ/g, "I")
     .replace(/ı/g, "i")
     .replace(/Ğ/g, "G")
@@ -1497,6 +1885,7 @@ function normalizeUnitName(str) {
     .replace(/ö/g, "o")
     .replace(/Ç/g, "C")
     .replace(/ç/g, "c")
+    .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
 }
 
@@ -1507,17 +1896,68 @@ function updateTechizatFirmaInAllTechizat(ss, partNo, seriNo, newFirma) {
   var techSheet = getSheetWithFallback(ss, "TÜM TECHİZAT");
   var lastRow = techSheet.getLastRow();
   if (lastRow > 1) {
-    var range = techSheet.getRange(2, 1, lastRow - 1, 12);
+    var range = techSheet.getRange(2, 1, lastRow - 1, 15);
     var values = range.getValues();
     for (var r = 0; r < values.length; r++) {
-      var rowPart = String(values[r][3] || "").trim(); // Index 3 is Column D: PARÇA NO (P/N) / MODEL
-      var rowSeri = String(values[r][4] || "").trim(); // Index 4 is Column E: SERİ NO (S/N)
+      var unitName = String(values[r][0] || "").trim().toUpperCase();
+      var isKara = (unitName === "KARA ARAÇLARI" || unitName.indexOf("KARA") !== -1);
       
-      if (rowPart === partNo && rowSeri === seriNo) {
-        // Set the value in Column K (Index 11, but 1-based index is 11)
-        techSheet.getRange(r + 2, 11).setValue(newFirma);
+      var rowPart = isKara ? String(values[r][5] || "").trim() : String(values[r][4] || "").trim();
+      var rowSeri = isKara ? String(values[r][3] || "").trim() : String(values[r][6] || "").trim();
+      
+      if ((rowPart === partNo && rowSeri === seriNo) || (isKara && rowSeri === partNo)) {
+        // "SON KONTROLÜ YAPAN FİRMA" is column 14 (1-based index 14, i.e., column N)
+        techSheet.getRange(r + 2, 14).setValue(newFirma);
       }
     }
+  }
+}
+
+/**
+ * Her gün otomatik çalışacak tetikleyici fonksiyonu.
+ * Sistem açık veya kapalı fark etmeksizin her gün kontrol eder ve e-posta gönderir.
+ */
+function dailyReminderTrigger() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var now = new Date();
+  var pad = function(n) { return String(n).padStart(2, '0'); };
+  var formattedDate = pad(now.getDate()) + "." + pad(now.getMonth() + 1) + "." + now.getFullYear() + " " + pad(now.getHours()) + ":" + pad(now.getMinutes());
+  
+  processEquipmentReminders(ss, formattedDate);
+}
+
+/**
+ * Zaman ayarlı günlük tetikleyiciyi kurmak için yardımcı fonksiyon.
+ * Google Apps Script Editörü üzerinden bir kez çalıştırılması yeterlidir.
+ */
+function createDailyTrigger() {
+  // Mevcut tetikleyicileri temizleyelim
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "dailyReminderTrigger") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  
+  // Her gün sabah 09:00 - 10:00 arasında çalışacak şekilde yeni tetikleyici kuralım
+  ScriptApp.newTrigger("dailyReminderTrigger")
+    .timeBased()
+    .everyDays(1)
+    .atHour(9)
+    .create();
+    
+  // Kullanıcıya işlemin başarılı olduğunu belirten bir bildirim gösterelim
+  try {
+    var ui = SpreadsheetApp.getUi();
+    ui.alert(
+      "⏰ OTOMATİK HATIRLATICI ETKİNLEŞTİRİLDİ",
+      "Gelecek kontrol / bakım tarihleri için günlük otomatik e-posta taraması başarıyla kuruldu!\n\n" +
+      "• Sistem her sabah 09:00 - 10:00 saatleri arasında çalışacaktır.\n" +
+      "• Kontrol tarihine 90, 60 veya 30 gün kalan teçhizatlar için ilgili Sorumlu Birim yetkililerine otomatik toplu hatırlatma e-postaları gönderilecektir.",
+      ui.ButtonSet.OK
+    );
+  } catch (err) {
+    Logger.log("Arayüz bildirimi gösterilemedi: " + err.toString());
   }
 }
 

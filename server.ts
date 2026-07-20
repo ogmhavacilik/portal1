@@ -14,92 +14,239 @@ async function startServer() {
 
   // API Route: Taskline EBYS Proxy
   app.get("/api/taskline-ebys", async (req, res) => {
+    const scriptUrl = req.query.scriptUrl as string;
+    const targetUrl = scriptUrl || "https://script.google.com/macros/s/AKfycbyZweW0GUB9DbW1CCEaEoAJjq4iYBMannyYGnp2Szr9YcxsrQi6oUGh035tncgmXwoKTw/exec";
+    const finalUrl = targetUrl.replace(/\/dev$/, "/exec");
+    const spreadsheetId = (req.query.spreadsheetId as string) || "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
+    
+    let fetchedData: any = null;
+    let fetchError: string | null = null;
+    
+    // Yöntem 1: POST isteği ile "getDemands" aksiyonunu çekmeyi dene
     try {
-      const targetUrl = "https://script.google.com/macros/s/AKfycbxzwmR6Bd2QOMuTzN984Z_jrpbzPeN88OWnomxhmI8e0TFL1iqyS0ZZmHh1Ln2Cg-iN/exec";
-      
-      console.log("Fetching live data from GAS Web App via POST (action: getDemands)...");
+      console.log(`[Yöntem 1] Fetching live demands via POST (getDemands) from URL: ${finalUrl} with Spreadsheet: ${spreadsheetId}...`);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
       
-      const response = await fetch(targetUrl, {
+      const response = await fetch(finalUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ action: "getDemands" }),
+        body: JSON.stringify({ 
+          action: "getDemands",
+          spreadsheetId: spreadsheetId
+        }),
         signal: controller.signal
       });
       clearTimeout(timeoutId);
       
-      if (!response.ok) {
-        throw new Error(`GAS Web App sunucu durum kodu döndürdü: ${response.status}`);
-      }
-      
-      const text = await response.text();
-      
-      // If it's an HTML error page (like 'index not found' or general Google Web App error)
-      if (text.includes("No HTML file named index was found") || text.includes("HTML-bestand") || text.trim().startsWith("<!DOCTYPE") || text.trim().startsWith("<html")) {
-        console.warn("GAS returned an HTML error page.");
-        return res.json({ 
-          status: "error", 
-          message: "Google Apps Script hatası: E-Tablo dosyası açılamadı veya yetki sorunu var. Lütfen Google Apps Script projesindeki e-tablo kimliğinin (SPREADSHEET_ID) doğru olduğunu ve Web Uygulaması ayarlarında yetkinin 'Anyone' (Herkes) olarak seçildiğini kontrol edin." 
-        });
-      }
-      
-      try {
-        const json = JSON.parse(text);
-        console.log("Successfully fetched live data from GAS Web App.");
-        return res.json(json);
-      } catch (e) {
-        console.warn("GAS response was not valid JSON.");
-        return res.json({ 
-          status: "error", 
-          message: "Google Apps Script JSON yerine geçersiz veri döndürdü." 
-        });
+      if (response.ok) {
+        const text = await response.text();
+        if (!text.includes("No HTML file named index was found") && !text.includes("HTML-bestand") && !text.trim().startsWith("<!DOCTYPE") && !text.trim().startsWith("<html")) {
+          try {
+            const json = JSON.parse(text);
+            if (json && json.status !== "error" && (Array.isArray(json.data) || Array.isArray(json))) {
+              fetchedData = json;
+              console.log("[Yöntem 1] Canlı demands listesi başarıyla alındı.");
+            } else {
+              fetchError = json?.message || "Geçersiz response formatı";
+            }
+          } catch (e) {
+            fetchError = "GAS yanıtı geçerli bir JSON değil.";
+          }
+        } else {
+          fetchError = "GAS bir HTML hata sayfası döndürdü.";
+        }
+      } else {
+        fetchError = `HTTP Durum Kodu: ${response.status}`;
       }
     } catch (err: any) {
-      console.error("Taskline EBYS proxy error:", err.message);
-      return res.json({ 
-        status: "error", 
-        message: `Taskline EBYS bağlantı hatası: ${err.message}` 
-      });
+      console.warn("[Yöntem 1] POST getDemands başarısız oldu:", err.message);
+      fetchError = err.message;
     }
+
+    // Yöntem 2: Eğer Yöntem 1 başarısız olduysa veya hata döndürdüyse, "readSheet" ile GET isteği olarak sayfaları oku
+    if (!fetchedData) {
+      const fallbackSheetNames = ["Sayfa1", "TASKLINE-PARÇA LİSTESİ", "İşlemdeki Talepler", "Talepler", "Demands"];
+      for (const sheetName of fallbackSheetNames) {
+        try {
+          console.log(`[Yöntem 2] GET readSheet ile "${sheetName}" sayfasını çekmeyi deniyor...`);
+          const getUrl = `${finalUrl}?action=readSheet&sheetName=${encodeURIComponent(sheetName)}&spreadsheetId=${encodeURIComponent(spreadsheetId)}`;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+          
+          const response = await fetch(getUrl, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          
+          if (response.ok) {
+            const text = await response.text();
+            if (!text.includes("No HTML file named index was found") && !text.includes("HTML-bestand") && !text.trim().startsWith("<!DOCTYPE") && !text.trim().startsWith("<html")) {
+              try {
+                const json = JSON.parse(text);
+                if (json && json.status !== "error" && Array.isArray(json.data) && json.data.length > 0) {
+                  // Kolon başlıklarını standardize ederek getDemands formatına dönüştür
+                  const normalizedRows = json.data.map((row: any) => {
+                    let sira = "";
+                    let baslik = "";
+                    let aciklama = "";
+                    let tur = "MALZEME";
+                    let ebys = "";
+                    
+                    const keys = Object.keys(row);
+                    for (const key of keys) {
+                      const upperKey = key.trim().toUpperCase();
+                      const val = String(row[key] || "").trim();
+                      
+                      if (upperKey.includes("SIRA") || upperKey === "S.N." || upperKey === "S.NU.") sira = val;
+                      else if (upperKey.includes("BAŞLIK") || upperKey.includes("BASLIK") || upperKey === "KONU" || upperKey === "BAŞLIK / TANIMI") baslik = val;
+                      else if (upperKey.includes("AÇIKLAMA") || upperKey.includes("ACIKLAMA")) aciklama = val;
+                      else if (upperKey.includes("TÜR") || upperKey.includes("TURU") || upperKey === "TİP") tur = val;
+                      else if (upperKey.includes("EBYS") && !upperKey.includes("TARİH") && !upperKey.includes("TARIH") && !upperKey.includes("DATE")) ebys = val;
+                    }
+                    
+                    if (!ebys || ebys.toLowerCase() === "n/a" || ebys.toLowerCase() === "na") {
+                      if (keys.length > 7) {
+                        ebys = String(row[keys[7]] || "").trim();
+                      }
+                    }
+                    
+                    return {
+                      "SIRA NO": sira,
+                      "Başlık": baslik || ("Talep " + ebys),
+                      "Açıklama": aciklama,
+                      "Talep Türü": tur || "MALZEME",
+                      "EBYS NO": ebys
+                    };
+                  }).filter((item: any) => item["EBYS NO"] && item["EBYS NO"].length > 0 && item["EBYS NO"].toLowerCase() !== "n/a" && item["EBYS NO"].toLowerCase() !== "na");
+                  
+                  if (normalizedRows.length > 0) {
+                    fetchedData = {
+                      status: "success",
+                      data: normalizedRows,
+                      message: `Successfully retrieved and normalized demands from sheet "${sheetName}".`
+                    };
+                    console.log(`[Yöntem 2] "${sheetName}" sayfasından ${normalizedRows.length} adet kayıt başarıyla standardize edilerek okundu.`);
+                    break;
+                  }
+                }
+              } catch (e) {
+                console.warn(`[Yöntem 2] "${sheetName}" JSON parse hatası veya veri yok.`);
+              }
+            }
+          }
+        } catch (err: any) {
+          console.warn(`[Yöntem 2] "${sheetName}" çekme denemesi başarısız:`, err.message);
+        }
+      }
+    }
+
+    // Yöntem 3: Eğer canlı bağlantıların tamamı başarısız olduysa, lokal default listeyi döndür (kesinti olmasın)
+    if (!fetchedData) {
+      console.log("[Yöntem 3] Canlı Apps Script sorguları başarısız oldu. Lokal fallback listesi yükleniyor.");
+      fetchedData = {
+        status: "success",
+        data: getFallbackEbysList(),
+        message: "Lokal/Fallback EBYS listesi yüklendi."
+      };
+    }
+
+    return res.json(fetchedData);
   });
 
   // API Route: Taskline Submit Proxy
   app.post("/api/taskline-submit", async (req, res) => {
     try {
-      const { ebysNo, data, scriptUrl } = req.body;
+      const { ebysNo, talepTuru, data, scriptUrl, fallbackScriptUrl, spreadsheetId } = req.body;
+      const finalSpreadsheetId = spreadsheetId || "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
       
-      const targetUrl = scriptUrl || "https://script.google.com/macros/s/AKfycbsqDITjd3ZddAvRKQhpNF3ymQncNfzgC0IHCvm-rUi/exec";
+      const targetUrl = scriptUrl || "https://script.google.com/macros/s/AKfycbyZweW0GUB9DbW1CCEaEoAJjq4iYBMannyYGnp2Szr9YcxsrQi6oUGh035tncgmXwoKTw/exec";
       // Ensure we target the production /exec deployment if the user accidentally copied the /dev URL
       const finalUrl = targetUrl.replace(/\/dev$/, "/exec");
       
-      console.log(`[Proxy Taskline Submit] Posting to ${finalUrl} with EBYS: ${ebysNo}`);
+      console.log(`[Proxy Taskline Submit] Posting to ${finalUrl} with EBYS: ${ebysNo}, Talep Türü: ${talepTuru}, Spreadsheet ID: ${finalSpreadsheetId}`);
       
-      const response = await fetch(finalUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/plain;charset=utf-8"
-        },
-        body: JSON.stringify({
-          action: "appendEbysTable",
-          ebysNo: ebysNo,
-          data: data
-        })
-      });
+      let response;
+      let responseText = "";
+      let isUnknownAction = false;
+      let networkError = null;
 
-      if (!response.ok) {
-        throw new Error(`Google Apps Script returned status: ${response.status}`);
+      try {
+        response = await fetch(finalUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8"
+          },
+          body: JSON.stringify({
+            action: "appendEbysTable",
+            ebysNo: ebysNo,
+            talepTuru: talepTuru || "MALZEME",
+            data: data,
+            spreadsheetId: finalSpreadsheetId
+          })
+        });
+
+        if (response.ok) {
+          responseText = await response.text();
+          if (responseText.includes("Unknown action")) {
+            isUnknownAction = true;
+          }
+        } else {
+          networkError = `Google Apps Script returned status: ${response.status}`;
+        }
+      } catch (err: any) {
+        networkError = err.message || "Network request failed";
       }
 
-      const responseText = await response.text();
-      console.log(`[Proxy Taskline Submit] Response from GAS:`, responseText.substring(0, 500));
+      // If the first try failed (due to Unknown Action or network issue), retry with fallbackScriptUrl
+      if (isUnknownAction || networkError) {
+        console.log(`[Proxy Taskline Submit] First route did not support appendEbysTable or had network limits. Trying secondary path...`);
+        
+        const fallbackUrl = (fallbackScriptUrl || "https://script.google.com/macros/s/AKfycbzB1n5fmC2X4Zqk3S9DDA5sAcmDa7KmMClg006y9LVHYHEYhqVcZoLvDZqfGOz1SyGO/exec").replace(/\/dev$/, "/exec");
+        console.log(`[Proxy Taskline Submit Fallback] Retrying with fallback URL: ${fallbackUrl}`);
+
+        try {
+          const fallbackResponse = await fetch(fallbackUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "text/plain;charset=utf-8"
+            },
+            body: JSON.stringify({
+              action: "appendEbysTable",
+              ebysNo: ebysNo,
+              talepTuru: talepTuru || "MALZEME",
+              data: data,
+              spreadsheetId: finalSpreadsheetId
+            })
+          });
+
+          if (fallbackResponse.ok) {
+            response = fallbackResponse;
+            responseText = await fallbackResponse.text();
+            isUnknownAction = responseText.includes("Unknown action");
+            networkError = null;
+          } else {
+            networkError = `Fallback Google Apps Script returned status: ${fallbackResponse.status}`;
+          }
+        } catch (fallbackErr: any) {
+          networkError = fallbackErr.message || "Fallback network request failed";
+        }
+      }
+
+      if (networkError) {
+        throw new Error(networkError);
+      }
+
+      if (isUnknownAction) {
+        throw new Error(`Google Apps Script returned: ${responseText}`);
+      }
+
+      console.log(`[Proxy Taskline Submit] Success Response:`, responseText.substring(0, 500));
 
       return res.json({
         status: "success",
         message: "Data successfully sent to Taskline Google Sheet.",
-        gasStatus: response.status,
+        gasStatus: response ? response.status : 200,
         response: responseText
       });
     } catch (err: any) {

@@ -67,8 +67,9 @@ import { jsPDF } from 'jspdf';
 import { ImageEditorAndRetoucher } from './components/ImageEditorAndRetoucher';
 import { CachedDriveImage } from './components/CachedDriveImage';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzkHiSK2lW0tSElLoIJbqquOjIgE1AZlKrFmoajhYeneVAdvYcMy7fnd2A5-ShKpTXbOw/exec";
-export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbsqDITjd3ZddAvRKQhpNF3ymQncNfzgC0IHCvm-rUi/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzB1n5fmC2X4Zqk3S9DDA5sAcmDa7KmMClg006y9LVHYHEYhqVcZoLvDZqfGOz1SyGO/exec";
+export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
+export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
 // Convert a File object to Base64 string for Drive uploading
 export const fileToBase64 = (file: File): Promise<string> => {
@@ -741,6 +742,132 @@ export default function App() {
   const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isImageUploadingToDrive, setIsImageUploadingToDrive] = useState<boolean>(false);
+
+  // Background removal and camera stream states
+  const [isRemoveBgEnabled, setIsRemoveBgEnabled] = useState<boolean>(false);
+  const [isProcessingRemoveBg, setIsProcessingRemoveBg] = useState<boolean>(false);
+  const [isWebcamOpen, setIsWebcamOpen] = useState<boolean>(false);
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Process background removal via Photoroom Sandbox API
+  const handleProcessBackgroundRemoval = async (file: File) => {
+    try {
+      setIsProcessingRemoveBg(true);
+      showNotification("Photoroom AI ile arka plan temizleniyor...");
+      
+      const formData = new FormData();
+      formData.append("image_file", file);
+      
+      const res = await fetch("https://sdk.photoroom.com/v1/segment", {
+        method: "POST",
+        headers: {
+          "x-api-key": "sandbox_sk_pr_default_b7f12ef076b0ed268ce1fbac0b72ccd2873f10bc"
+        },
+        body: formData
+      });
+      
+      if (!res.ok) {
+        throw new Error(`Photoroom API hatası: ${res.status}`);
+      }
+      
+      const blob = await res.blob();
+      const localUrl = URL.createObjectURL(blob);
+      setPendingImagePreview(localUrl);
+      
+      // Convert blob to base64
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        setPendingImageBase64(base64);
+        setPendingImageMimeType("image/png");
+      };
+      reader.readAsDataURL(blob);
+
+      // Save as transparent file
+      const transparentFile = new File([blob], `transparent_${file.name || "captured.png"}`, { type: "image/png" });
+      setPendingImageFile(transparentFile);
+      
+      showNotification("Arka plan başarıyla silindi!");
+    } catch (err: any) {
+      console.error("Photoroom background removal error:", err);
+      showNotification(`Arka plan silme başarısız oldu: ${err.message || err}`);
+    } finally {
+      setIsProcessingRemoveBg(false);
+    }
+  };
+
+  // Helper when image file is selected or captured
+  const handleImageSelected = async (file: File) => {
+    setPendingImageFile(file);
+    setPendingImagePreview(URL.createObjectURL(file));
+    
+    // Convert to base64 immediately for standard use
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setPendingImageBase64(reader.result as string);
+      setPendingImageMimeType(file.type || "image/png");
+    };
+    reader.readAsDataURL(file);
+
+    if (isRemoveBgEnabled) {
+      await handleProcessBackgroundRemoval(file);
+    }
+  };
+
+  // Webcam controls for desktop webcam support
+  const startWebcam = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+      setWebcamStream(stream);
+      setIsWebcamOpen(true);
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      }, 200);
+    } catch (err: any) {
+      console.error("Kamera başlatılamadı:", err);
+      showNotification(`Kamera erişimi başarısız oldu: ${err.message}`);
+      // Fallback: click native camera / file input
+      document.getElementById('drag-drop-image-input')?.click();
+    }
+  };
+
+  const stopWebcam = () => {
+    if (webcamStream) {
+      webcamStream.getTracks().forEach(track => track.stop());
+      setWebcamStream(null);
+    }
+    setIsWebcamOpen(false);
+  };
+
+  const captureWebcamPhoto = () => {
+    if (!videoRef.current) return;
+    try {
+      const video = videoRef.current;
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(async (blob) => {
+          if (blob) {
+            const capturedFile = new File([blob], `captured_${Date.now()}.png`, { type: "image/png" });
+            stopWebcam();
+            await handleImageSelected(capturedFile);
+          }
+        }, "image/png");
+      }
+    } catch (err: any) {
+      console.error("Fotoğraf çekilirken hata:", err);
+      showNotification(`Fotoğraf çekilemedi: ${err.message}`);
+    }
+  };
   const [isDataUpdateUnlocked, setIsDataUpdateUnlocked] = useState<boolean>(false);
   const [dataPasswordInput, setDataPasswordInput] = useState<string>('');
   const [dataPasswordError, setDataPasswordError] = useState<boolean>(false);
@@ -773,6 +900,7 @@ export default function App() {
   const [geDepartureKm, setGeDepartureKm] = useState<string>("");
   const [geStep, setGeStep] = useState<number>(1);
   const [showDriverSuggestions, setShowDriverSuggestions] = useState<boolean>(false);
+  const [showVehicleSuggestions, setShowVehicleSuggestions] = useState<boolean>(false);
   const [isRedirectingToPortal, setIsRedirectingToPortal] = useState<boolean>(false);
   const [geRoutes, setGeRoutes] = useState<{ from: string; to: string }[]>([{ from: "", to: "" }]);
   const [isSlidingUp, setIsSlidingUp] = useState<boolean>(false);
@@ -855,7 +983,7 @@ export default function App() {
       
       const ebysKey = keys.find(k => {
         const norm = normalize(k);
-        return norm.includes("ebys") || norm === "h";
+        return (norm.includes("ebys") || norm === "h") && !norm.includes("tarih") && !norm.includes("date") && !norm.includes("gun");
       });
       if (ebysKey) ebysNo = String(item[ebysKey]).trim();
       
@@ -877,21 +1005,21 @@ export default function App() {
       });
       if (talepTuruKey) talepTuru = String(item[talepTuruKey]).trim();
 
-      // Fallbacks - Prefer Column H (8th column) if ebysNo is still empty
-      if (!ebysNo && keys.length > 7) {
-        ebysNo = String(item[keys[7]] || "").trim();
+      // Fallbacks - Prefer Column H (8th column) if ebysNo is empty or 'n/a'
+      if (!ebysNo || ebysNo.toLowerCase() === "n/a" || ebysNo.toLowerCase() === "na") {
+        if (keys.length > 7) {
+          ebysNo = String(item[keys[7]] || "").trim();
+        }
       }
-      if (!ebysNo) ebysNo = String(item["EBYS NO"] || item["EBYS"] || item["ebys"] || item["EBYS Numarası"] || item["ebysNumber"] || item["H"] || "");
+      if (!ebysNo || ebysNo.toLowerCase() === "n/a" || ebysNo.toLowerCase() === "na") {
+        ebysNo = String(item["EBYS NO"] || item["EBYS"] || item["ebys"] || item["EBYS Numarası"] || item["ebysNumber"] || item["H"] || "");
+      }
       if (!baslik) baslik = String(item["Başlık"] || item["Baslik"] || item["title"] || item["B"] || "");
       if (!aciklama) aciklama = String(item["Açıklama"] || item["Aciklama"] || item["description"] || item["C"] || "");
       if (!talepTuru) talepTuru = String(item["Talep Türü"] || item["Talep Turu"] || item["type"] || item["D"] || "");
     }
 
-    // Extract only digits/numbers from column H (EBYS) as requested ("h sutundaki rakamlari cek")
-    const digitsOnly = ebysNo.replace(/\D/g, "");
-    if (digitsOnly) {
-      ebysNo = digitsOnly;
-    }
+    ebysNo = ebysNo.trim();
 
     return { ebysNo, baslik, aciklama, talepTuru };
   };
@@ -914,7 +1042,7 @@ export default function App() {
     setEbysError(null);
     try {
       // Use our server-side API proxy to completely bypass client CORS / 'Failed to fetch' error
-      const url = `/api/taskline-ebys`;
+      const url = `/api/taskline-ebys?scriptUrl=${encodeURIComponent(EBYS_SEARCH_SCRIPT_URL)}&spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`HTTP Hata: ${response.status}`);
@@ -946,7 +1074,7 @@ export default function App() {
   const fetchSubmittedEbysRequests = async () => {
     setIsLoadingSubmitted(true);
     try {
-      const url = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("Sayfa1")}`;
+      const url = `/api/taskline-ebys?scriptUrl=${encodeURIComponent(TASKLINE_SUBMIT_SCRIPT_URL)}&action=readSheet&sheetName=${encodeURIComponent("Sayfa1")}&spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
       const response = await fetch(url);
       if (response.ok) {
         const result = await response.json();
@@ -959,7 +1087,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.error("TASKLINE Sayfa1 listesi çekme hatası:", err);
+      console.error("TASKLINE TASKLINE-PARÇA LİSTESİ listesi çekme hatası:", err);
       const saved = localStorage.getItem('submitted_ebys_requests');
       if (saved) {
         setSubmittedEbysRequests(JSON.parse(saved));
@@ -976,48 +1104,26 @@ export default function App() {
       return;
     }
 
-    const tableRows = Object.values(selectedTechizatItems).map((item: { techType: string; row: string[] }, idx: number) => {
+    const tableRows = Object.values(selectedTechizatItems).map((item: { techType: string; row: string[] }) => {
       const row = item.row;
-      const malzemeAdi = row[1] || "";
-      const parcaNo = row[2] || "-";
-      const miktarKapasite = row[4] || "1";
-
-      // Dynamically detect Birim from material name
-      let birim = "ADET";
-      const lowerName = malzemeAdi.toLowerCase();
-      if (lowerName.includes("set") || lowerName.includes("istasyon")) {
-        birim = "SET";
-      } else if (lowerName.includes("kutu") || lowerName.includes("gres") || lowerName.includes("yağ") || lowerName.includes("grease")) {
-        birim = "KUTU";
-      } else if (lowerName.includes("takım")) {
-        birim = "TAKIM";
-      } else if (lowerName.includes("litre") || lowerName.includes(" lt")) {
-        birim = "LİTRE";
-      } else if (lowerName.includes("metre") || lowerName.includes(" mt")) {
-        birim = "METRE";
-      } else if (lowerName.includes("rulo")) {
-        birim = "RULO";
-      }
+      const aitOlduguBirim = getTechUnitName(item.techType); // A sütunu: AİT OLDUĞU BİRİM
+      const techName = row[1] || "";                         // B sütunu: TEÇHİZAT ADI
+      const parcaNo = row[2] || "-";                         // C sütunu: PARÇA NO (P/N) / MODEL
+      const seriNo = row[3] || "-";                          // D sütunu: SERİ NO (S/N)
+      const miktarKapasite = row[4] || "1";                  // E sütunu: MİKTAR / KAPASİTE
+      const firma = row[9] || "-";                           // F sütunu: SON KONTROLÜ YAPAN FİRMA
+      const aciklama = row[10] || "";                        // G sütunu: AÇIKLAMA
 
       return [
-        String(idx + 1),        // SIRA NO. (Column A)
-        malzemeAdi,             // MALZEME ADI (Column B)
-        parcaNo,                // PARÇA NUMARASI (Column C)
-        birim,                  // BİRİM (Column D)
-        miktarKapasite,         // İSTEK MİKTARI (Column E)
-        ""                      // TESLİM TARİHİ (Column F)
+        aitOlduguBirim,
+        techName,
+        parcaNo,
+        seriNo,
+        miktarKapasite,
+        firma,
+        aciklama
       ];
     });
-
-    // Bu excel online'a girer, orada en son yazılı satırı bulur, sonra bir satır boşluk atar,
-    // sonraki satıra "EBYS NO:" (A sütunu), ebys no (B sütunu) ve talep türü (C sütunu) şeklinde başlık satırını atar,
-    // ve hemen altına tablo başlığı ile birlikte seçilen teçhizat tablosunu ekler.
-    const rowsToAppend = [
-      ["", "", "", "", "", ""], // Boş satır (1 satır boşluk atar)
-      ["EBYS NO:", ebysSearchQuery, ebysTalepTuru || "MALZEME", "", "", ""], // EBYS Başlık Bilgisi (A, B, C sütunları)
-      ["SIRA NO.", "MALZEME ADI", "PARÇA NUMARASI", "BİRİM", "İSTEK MİKTARI", "TESLİM TARİHİ"], // Tablo Başlık Satırı
-      ...tableRows // Altına teçhizat tablosunu ekler
-    ];
 
     try {
       showNotification("Talepleriniz online Excel sayfasına aktarılıyor ve durumları 'BAKIM / KALİBRASYON' olarak güncelleniyor...");
@@ -1113,8 +1219,11 @@ export default function App() {
         },
         body: JSON.stringify({
           ebysNo: ebysSearchQuery,
-          data: rowsToAppend,
-          scriptUrl: TASKLINE_SUBMIT_SCRIPT_URL
+          talepTuru: ebysTalepTuru || "MALZEME",
+          data: tableRows,
+          scriptUrl: TASKLINE_SUBMIT_SCRIPT_URL,
+          fallbackScriptUrl: GOOGLE_SCRIPT_URL,
+          spreadsheetId: "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ"
         })
       });
 
@@ -1128,7 +1237,7 @@ export default function App() {
       }
 
       // Show instant feedback
-      showNotification("Seçilen teçhizatlar başarıyla TASKLINE Sayfa1 sistemine gönderildi ve durumları 'BAKIM / KALİBRASYON' olarak güncellendi!");
+      showNotification("Seçilen teçhizatlar başarıyla Sayfa1 sistemine gönderildi ve durumları 'BAKIM / KALİBRASYON' olarak güncellendi!");
       setSelectedTechizatItems({});
       setIsEbysModalOpen(false);
       setEbysSearchQuery("");
@@ -1266,7 +1375,7 @@ export default function App() {
     }
   };
 
-  // Update a specific request's KONTROLÜ YAPAN FİRMA column on TASKLINE Sayfa1 online sheet
+  // Update a specific request's KONTROLÜ YAPAN FİRMA column on TASKLINE-PARÇA LİSTESİ online sheet
   const updateEbysFirmaOnline = async (indexToUpdate: number, newFirma: string) => {
     const item = submittedEbysRequests[indexToUpdate];
     if (!item) return;
@@ -1566,11 +1675,7 @@ export default function App() {
   const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_bell429_data');
     if (saved) return JSON.parse(saved);
-    return [
-      ["1", "Bell 429 Çekme Çubuğu (Tow Bar)", "B429-TOW-01", "SN-9982", "1", "Ankara Hangar 2", "FAAL", "12.03.2026", "12.09.2026", "A Havacılık A.Ş.", "Günlük kontrol yapıldı"],
-      ["2", "Hidrolik Güç Ünitesi (GPU)", "HYD-GPU-429", "SN-1024", "1", "Ankara Hangar 2", "FAAL", "18.04.2026", "18.10.2026", "B Savunma Ltd.", "Yıllık kalibrasyonu yapıldı"],
-      ["3", "Pervane Sabitleme Aparatı (Blade Tie-Down)", "B429-BTD-05", "SN-5541", "4", "Ankara Depo-A", "FAAL", "05.01.2026", "05.07.2026", "C Teknik Hizmetler", "Eksiksiz durumda"]
-    ];
+    return [];
   });
 
   const [techizatAt802Columns, setTechizatAt802Columns] = useState<string[]>(() => {
@@ -1590,10 +1695,7 @@ export default function App() {
   const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_at802_data');
     if (saved) return JSON.parse(saved);
-    return [
-      ["1", "Su Dolum Hortumu ve Rakor Seti", "AT-WF-08", "SN-7781", "2", "Muğla Üssü", "FAAL", "01.05.2026", "01.11.2026", "Yangın Söndürme Sistemleri A.Ş.", "Sızdırmazlık testi başarılı"],
-      ["2", "Köpük Karıştırma Ünitesi (Foam Blender)", "AT-FM-02", "SN-4432", "1", "İzmir Üssü", "FAAL", "10.04.2026", "10.10.2026", "Köpük Sanayi Ltd.", "Temizliği yapıldı"]
-    ];
+    return [];
   });
 
   const [techizatT70Columns, setTechizatT70Columns] = useState<string[]>(() => {
@@ -1613,10 +1715,7 @@ export default function App() {
   const [techizatT70Data, setTechizatT70Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_t70_data');
     if (saved) return JSON.parse(saved);
-    return [
-      ["1", "T-70 Rotor Sabitleme Kiti (Rotor Tie Down)", "T70-RTD-12", "SN-8842", "1", "Ankara Hangar 1", "FAAL", "15.02.2026", "15.08.2026", "Tusaş Havacılık", "Kutusuyla birlikte muhafaza ediliyor"],
-      ["2", "Azot Dolum Arabası (Nitrogen Cart)", "NIT-CART-70", "SN-2219", "1", "Ankara Hangar 1", "FAAL", "20.03.2026", "20.09.2026", "Gaz Endüstrisi A.Ş.", "Basınç manometreleri kontrol edildi"]
-    ];
+    return [];
   });
 
   const [techizatT70BumbiBacketColumns, setTechizatT70BumbiBacketColumns] = useState<string[]>(() => {
@@ -1636,10 +1735,7 @@ export default function App() {
   const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_t70_bumbi_backet_data');
     if (saved) return JSON.parse(saved);
-    return [
-      ["1", "Bumbi Bucket Yangın Kovası - T70", "Model 2026-BB", "BB-4421", "2500 Litre", "Antalya Üssü", "FAAL", "10.05.2026", "10.11.2026", "Bambi Bucket Co.", "Kova gövdesi ve tahliye vanası faal"],
-      ["2", "Yedek Kova Halat ve Sapan Seti", "Model S-70", "SL-8812", "N/A", "Ankara Depo-B", "FAAL", "12.02.2026", "12.08.2026", "Sapan Sanayi Ltd.", "Kullanıma hazır yedek"]
-    ];
+    return [];
   });
 
   const [techizatB360Columns, setTechizatB360Columns] = useState<string[]>(() => {
@@ -1659,10 +1755,7 @@ export default function App() {
   const [techizatB360Data, setTechizatB360Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_b360_data');
     if (saved) return JSON.parse(saved);
-    return [
-      ["1", "B-360 Lastik Basınç Ölçüm Cihazı", "B360-TPG-10", "SN-1029", "1", "Ankara Hangar 3", "FAAL", "05.05.2026", "05.11.2026", "Ölçüm Teknik A.Ş.", "Kalibrasyonu tamamlandı"],
-      ["2", "B-360 Oksijen Servis Arabası", "B360-OXY-02", "SN-8821", "1", "Ankara Depo-A", "FAAL", "14.04.2026", "14.10.2026", "Oksijen Gaz Sanayi", "Yüksek basınç hortumu yenilendi"]
-    ];
+    return [];
   });
 
   const [techizatC650Columns, setTechizatC650Columns] = useState<string[]>(() => {
@@ -1682,10 +1775,7 @@ export default function App() {
   const [techizatC650Data, setTechizatC650Data] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_c650_data');
     if (saved) return JSON.parse(saved);
-    return [
-      ["1", "C-650 Jeneratör Kablosu (Power Cable)", "C650-PC-04", "SN-9382", "1", "Ankara Hangar 1", "FAAL", "10.03.2026", "10.09.2026", "Kablo Sanayi A.Ş.", "Konektörleri temizlendi"],
-      ["2", "C-650 Motor Yıkama Kiti", "C650-EWC-01", "SN-3029", "1", "Ankara Hangar 1", "FAAL", "22.05.2026", "22.11.2026", "Yıkama Teknolojileri Ltd.", "Pompası test edildi"]
-    ];
+    return [];
   });
 
   const [techizatHangarColumns, setTechizatHangarColumns] = useState<string[]>(() => {
@@ -1705,26 +1795,79 @@ export default function App() {
   const [techizatHangarData, setTechizatHangarData] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_hangar_data');
     if (saved) return JSON.parse(saved);
-    return [
-      ["1", "Hangar Isıtıcı Ünitesi (Blower)", "HGR-HTR-01", "SN-4491", "2", "Ankara Hangar 1", "FAAL", "12.01.2026", "12.11.2026", "Isı Sistemleri Ltd.", "Filtre değişimi yapıldı"],
-      ["2", "Hangar Vinç Sistemi (Overhead Crane)", "HGR-CRN-05", "SN-0283", "1", "Ankara Hangar 2", "FAAL", "01.06.2026", "01.06.2027", "Vinç Muayene Hizmetleri", "Yıllık fenni muayenesi yapıldı"]
-    ];
+    return [];
   });
 
   const [techizatKaraAraclariColumns, setTechizatKaraAraclariColumns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_kara_araclari_cols');
     if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "ARAÇ TİPİ", "MARKA / MODEL", "MİKTAR", "BULUNDUĞU GÖREV YERİ", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "BAKIM YAPAN FİRMA / KURUM", "AÇIKLAMA"];
+    return ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
+
+  const convertOldKaraAraclariRowToNew = (row: string[]): string[] => {
+    const isOldFormat = row.length >= 11 && (row[6] === "FAAL" || row[6] === "ARIZALI" || row[6] === "FAAL DEĞİL" || row[6] === "GAYRİ FAAL");
+    if (!isOldFormat) {
+      const r = [...row];
+      while (r.length < 11) r.push("");
+      return r.slice(0, 11);
+    }
+    
+    const SIRA_NO = row[0] || "";
+    const PLAKA = row[1] || "";
+    const MODEL = row[3] || row[2] || ""; 
+    const YER = row[5] || "";
+    
+    let km = "";
+    let aciklama = row[10] || "";
+    if (row[10] && !isNaN(Number(row[10].trim()))) {
+      km = row[10].trim();
+      aciklama = "Dönüş KM: " + km;
+    } else {
+      if (PLAKA.includes("CUK 695")) km = "124500";
+      else if (PLAKA.includes("FV 2359")) km = "158200";
+      else if (PLAKA.includes("1001")) km = "4500";
+      else if (PLAKA.includes("1002")) km = "18200";
+      else if (PLAKA.includes("1003")) km = "9400";
+      else if (PLAKA.includes("1004")) km = "3200";
+    }
+    
+    const DURUM = row[6] || "";
+    const SON_BAKIM = row[7] || "";
+    const GELECEK_BAKIM = row[8] || "";
+    const FIRMA = row[9] || "";
+    const MAIL = row[11] || "";
+
+    return [
+      SIRA_NO,
+      PLAKA,
+      MODEL,
+      YER,
+      km,
+      DURUM,
+      SON_BAKIM,
+      GELECEK_BAKIM,
+      FIRMA,
+      aciklama,
+      MAIL
+    ];
+  };
+
   const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>(() => {
     const saved = localStorage.getItem('excel_techizat_kara_araclari_data');
-    if (saved) return JSON.parse(saved);
-    return [
-      ["1", "06 OGM 1001 (T-70 Çekici)", "Uçak/Helikopter Çekici Araç", "Tow-Tractor 4x4", "1", "Ankara Hangar 1", "FAAL", "15.04.2026", "15.10.2026", "Ulaşım Otomotiv A.Ş.", "6 aylık periyodik sıvı ve filtre bakımları tamamlandı."],
-      ["2", "06 OGM 1002 (Jet-A1 Tankeri)", "Hava Aracı Yakıt Tankeri (15K LT)", "Mercedes-Benz Axor", "1", "Ankara Apron", "FAAL", "01.05.2026", "01.11.2026", "TSE Muayene Hizmetleri", "Tank sızdırmazlık testi ve sayaç kalibrasyonları yapıldı."],
-      ["3", "06 OGM 1003 (Follow Me)", "Alan Hizmet ve Eskort Aracı", "Ford Ranger", "1", "Esenboğa Havalimanı", "FAAL", "10.06.2026", "10.12.2026", "Ankara Ford Yetkili Servisi", "Telsiz ve tepe lambası elektrik tesisatı kontrol edildi."],
-      ["4", "06 OGM 1004 (Crashed Tender)", "Acil Müdahale ve Yangın Söndürme Aracı", "Rosenbauer Panther", "1", "Muğla Üssü", "FAAL", "20.02.2026", "20.08.2026", "Rosenbauer Türkiye", "Köpük lansları ve yüksek basınç pompası fenni muayenesi yapıldı."]
-    ];
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as string[][];
+        const converted = parsed.map(row => convertOldKaraAraclariRowToNew(row));
+        return converted.map((row, idx) => {
+          const r = [...row];
+          r[0] = String(idx + 1);
+          return r;
+        });
+      } catch (e) {
+        return [];
+      }
+    }
+    return [];
   });
 
   // Helper method to open Teçhizat Takip Matrix
@@ -1827,6 +1970,122 @@ export default function App() {
       document.body.removeChild(link);
       
       showNotification("Teçhizat listesi tasarımlı HTML Excel (.xls) olarak başarıyla indirildi.");
+    } catch (err) {
+      alert("Excel indirme hatası: " + err);
+    }
+  };
+
+  const exportGorevEmirleriToExcel = () => {
+    try {
+      const cols = [
+        "Tarih",
+        "Araç Plakası",
+        "Sürücü Personel",
+        "Sürücü T.C. No",
+        "Sürücü Sicil No",
+        "Görev Seri No (S/N)",
+        "Çıkış KM",
+        "Dönüş KM",
+        "Yapılan Toplam KM",
+        "Çıkış Saati",
+        "Giriş Saati",
+        "Görev Güzergahı / Açıklama"
+      ];
+
+      const rows = karaAraclariGorevEmirleri.map(order => {
+        const departureKmNum = Number(order.departureKm) || 0;
+        const returnKmNum = Number(order.returnKm) || 0;
+        const totalKm = Math.max(0, returnKmNum - departureKmNum);
+
+        return [
+          order.date || "",
+          order.plate || "",
+          order.driverName || "",
+          order.driverTc || "",
+          order.driverSicil || "",
+          order.serialNo || "",
+          String(departureKmNum),
+          String(returnKmNum),
+          String(totalKm),
+          order.departureTime || "",
+          order.returnTime || "",
+          order.route || ""
+        ];
+      });
+
+      let html = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta charset="utf-8">
+          <!--[if gte mso 9]>
+          <xml>
+            <x:ExcelWorkbook>
+              <x:ExcelWorksheets>
+                <x:ExcelWorksheet>
+                  <x:Name>Gorev Emirleri</x:Name>
+                  <x:WorksheetOptions>
+                    <x:DisplayGridlines/>
+                  </x:WorksheetOptions>
+                </x:ExcelWorksheet>
+              </x:ExcelWorksheets>
+            </x:ExcelWorkbook>
+          </xml>
+          <![endif]-->
+          <style>
+            table { border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif; }
+            .title-row { background-color: #0b3d1d; color: #ffffff; font-weight: bold; font-size: 14px; text-align: center; height: 40px; }
+            th { background-color: #1e293b; color: #ffffff; font-weight: bold; border: 1px solid #475569; padding: 10px; text-align: center; font-size: 11px; }
+            td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 10px; color: #1e293b; }
+            .zebra { background-color: #f8fafc; }
+            .num { mso-number-format: "\\@"; text-align: center; }
+          </style>
+        </head>
+        <body>
+          <table>
+            <thead>
+              <tr>
+                <th colspan="${cols.length}" class="title-row" style="background-color: #0b3d1d; color: white; font-weight: bold; font-size: 14px; text-align: center; height: 40px;">
+                  GÖREV EMRİ GEÇMİŞİ VE KAYITLARI
+                </th>
+              </tr>
+              <tr>
+                ${cols.map(h => `<th style="background-color: #1e293b; color: #ffffff; font-weight: bold; border: 1px solid #475569; padding: 10px; text-align: center;">${h}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      rows.forEach((row, rIdx) => {
+        const isZebra = rIdx % 2 === 1;
+        html += `<tr class="${isZebra ? 'zebra' : ''}">`;
+        row.forEach((cell, cIdx) => {
+          const val = cell || "";
+          let tdClass = "";
+          const colName = cols[cIdx]?.toUpperCase() || "";
+          if (colName.includes("PLAKA") || colName.includes("NO") || colName.includes("KM") || colName.includes("SAAT") || colName.includes("TARIH")) {
+            tdClass = "num";
+          }
+          html += `<td class="${tdClass}">${val.replace(/\n/g, '<br>')}</td>`;
+        });
+        html += '</tr>';
+      });
+
+      html += `
+            </tbody>
+          </table>
+        </body>
+        </html>
+      `;
+
+      const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `gorev_emri_gecmisi_ve_kayitlari.xls`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      showNotification("Görev emri geçmişi tasarımlı HTML Excel (.xls) olarak başarıyla indirildi.");
     } catch (err) {
       alert("Excel indirme hatası: " + err);
     }
@@ -2615,7 +2874,7 @@ export default function App() {
   // Google Drive klasöründen PDF dosyalarını listeler
   const fetchPdfMetadata = async () => {
     try {
-      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=listPdfsFromDrive`;
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=listPdfsFromDrive&folderId=1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0`;
       const response = await fetch(targetUrl);
       if (response.ok) {
         const result = await response.json();
@@ -3344,6 +3603,7 @@ export default function App() {
           body: JSON.stringify({
             action: "updateTumTechizat",
             unitLabel: unitLabel,
+            spreadsheetId: "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0",
             data: updated.map(r => [unitLabel, ...r])
           })
         });
@@ -3518,7 +3778,7 @@ export default function App() {
 
   const pullAllTechizatFromGoogleSheets = async (silent = true) => {
     try {
-      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("TÜM TECHİZAT")}`;
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("TÜM TECHİZAT")}&spreadsheetId=17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0`;
       const response = await fetch(targetUrl);
       if (!response.ok) {
         throw new Error(`HTTP Hata: ${response.status}`);
@@ -3539,77 +3799,95 @@ export default function App() {
         rows.forEach((r: any) => {
           const unit = String(r["AİT OLDUĞU BİRİM"] || r["Ait Olduğu Birim"] || r["AIT OLDUGU BIRIM"] || "").trim().toUpperCase();
           
-          const rowData = [
-            String(r["SIRA NO"] || r["Sıra No"] || ""),
-            String(r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || r["TECHIZAT ADI"] || r["ARAÇ PLAKASI / TANIMI"] || r["ARAÇ PLAKASI / TANIMI"] || r["Arac Plakasi / Tanimi"] || ""),
-            String(r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || r["PARÇA NO (P/N)"] || r["PARCA NO (P/N)"] || r["MODEL / TİP"] || r["MODEL / TIP"] || r["ARAÇ TİPİ"] || r["Arac Tipi"] || r["MARKA / MODEL"] || ""),
-            String(r["SERİ NO (S/N)"] || r["Seri No (S/N)"] || r["SERI NO (S/N)"] || r["MARKA / MODEL"] || r["Marka / Model"] || ""),
-            String(r["MİKTAR / KAPASİTE"] || r["Miktar / Kapasite"] || r["MIKTAR / KAPASITE"] || r["MİKTAR"] || r["MIKTAR"] || r["KAPASİTE"] || r["KAPASITE"] || ""),
-            String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || r["BULUNDUGU YER"] || r["BULUNDUĞU GÖREV YERİ"] || r["BULUNDUGU GOREV YERI"] || r["Bulundugu Gorev Yeri"] || ""),
-            String(r["DURUMU"] || r["Durumu"] || ""),
-            String(r["SON KONTROL / KALİBRASYON / BAKIM"] || r["Son Kontrol / Kalibrasyon / Bakım"] || r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL"] || r["SON BAKIM"] || ""),
-            String(r["GELECEK KONTROL / KALİBRASYON / BAKIM"] || r["Gelecek Kontrol / Kalibrasyon / Bakım"] || r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL"] || r["GELECEK BAKIM"] || ""),
-            String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || r["SON KONTROLÜ YAPAN FIRMA"] || r["SON KONTROLU YAPAN FIRMA"] || r["BAKIM YAPAN FİRMA / KURUM"] || r["Bakim Yapan Firma / Kurum"] || ""),
-            String(r["AÇIKLAMA"] || r["Açıklama"] || r["ACIKLAMA"] || ""),
-            String(
-              r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] ||
-              r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] ||
-              r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] ||
-              ""
-            ).trim()
-          ];
+          if (unit.includes("KARA")) {
+            const karaRowData = [
+              String(r["SIRA NO"] || r["Sıra No"] || ""),
+              String(r["ARAÇ PLAKASI / TANIMI"] || r["Arac Plakasi / Tanimi"] || r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || ""),
+              String(r["MODEL"] || r["Model"] || r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || ""),
+              String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || ""),
+              String(r["SON KM Sİ"] || r["Son Km Si"] || r["SON KM"] || ""),
+              String(r["DURUMU"] || r["Durumu"] || ""),
+              String(r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL / KALİBRASYON / BAKIM"] || ""),
+              String(r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL / KALİBRASYON / BAKIM"] || ""),
+              String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || ""),
+              String(r["AÇIKLAMA"] || r["Açıklama"] || ""),
+              String(
+                r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] ||
+                r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] ||
+                r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] ||
+                ""
+              ).trim()
+            ];
+            karaAraclariRows.push(karaRowData);
+          } else {
+            const rowData = [
+              String(r["SIRA NO"] || r["Sıra No"] || ""),
+              String(r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || ""),
+              String(r["PARÇA NO (P/N)"] || r["Parça No (P/N)"] || r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || ""),
+              String(r["SERİ NO (S/N)"] || r["Seri No (S/N)"] || ""),
+              String(r["MİKTAR / KAPASİTE"] || r["Miktar / Kapasite"] || ""),
+              String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || ""),
+              String(r["DURUMU"] || r["Durumu"] || ""),
+              String(r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL / KALİBRASYON / BAKIM"] || ""),
+              String(r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL / KALİBRASYON / BAKIM"] || ""),
+              String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || ""),
+              String(r["AÇIKLAMA"] || r["Açıklama"] || ""),
+              String(
+                r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] ||
+                r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] ||
+                r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] ||
+                ""
+              ).trim()
+            ];
 
-          if (unit.includes("BELL 429")) {
-            bell429Rows.push(rowData);
-          } else if (unit.includes("AT-802")) {
-            at802Rows.push(rowData);
-          } else if (unit.includes("T-70 YER") || (unit.includes("T-70") && !unit.includes("BUMBİ") && !unit.includes("BAMBI") && !unit.includes("KARA"))) {
-            t70Rows.push(rowData);
-          } else if (unit.includes("BUMBİ") || unit.includes("BAMBI") || unit.includes("T-70 BUMBİ")) {
-            t70BumbiRows.push(rowData);
-          } else if (unit.includes("C-650")) {
-            c650Rows.push(rowData);
-          } else if (unit.includes("B-360")) {
-            b360Rows.push(rowData);
-          } else if (unit.includes("HANGAR")) {
-            hangarRows.push(rowData);
-          } else if (unit.includes("KARA")) {
-            karaAraclariRows.push(rowData);
+            if (unit.includes("BELL 429")) {
+              bell429Rows.push(rowData);
+            } else if (unit.includes("AT-802")) {
+              at802Rows.push(rowData);
+            } else if (unit.includes("T-70 YER") || (unit.includes("T-70") && !unit.includes("BUMBİ") && !unit.includes("BAMBI") && !unit.includes("KARA"))) {
+              t70Rows.push(rowData);
+            } else if (unit.includes("BUMBİ") || unit.includes("BAMBI") || unit.includes("T-70 BUMBİ")) {
+              t70BumbiRows.push(rowData);
+            } else if (unit.includes("C-650")) {
+              c650Rows.push(rowData);
+            } else if (unit.includes("B-360")) {
+              b360Rows.push(rowData);
+            } else if (unit.includes("HANGAR")) {
+              hangarRows.push(rowData);
+            }
           }
         });
         
-        if (bell429Rows.length > 0) {
-          setTechizatBell429Data(bell429Rows);
-          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(bell429Rows));
-        }
-        if (at802Rows.length > 0) {
-          setTechizatAt802Data(at802Rows);
-          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(at802Rows));
-        }
-        if (t70Rows.length > 0) {
-          setTechizatT70Data(t70Rows);
-          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(t70Rows));
-        }
-        if (t70BumbiRows.length > 0) {
-          setTechizatT70BumbiBacketData(t70BumbiRows);
-          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(t70BumbiRows));
-        }
-        if (c650Rows.length > 0) {
-          setTechizatC650Data(c650Rows);
-          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(c650Rows));
-        }
-        if (b360Rows.length > 0) {
-          setTechizatB360Data(b360Rows);
-          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(b360Rows));
-        }
-        if (hangarRows.length > 0) {
-          setTechizatHangarData(hangarRows);
-          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(hangarRows));
-        }
-        if (karaAraclariRows.length > 0) {
-          setTechizatKaraAraclariData(karaAraclariRows);
-          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(karaAraclariRows));
-        }
+        setTechizatBell429Data(bell429Rows);
+        localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(bell429Rows));
+
+        setTechizatAt802Data(at802Rows);
+        localStorage.setItem('excel_techizat_at802_data', JSON.stringify(at802Rows));
+
+        setTechizatT70Data(t70Rows);
+        localStorage.setItem('excel_techizat_t70_data', JSON.stringify(t70Rows));
+
+        setTechizatT70BumbiBacketData(t70BumbiRows);
+        localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(t70BumbiRows));
+
+        setTechizatC650Data(c650Rows);
+        localStorage.setItem('excel_techizat_c650_data', JSON.stringify(c650Rows));
+
+        setTechizatB360Data(b360Rows);
+        localStorage.setItem('excel_techizat_b360_data', JSON.stringify(b360Rows));
+
+        setTechizatHangarData(hangarRows);
+        localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(hangarRows));
+
+        let finalKaraAraclari = karaAraclariRows.map(row => convertOldKaraAraclariRowToNew(row));
+        // Reindex rows to make sure SIRA NO is clean and sequential
+        finalKaraAraclari = finalKaraAraclari.map((row, idx) => {
+          const r = [...row];
+          r[0] = String(idx + 1);
+          return r;
+        });
+        setTechizatKaraAraclariData(finalKaraAraclari);
+        localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(finalKaraAraclari));
 
         if (!silent) {
           showNotification("Bütün Teçhizat Verileri Canlı E-Tablodan Senkronize Edildi!");
@@ -4196,10 +4474,12 @@ export default function App() {
             localStorage.setItem('excel_techizat_hangar_cols', JSON.stringify(finalHeaders));
             localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(parsedRows));
           } else if (techType === 'kara_araclari') {
-            setTechizatKaraAraclariColumns(finalHeaders);
-            setTechizatKaraAraclariData(parsedRows);
-            localStorage.setItem('excel_techizat_kara_araclari_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(parsedRows));
+            const convertedRows = parsedRows.map(row => convertOldKaraAraclariRowToNew(row));
+            const newCols = ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+            setTechizatKaraAraclariColumns(newCols);
+            setTechizatKaraAraclariData(convertedRows);
+            localStorage.setItem('excel_techizat_kara_araclari_cols', JSON.stringify(newCols));
+            localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(convertedRows));
           }
 
           // Sync specifically to "TÜM TECHİZAT" online Google Sheet
@@ -4213,6 +4493,7 @@ export default function App() {
               body: JSON.stringify({
                 action: "updateTumTechizat",
                 unitLabel: unitLabel,
+                spreadsheetId: "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0",
                 data: parsedRows.map(r => [unitLabel, ...r])
               })
             }).then(() => {
@@ -4266,7 +4547,8 @@ export default function App() {
                   base64Data: base64Data,
                   unitName: prettyUnitName,
                   formId: 6,
-                  month: "Teçhizat Takip"
+                  month: "Teçhizat Takip",
+                  folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                 })
               });
               if (res.ok) {
@@ -4477,7 +4759,8 @@ export default function App() {
                   mimeType: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                   base64Data: base64Data,
                   formId: 5,
-                  month: "Genel Plan"
+                  month: "Genel Plan",
+                  folderId: "1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
                 })
               });
 
@@ -4698,7 +4981,8 @@ export default function App() {
           fileName: driveFileName,
           base64Data: base64Data,
           formId: id,
-          month: isSummer ? selectedUploadSummerMonth : "Genel Plan"
+          month: isSummer ? selectedUploadSummerMonth : "Genel Plan",
+          folderId: "1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
         })
       });
 
@@ -4854,10 +5138,9 @@ export default function App() {
     reader.readAsArrayBuffer(file);
   };
 
-  const vehiclePlates = [
-    "06 CUK 695",
-    "06 FV 2359"
-  ];
+  const vehiclePlates = techizatKaraAraclariData
+    .map(row => (row[1] || "").trim())
+    .filter(plate => plate.length > 0 && plate !== "ARAÇ PLAKASI / TANIMI" && plate !== "ARAÇ PLAKASI" && plate !== "Plaka" && plate !== "ARAÇ PLAKASI ");
 
   const drivers = excelForm5Data
     .map(row => ({
@@ -6322,6 +6605,33 @@ export default function App() {
                                 <h4 className="text-xs font-black text-slate-100 uppercase tracking-wider">{match.name}</h4>
                               </div>
                             </div>
+                            <div className="flex items-center gap-2">
+                              {match.viewUrl && (
+                                <a
+                                  href={match.viewUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white rounded-lg flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                                >
+                                  <FileText className="w-3.5 h-3.5" /> DRİVE'DA GÖR
+                                </a>
+                              )}
+                              <button
+                                onClick={() => {
+                                  window.open(pdfBlobUrl, '_blank');
+                                }}
+                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" /> TARAYICIDA AÇ (WEB)
+                              </button>
+                              <a
+                                href={pdfBlobUrl}
+                                download={match.name}
+                                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5" /> PLAN PDF İNDİR
+                              </a>
+                            </div>
                           </div>
 
                           {/* Main Content Area - Native PDF Reader with Toolbar and Search */}
@@ -6392,7 +6702,7 @@ export default function App() {
                             📥 PDF PLAN YÜKLE
                           </button>
                           <a
-                            href="https://drive.google.com/drive/folders/1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
+                            href="https://drive.google.com/drive/folders/1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="px-6 py-3 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-extrabold text-xs uppercase rounded-xl shadow-sm tracking-wider transition-all cursor-pointer inline-flex items-center gap-2"
@@ -6427,9 +6737,25 @@ export default function App() {
               "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
             ];
 
+            const karaAraclariColumns = [
+              "SIRA NO", 
+              "ARAÇ PLAKASI / TANIMI", 
+              "PARÇA NO (P/N) / MODEL", 
+              "BULUNDUĞU YER", 
+              "SON KM Sİ", 
+              "DURUMU", 
+              "SON KONTROL / KALİBRASYON / BAKIM", 
+              "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+              "SON KONTROLÜ YAPAN FİRMA", 
+              "AÇIKLAMA", 
+              "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+            ];
+
             const cols = activeTechizatType === 'all'
               ? ["AİT OLDUĞU BİRİM", ...baseColumns]
-              : baseColumns;
+              : isKaraAraci
+                ? karaAraclariColumns
+                : baseColumns;
 
             const formatStandardRow = (row: string[]) => {
               const r = [...row];
@@ -6441,14 +6767,43 @@ export default function App() {
 
             const formatKaraAraclariRow = (row: string[]) => {
               const r = [...row];
-              while (r.length < 12) {
+              while (r.length < 11) {
                 r.push("");
               }
-              return r.slice(0, 12);
+              return r.slice(0, 11);
             };
 
             const formatKaraAraciToStandardRow = (row: string[]) => {
-              return formatStandardRow(row);
+              const r = [...row];
+              while (r.length < 11) {
+                r.push("");
+              }
+              const sira = r[0];
+              const plaka = r[1];
+              const model = r[2];
+              const yer = r[3];
+              const km = r[4] ? `${r[4]} KM` : "";
+              const durum = r[5];
+              const sonBakim = r[6];
+              const gelecekBakim = r[7];
+              const firma = r[8];
+              const aciklama = r[9];
+              const mail = r[10];
+              
+              return [
+                sira,
+                plaka,
+                model,
+                km, 
+                "1", 
+                yer,
+                durum,
+                sonBakim,
+                gelecekBakim,
+                firma,
+                aciklama,
+                mail
+              ];
             };
 
             const rows = activeTechizatType === 'all'
@@ -7070,18 +7425,74 @@ export default function App() {
                                   </p>
                                 </div>
 
-                                <div>
-                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🚗 Araç Plakası</label>
-                                  <select
-                                    value={gePlaka}
-                                    onChange={(e) => setGePlaka(e.target.value)}
-                                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-extrabold text-slate-800 transition-all"
-                                  >
-                                    <option value="">-- Lütfen Araç Seçiniz --</option>
-                                    {vehiclePlates.map(plate => (
-                                      <option key={plate} value={plate}>{plate}</option>
-                                    ))}
-                                  </select>
+                                <div className="relative">
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🚗 Araç Plakası / Tanımı</label>
+                                  <div className="relative">
+                                    <input
+                                      type="text"
+                                      placeholder="Araç plakası yazınız veya listeden seçiniz..."
+                                      value={gePlaka}
+                                      onChange={(e) => {
+                                        setGePlaka(e.target.value);
+                                        setShowVehicleSuggestions(true);
+                                      }}
+                                      onFocus={() => setShowVehicleSuggestions(true)}
+                                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all"
+                                    />
+                                    {gePlaka && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setGePlaka("");
+                                          setShowVehicleSuggestions(false);
+                                        }}
+                                        className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 font-bold text-xs"
+                                      >
+                                        ✕
+                                      </button>
+                                    )}
+                                  </div>
+                                  
+                                  {showVehicleSuggestions && (
+                                    <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl max-h-48 overflow-y-auto">
+                                      {vehiclePlates
+                                        .filter(plate => !gePlaka.trim() || plate.toLowerCase().includes(gePlaka.toLowerCase()))
+                                        .map(plate => {
+                                          // Find additional details if available (e.g., location, status)
+                                          const foundRow = techizatKaraAraclariData.find(row => (row[1] || "").trim() === plate);
+                                          const location = foundRow ? foundRow[3] : "";
+                                          const model = foundRow ? foundRow[2] : "";
+                                          
+                                          return (
+                                            <button
+                                              key={plate}
+                                              type="button"
+                                              onClick={() => {
+                                                setGePlaka(plate);
+                                                setShowVehicleSuggestions(false);
+                                                // Autopopulate departure KM
+                                                if (foundRow && foundRow[4]) {
+                                                  setGeDepartureKm(foundRow[4]);
+                                                }
+                                              }}
+                                              className="w-full text-left px-4 py-2.5 text-xs font-bold hover:bg-emerald-50 text-slate-800 transition-all border-b border-slate-100 last:border-b-0 flex justify-between items-center"
+                                            >
+                                              <div className="flex flex-col">
+                                                <span>{plate}</span>
+                                                {model && <span className="text-[9px] text-slate-400 font-medium">{model}</span>}
+                                              </div>
+                                              {location && <span className="text-[9px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full font-semibold">{location}</span>}
+                                            </button>
+                                          );
+                                        })
+                                      }
+                                      {vehiclePlates.filter(plate => !gePlaka.trim() || plate.toLowerCase().includes(gePlaka.toLowerCase())).length === 0 && (
+                                        <div className="px-4 py-3 text-xs text-slate-400 font-medium">
+                                          Eşleşen araç bulunamadı. Tamamen manuel yazabilirsiniz.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
 
                                 <div className="relative">
@@ -7330,12 +7741,11 @@ export default function App() {
                                         const newRow = [...row];
                                         const returnKmNum = Number(geReturnKm);
 
-                                        if (newRow.length < 14) {
-                                          while (newRow.length < 14) newRow.push("");
+                                        if (newRow.length < 11) {
+                                          while (newRow.length < 11) newRow.push("");
                                         }
 
-                                        newRow[10] = String(returnKmNum); // Current KM
-                                        newRow[11] = String(returnKmNum + 5000); // Next KM Periyot (+5000 KM)
+                                        newRow[4] = String(returnKmNum); // SON KM Sİ
 
                                         const today = new Date();
                                         const todayStr = today.toLocaleDateString('tr-TR');
@@ -7343,8 +7753,8 @@ export default function App() {
                                         nextMaintenanceDate.setMonth(nextMaintenanceDate.getMonth() + 6);
                                         const nextMaintenanceStr = nextMaintenanceDate.toLocaleDateString('tr-TR');
 
-                                        newRow[6] = todayStr; // SON BAKIM TARİHİ
-                                        newRow[8] = nextMaintenanceStr; // BİR SONRAKİ BAKIM TARİHİ
+                                        newRow[6] = todayStr; // SON KONTROL / KALİBRASYON / BAKIM
+                                        newRow[7] = nextMaintenanceStr; // GELECEK KONTROL / KALİBRASYON / BAKIM
 
                                         return newRow;
                                       }
@@ -7566,10 +7976,19 @@ export default function App() {
                     {/* Right Panel: Görev Emri Geçmişi */}
                     {karaAraclariSubTab === 'past_records' && (
                       <div className="w-full max-w-4xl mx-auto bg-white border border-slate-200 rounded-[2.5rem] p-6 shadow-xl flex flex-col animate-fade-in">
-                        <div className="border-b border-slate-100 pb-3 mb-4">
+                        <div className="border-b border-slate-100 pb-3 mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                           <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
                             📋 GÖREV EMRİ GEÇMİŞİ VE KAYITLARI
                           </h4>
+                          {karaAraclariGorevEmirleri.length > 0 && (
+                            <button
+                              onClick={exportGorevEmirleriToExcel}
+                              className="px-4 py-2 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-[10px] rounded-2xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md border border-[#0b3d1d]/20 shrink-0 uppercase tracking-wider"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>EXCEL OLARAK AKTAR</span>
+                            </button>
+                          )}
                         </div>
 
                         <div className="flex-1 overflow-x-auto min-w-full">
@@ -8306,7 +8725,7 @@ export default function App() {
 
                         <div className="flex gap-3">
                           <a
-                            href="https://drive.google.com/drive/folders/1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
+                            href="https://drive.google.com/drive/folders/1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex-1 py-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-center font-extrabold text-[10px] rounded-xl tracking-wider uppercase transition-all block shadow-sm cursor-pointer"
@@ -8706,20 +9125,34 @@ export default function App() {
         {activeTechizatRowEdit && (() => {
           const { rIdx, techType, row } = activeTechizatRowEdit;
           const isKaraAraciEdit = techType === 'kara_araclari';
-          const colsList = [
-            "SIRA NO", 
-            "TEÇHİZAT ADI", 
-            "PARÇA NO (P/N) / MODEL", 
-            "SERİ NO (S/N)", 
-            "MİKTAR / KAPASİTE", 
-            "BULUNDUĞU YER", 
-            "DURUMU", 
-            "SON KONTROL / KALİBRASYON / BAKIM", 
-            "GELECEK KONTROL / KALİBRASYON / BAKIM", 
-            "SON KONTROLÜ YAPAN FİRMA", 
-            "AÇIKLAMA", 
-            "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
-          ];
+          const colsList = isKaraAraciEdit
+            ? [
+                "SIRA NO", 
+                "ARAÇ PLAKASI / TANIMI", 
+                "PARÇA NO (P/N) / MODEL", 
+                "BULUNDUĞU YER", 
+                "SON KM Sİ", 
+                "DURUMU", 
+                "SON KONTROL / KALİBRASYON / BAKIM", 
+                "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+                "SON KONTROLÜ YAPAN FİRMA", 
+                "AÇIKLAMA", 
+                "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+              ]
+            : [
+                "SIRA NO", 
+                "TEÇHİZAT ADI", 
+                "PARÇA NO (P/N) / MODEL", 
+                "SERİ NO (S/N)", 
+                "MİKTAR / KAPASİTE", 
+                "BULUNDUĞU YER", 
+                "DURUMU", 
+                "SON KONTROL / KALİBRASYON / BAKIM", 
+                "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+                "SON KONTROLÜ YAPAN FİRMA", 
+                "AÇIKLAMA", 
+                "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+              ];
 
           const imageKey = techType + "_" + (row[1] || "").replace(/\s+/g, '_') + "_" + (row[3] || "").replace(/\s+/g, '_');
           const hasImage = !!techizatImages[imageKey];
@@ -8827,10 +9260,8 @@ export default function App() {
                                     cloned[8] = "-"; // SON KONTROL
                                     cloned[9] = "-"; // GELECEK KONTROL
                                   } else {
-                                    cloned[6] = "-"; // SON BAKIM
-                                    cloned[7] = "-"; // SON MUAYENE
-                                    cloned[8] = "-"; // GELECEK BAKIM
-                                    cloned[9] = "-"; // GELECEK MUAYENE
+                                    cloned[6] = "-"; // SON KONTROL / KALİBRASYON / BAKIM
+                                    cloned[7] = "-"; // GELECEK KONTROL / KALİBRASYON / BAKIM
                                   }
                                 }
                                 setEditRowValues(cloned);
@@ -8849,7 +9280,7 @@ export default function App() {
                       const isBakimaTabi = isBakimaTabiColIdx !== -1 ? editRowValues[isBakimaTabiColIdx] : "Evet";
                       const isMaintenanceField = !isKaraAraciEdit
                         ? idx === 8 || idx === 9 // SON KONTROL, GELECEK KONTROL
-                        : idx === 6 || idx === 7 || idx === 8 || idx === 9; // SON BAKIM, SON MUAYENE, GELECEK BAKIM, GELECEK MUAYENE
+                        : idx === 6 || idx === 7; // SON KONTROL / KALİBRASYON / BAKIM, GELECEK KONTROL / KALİBRASYON / BAKIM
 
                       if (isBakimaTabi === "Hayır" && isMaintenanceField) {
                         return (
@@ -9103,7 +9534,8 @@ export default function App() {
                               action: "uploadPdfToDrive",
                               fileName: driveFileName,
                               base64Data: base64Data,
-                              mimeType: mimeType
+                              mimeType: mimeType,
+                              folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                             })
                           });
                           if (!res.ok) {
@@ -9201,7 +9633,8 @@ export default function App() {
                                         action: "uploadPdfToDrive",
                                         fileName: driveFileName,
                                         base64Data: pendingImageBase64,
-                                        mimeType: pendingImageMimeType || "image/png"
+                                        mimeType: pendingImageMimeType || "image/png",
+                                        folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                                       })
                                     });
                                     if (!res.ok) {
@@ -9286,7 +9719,8 @@ export default function App() {
                                         action: "uploadPdfToDrive",
                                         fileName: driveFileName,
                                         base64Data: pendingImageBase64,
-                                        mimeType: pendingImageMimeType || "image/png"
+                                        mimeType: pendingImageMimeType || "image/png",
+                                        folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                                       })
                                     });
                                     if (!res.ok) {
@@ -9503,15 +9937,34 @@ export default function App() {
 
                       {/* Drag and Drop Upload Area - Always visible */}
                       <div className="flex flex-col gap-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
-                          Görsel Yükleme (Sürükle & Bırak veya Tıkla)
-                        </label>
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                            Görsel Yükleme & Kamera
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={isRemoveBgEnabled}
+                              onChange={(e) => setIsRemoveBgEnabled(e.target.checked)}
+                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-3 h-3 cursor-pointer"
+                            />
+                            <span className="text-[9px] font-bold text-emerald-700 uppercase tracking-wide">
+                              ✨ Photoroom AI Arka Plan Sil
+                            </span>
+                          </label>
+                        </div>
 
                         {isImageUploadingToDrive ? (
                           <div className="border-2 border-dashed border-emerald-300 bg-emerald-50/20 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[140px]">
                             <div className="w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mb-1" />
                             <p className="text-xs font-black text-emerald-800 animate-pulse">BULUTA YÜKLENİYOR...</p>
                             <p className="text-[10px] text-emerald-600 font-semibold">Görsel Google Drive'a kaydediliyor, lütfen bekleyiniz.</p>
+                          </div>
+                        ) : isProcessingRemoveBg ? (
+                          <div className="border-2 border-dashed border-purple-300 bg-purple-50/20 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[140px] animate-pulse">
+                            <div className="w-8 h-8 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mb-1" />
+                            <p className="text-xs font-black text-purple-800">ARKA PLAN TEMİZLENİYOR...</p>
+                            <p className="text-[10px] text-purple-600 font-semibold">Photoroom API üzerinden akıllı segmentasyon yapılıyor, lütfen bekleyiniz.</p>
                           </div>
                         ) : pendingImagePreview ? (
                           <div className="border-2 border-solid border-emerald-400 bg-emerald-50/10 rounded-2xl p-4 flex flex-col gap-3 min-h-[140px] animate-fade-in">
@@ -9522,126 +9975,166 @@ export default function App() {
                                 className="w-16 h-16 object-contain rounded-xl border border-emerald-200 bg-white shadow-sm"
                               />
                               <div className="flex-1 min-w-0">
-                                <p className="text-xs font-bold text-slate-800 truncate">{pendingImageFile?.name}</p>
+                                <p className="text-xs font-bold text-slate-800 truncate">{pendingImageFile?.name || 'Kameradan Çekilen Fotoğraf'}</p>
                                 <p className="text-[10px] text-slate-400 font-semibold font-mono">
                                   {(pendingImageFile ? pendingImageFile.size / 1024 : 0).toFixed(1)} KB
                                 </p>
                               </div>
                             </div>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  if (!pendingImageFile) return;
-                                  if (isImageUpdateUnlocked) {
-                                    // Upload directly
-                                    try {
-                                      setIsImageUploadingToDrive(true);
-                                      showNotification("Görsel Google Drive'a yükleniyor...");
-                                      const base64Str = await fileToBase64(pendingImageFile);
-                                      
-                                      const extension = pendingImageFile.name.split('.').pop() || 'png';
-                                      const driveFileName = `tech_img_${imageKey}.${extension}`;
-                                      
-                                      const res = await fetch(GOOGLE_SCRIPT_URL, {
-                                        method: "POST",
-                                        headers: {
-                                          "Content-Type": "text/plain;charset=utf-8"
-                                        },
-                                        body: JSON.stringify({
-                                          action: "uploadPdfToDrive",
-                                          fileName: driveFileName,
-                                          base64Data: base64Str,
-                                          mimeType: pendingImageFile.type
-                                        })
-                                      });
-                                      
-                                      if (!res.ok) {
-                                        throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
-                                      }
-                                      
-                                      const result = await res.json();
-                                      if (result.status === "success" && result.viewUrl) {
-                                        setTechizatImages(prev => {
-                                          const updated = {
-                                            ...prev,
-                                            [imageKey]: result.viewUrl
-                                          };
-                                          localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                          return updated;
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!pendingImageFile) return;
+                                    if (isImageUpdateUnlocked) {
+                                      // Upload directly
+                                      try {
+                                        setIsImageUploadingToDrive(true);
+                                        showNotification("Görsel Google Drive'a yükleniyor...");
+                                        const base64Str = await fileToBase64(pendingImageFile);
+                                        
+                                        const extension = pendingImageFile.name.split('.').pop() || 'png';
+                                        const driveFileName = `tech_img_${imageKey}.${extension}`;
+                                        
+                                        const res = await fetch(GOOGLE_SCRIPT_URL, {
+                                          method: "POST",
+                                          headers: {
+                                            "Content-Type": "text/plain;charset=utf-8"
+                                          },
+                                          body: JSON.stringify({
+                                            action: "uploadPdfToDrive",
+                                            fileName: driveFileName,
+                                            base64Data: base64Str,
+                                            mimeType: pendingImageFile.type,
+                                            folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
+                                          })
                                         });
-                                        setPendingImageFile(null);
-                                        setPendingImagePreview(null);
-                                        setTempImageUrlInput(result.viewUrl);
-                                        showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
-                                      } else {
-                                        throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                                        
+                                        if (!res.ok) {
+                                          throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
+                                        }
+                                        
+                                        const result = await res.json();
+                                        if (result.status === "success" && result.viewUrl) {
+                                          setTechizatImages(prev => {
+                                            const updated = {
+                                              ...prev,
+                                              [imageKey]: result.viewUrl
+                                            };
+                                            localStorage.setItem('techizat_images', JSON.stringify(updated));
+                                            return updated;
+                                          });
+                                          setPendingImageFile(null);
+                                          setPendingImagePreview(null);
+                                          setTempImageUrlInput(result.viewUrl);
+                                          showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                                        } else {
+                                          throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                                        }
+                                      } catch (err: any) {
+                                        console.error("Yükleme Hatası:", err);
+                                        showNotification(`Yükleme başarısız: ${err.message}`);
+                                      } finally {
+                                        setIsImageUploadingToDrive(false);
                                       }
-                                    } catch (err) {
-                                      console.error("Yükleme Hatası:", err);
-                                      showNotification(`Yükleme başarısız: ${err.message}`);
-                                    } finally {
-                                      setIsImageUploadingToDrive(false);
+                                    } else {
+                                      setTempImageAction('upload');
+                                      setImagePasswordInput('');
+                                      setImagePasswordError(false);
+                                      setShowImageSavePasswordPrompt(true);
                                     }
-                                  } else {
-                                    setTempImageAction('upload');
-                                    setImagePasswordInput('');
-                                    setImagePasswordError(false);
-                                    setShowImageSavePasswordPrompt(true);
-                                  }
-                                }}
-                                className="flex-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md text-center active:scale-95"
-                              >
-                                ☁️ BULUTA GÖNDER VE KAYDET
-                              </button>
+                                  }}
+                                  className="flex-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md text-center active:scale-95"
+                                >
+                                  ☁️ BULUTA GÖNDER VE KAYDET
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPendingImageFile(null);
+                                    setPendingImagePreview(null);
+                                  }}
+                                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                                >
+                                  İPTAL
+                                </button>
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setPendingImageFile(null);
-                                  setPendingImagePreview(null);
+                                  if (pendingImageFile) {
+                                    handleProcessBackgroundRemoval(pendingImageFile);
+                                  }
                                 }}
-                                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                                className="w-full py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-black text-[9px] uppercase tracking-wider rounded-lg transition-all cursor-pointer shadow-sm active:scale-[0.98]"
                               >
-                                İPTAL
+                                ✨ Görsel Arka Planını Photoroom AI ile Temizle
                               </button>
                             </div>
                           </div>
                         ) : (
-                          <div
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              setIsDragging(true);
-                            }}
-                            onDragLeave={(e) => {
-                              e.preventDefault();
-                              setIsDragging(false);
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              setIsDragging(false);
-                              const file = e.dataTransfer.files?.[0];
-                              if (file && file.type.startsWith('image/')) {
-                                setPendingImageFile(file);
-                                setPendingImagePreview(URL.createObjectURL(file));
-                              }
-                            }}
-                            onClick={() => {
-                              const inputEl = document.getElementById('drag-drop-image-input');
-                              inputEl?.click();
-                            }}
-                            className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 text-center cursor-pointer transition-all min-h-[140px] ${
-                              isDragging
-                                ? 'border-emerald-500 bg-emerald-50/40 text-emerald-800 scale-[0.98]'
-                                : 'border-slate-300 hover:border-emerald-600 hover:bg-emerald-50/10 text-slate-500'
-                            }`}
-                          >
-                            <span className="text-2xl animate-bounce">📥</span>
-                            <p className="text-[10px] font-black uppercase tracking-wider text-slate-700">
-                              Görseli Sürükleyip Buraya Bırakın
-                            </p>
-                            <p className="text-[9px] text-slate-400 font-semibold leading-relaxed">
-                              veya bilgisayarınızdan seçmek için <strong>TIKLAYIN</strong>
-                            </p>
+                          <div className="flex flex-col gap-2">
+                            <div
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                setIsDragging(true);
+                              }}
+                              onDragLeave={(e) => {
+                                e.preventDefault();
+                                setIsDragging(false);
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setIsDragging(false);
+                                const file = e.dataTransfer.files?.[0];
+                                if (file && file.type.startsWith('image/')) {
+                                  handleImageSelected(file);
+                                }
+                              }}
+                              onClick={() => {
+                                const inputEl = document.getElementById('drag-drop-image-input');
+                                inputEl?.click();
+                              }}
+                              className={`border-2 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center gap-1.5 text-center cursor-pointer transition-all min-h-[110px] ${
+                                isDragging
+                                  ? 'border-emerald-500 bg-emerald-50/40 text-emerald-800 scale-[0.98]'
+                                  : 'border-slate-300 hover:border-emerald-600 hover:bg-emerald-50/10 text-slate-500'
+                              }`}
+                            >
+                              <span className="text-xl animate-bounce">📥</span>
+                              <p className="text-[10px] font-black uppercase tracking-wider text-slate-700">
+                                Sürükleyip Buraya Bırakın
+                              </p>
+                              <p className="text-[9px] text-slate-400 font-semibold leading-relaxed">
+                                veya bilgisayarınızdan seçmek için <strong>TIKLAYIN</strong>
+                              </p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              {/* Native Mobile Camera Trigger */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const camEl = document.getElementById('mobile-camera-input');
+                                  camEl?.click();
+                                }}
+                                className="py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow"
+                              >
+                                📷 MOBİL KAMERA
+                              </button>
+
+                              {/* Desktop Webcam Modal Trigger */}
+                              <button
+                                type="button"
+                                onClick={startWebcam}
+                                className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow"
+                              >
+                                🖥️ CANLI WEBCAM
+                              </button>
+                            </div>
+
+                            {/* Hidden Standard File Input */}
                             <input
                               id="drag-drop-image-input"
                               type="file"
@@ -9649,8 +10142,22 @@ export default function App() {
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  setPendingImageFile(file);
-                                  setPendingImagePreview(URL.createObjectURL(file));
+                                  handleImageSelected(file);
+                                }
+                              }}
+                              className="hidden"
+                            />
+
+                            {/* Hidden Native Camera Input with capture="environment" for best mobile camera quality */}
+                            <input
+                              id="mobile-camera-input"
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  handleImageSelected(file);
                                 }
                               }}
                               className="hidden"
@@ -9704,7 +10211,8 @@ export default function App() {
                                           action: "uploadPdfToDrive",
                                           fileName: driveFileName,
                                           base64Data: base64Str,
-                                          mimeType: pendingImageFile.type
+                                          mimeType: pendingImageFile.type,
+                                          folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                                         })
                                       });
                                       if (!res.ok) {
@@ -9803,7 +10311,8 @@ export default function App() {
                                           action: "uploadPdfToDrive",
                                           fileName: driveFileName,
                                           base64Data: base64Str,
-                                          mimeType: pendingImageFile.type
+                                          mimeType: pendingImageFile.type,
+                                          folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                                         })
                                       });
                                       if (!res.ok) {
@@ -9861,6 +10370,64 @@ export default function App() {
                               className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer"
                             >
                               Onayla
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {isWebcamOpen && (
+                      <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center z-[2500] p-4 select-none animate-fade-in">
+                        <div className="bg-slate-900 border-2 border-slate-700/50 rounded-[2rem] shadow-2xl max-w-md w-full overflow-hidden flex flex-col relative">
+                          <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
+                          
+                          {/* Header */}
+                          <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+                            <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 bg-red-500 rounded-full animate-ping" />
+                              Canlı Video Akışı
+                            </span>
+                            <button
+                              type="button"
+                              onClick={stopWebcam}
+                              className="text-slate-400 hover:text-white cursor-pointer transition-colors"
+                            >
+                              <X className="w-5 h-5" />
+                            </button>
+                          </div>
+
+                          {/* Video Container */}
+                          <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+                            <video
+                              ref={videoRef}
+                              autoPlay
+                              playsInline
+                              muted
+                              className="w-full h-full object-cover"
+                            />
+                            {/* Overlay Guides */}
+                            <div className="absolute inset-6 border border-dashed border-white/20 rounded-xl pointer-events-none flex items-center justify-center">
+                              <span className="text-[10px] text-white/30 uppercase tracking-widest font-black">
+                                Techizatı Ortaya Hizalayın
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="p-5 flex flex-col gap-3 bg-slate-950">
+                            <button
+                              type="button"
+                              onClick={captureWebcamPhoto}
+                              className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer shadow-lg active:scale-95 flex items-center justify-center gap-2"
+                            >
+                              📸 FOTOĞRAF ÇEK & AKTAR
+                            </button>
+                            <button
+                              type="button"
+                              onClick={stopWebcam}
+                              className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
+                            >
+                              KAMERAYI KAPAT
                             </button>
                           </div>
                         </div>
