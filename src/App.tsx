@@ -67,7 +67,7 @@ import { jsPDF } from 'jspdf';
 import { ImageEditorAndRetoucher } from './components/ImageEditorAndRetoucher';
 import { CachedDriveImage } from './components/CachedDriveImage';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzB1n5fmC2X4Zqk3S9DDA5sAcmDa7KmMClg006y9LVHYHEYhqVcZoLvDZqfGOz1SyGO/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzz6XVe-NDXbNUks8KFMfTVYN0JfN6PhQGLVNDG26yolgwGtD8DTBTKD8PgXW5V-n6vEQ/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
 export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
@@ -885,7 +885,19 @@ export default function App() {
   const [karaAraclariGorevEmirleri, setKaraAraclariGorevEmirleri] = useState<any[]>(() => {
     const saved = localStorage.getItem('kara_araclari_gorev_emirleri');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Filter out rows that are blank/empty (no Tarih, no Araç Plakası, no Sürücü Personel, no Görev Seri No)
+          return parsed.filter((row: any) => {
+            const date = String(row.date || "").trim();
+            const plate = String(row.plate || "").trim();
+            const driver = String(row.driverName || "").trim();
+            const serial = String(row.serialNo || "").trim();
+            return date !== "" || plate !== "" || driver !== "" || serial !== "";
+          });
+        }
+      } catch (e) { console.error(e); }
     }
     return [];
   });
@@ -1438,7 +1450,16 @@ export default function App() {
       if (response.ok) {
         const result = await response.json();
         if (result.status === "success" && Array.isArray(result.data)) {
-          const mapped = result.data.map((row: any, index: number) => ({
+          // Filter out rows that are blank/empty (no Tarih, no Araç Plakası, no Sürücü Personel, no Görev Seri No)
+          const validRows = result.data.filter((row: any) => {
+            const date = String(row["Tarih"] || row["Date"] || "").trim();
+            const plate = String(row["Araç Plakası"] || row["Plate"] || "").trim();
+            const driver = String(row["Sürücü Personel"] || row["DriverName"] || "").trim();
+            const serial = String(row["Görev Seri No"] || row["SerialNo"] || "").trim();
+            return date !== "" || plate !== "" || driver !== "" || serial !== "";
+          });
+
+          const mapped = validRows.map((row: any, index: number) => ({
             id: row.id ? Number(row.id) : Date.now() + index,
             date: row["Tarih"] || row["Date"] || "",
             plate: row["Araç Plakası"] || row["Plate"] || "",
@@ -1455,10 +1476,10 @@ export default function App() {
             returnKm: Number(row["Dönüş KM"] || row["ReturnKm"] || 0),
             route: row["Güzergah"] || row["Route"] || ""
           }));
-          if (mapped.length > 0) {
-            setKaraAraclariGorevEmirleri(mapped);
-            localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(mapped));
-          }
+
+          // Set and sync unconditionally to correctly clear local storage/state if everything is deleted on Sheets
+          setKaraAraclariGorevEmirleri(mapped);
+          localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(mapped));
         }
       }
     } catch (err) {
@@ -1869,6 +1890,24 @@ export default function App() {
     }
     return [];
   });
+
+  const lastPopulatedPlaka = useRef<string>("");
+
+  useEffect(() => {
+    if (gePlaka && gePlaka !== lastPopulatedPlaka.current && techizatKaraAraclariData.length > 0) {
+      lastPopulatedPlaka.current = gePlaka;
+      const cleanPlaka = gePlaka.replace(/\s+/g, "").toLowerCase();
+      const foundRow = techizatKaraAraclariData.find(row => {
+        const rowPlaka = String(row[1] || "").replace(/\s+/g, "").toLowerCase();
+        return rowPlaka === cleanPlaka || rowPlaka.includes(cleanPlaka) || cleanPlaka.includes(rowPlaka);
+      });
+      if (foundRow && foundRow[4]) {
+        setGeDepartureKm(foundRow[4]);
+      }
+    } else if (!gePlaka) {
+      lastPopulatedPlaka.current = "";
+    }
+  }, [gePlaka, techizatKaraAraclariData]);
 
   // Helper method to open Teçhizat Takip Matrix
   const openTechizatMatrix = (type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all', title: string) => {
@@ -3603,7 +3642,6 @@ export default function App() {
           body: JSON.stringify({
             action: "updateTumTechizat",
             unitLabel: unitLabel,
-            spreadsheetId: "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0",
             data: updated.map(r => [unitLabel, ...r])
           })
         });
@@ -3778,7 +3816,7 @@ export default function App() {
 
   const pullAllTechizatFromGoogleSheets = async (silent = true) => {
     try {
-      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("TÜM TECHİZAT")}&spreadsheetId=17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0`;
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("TÜM TECHİZAT")}`;
       const response = await fetch(targetUrl);
       if (!response.ok) {
         throw new Error(`HTTP Hata: ${response.status}`);
@@ -4493,7 +4531,6 @@ export default function App() {
               body: JSON.stringify({
                 action: "updateTumTechizat",
                 unitLabel: unitLabel,
-                spreadsheetId: "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0",
                 data: parsedRows.map(r => [unitLabel, ...r])
               })
             }).then(() => {
@@ -6034,6 +6071,27 @@ export default function App() {
 
                             {/* Export Actions Grid/Row */}
                             <div className="flex items-center gap-2 flex-wrap">
+                              {/* DRİVE EXCEL SENKRONİZASYON */}
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    setIsExcelOcrProcessing(true);
+                                    showNotification("Google Drive'daki Excel dosyası aranıyor ve veriler eşitleniyor...");
+                                    await pullDataFromGoogleSheets(5);
+                                    showNotification("Drive Excel verileri başarıyla portal hafızasına çekildi!");
+                                  } catch (err: any) {
+                                    alert("Drive Excel senkronizasyon hatası: " + (err?.message || err));
+                                  } finally {
+                                    setIsExcelOcrProcessing(false);
+                                  }
+                                }}
+                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold font-mono text-[10px] rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm active:scale-95"
+                                title="Google Drive'daki en güncel Personel Bilgi Excel dosyasını (.xlsx) tara ve verileri portal hafızasına senkronize et"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin-slow" />
+                                <span>DRİVE'DAN VERİLERİ YENİLE</span>
+                              </button>
+
                               {/* MEVCUT EXCEL İNDİR */}
                               <button
                                 onClick={() => {
@@ -7695,8 +7753,8 @@ export default function App() {
                                       alert("Lütfen form alanlarının tamamını doldurmak için bilgileri kontrol edin.");
                                       return;
                                     }
-                                    if (Number(geReturnKm) < Number(geDepartureKm)) {
-                                      alert("Dönüş kilometresi, çıkış kilometresinden küçük olamaz.");
+                                    if (Number(geReturnKm) <= Number(geDepartureKm)) {
+                                      alert("Dönüş kilometresi, çıkış kilometresinden küçük veya eşit olamaz.");
                                       return;
                                     }
 
@@ -7763,6 +7821,20 @@ export default function App() {
 
                                     setTechizatKaraAraclariData(updatedVehicles);
                                     localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
+
+                                    // Sync updated vehicle database to Google Sheets online database immediately
+                                    const unitLabel = "KARA ARAÇLARI";
+                                    fetch(GOOGLE_SCRIPT_URL, {
+                                      method: "POST",
+                                      headers: {
+                                        "Content-Type": "text/plain;charset=utf-8"
+                                      },
+                                      body: JSON.stringify({
+                                        action: "updateTumTechizat",
+                                        unitLabel: unitLabel,
+                                        data: updatedVehicles.map(r => [unitLabel, ...r])
+                                      })
+                                    }).catch(err => console.error("Central sheet vehicle sync error:", err));
 
                                     // Reset
                                     setGeSeriNo("");

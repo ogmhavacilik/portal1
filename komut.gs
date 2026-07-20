@@ -243,26 +243,7 @@ function doPost(e) {
     } else if (action === "updateTumTechizat") {
       var unitLabel = postData.unitLabel;
       var data = postData.data;
-      var targetSs = null;
-      var targetSsId = postData.spreadsheetId;
-      if (targetSsId) {
-        try {
-          targetSs = SpreadsheetApp.openById(targetSsId);
-        } catch (err) {
-          Logger.log("openById failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        var fallbackId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
-        try {
-          targetSs = SpreadsheetApp.openById(fallbackId);
-        } catch (err) {
-          Logger.log("openById fallback failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        targetSs = ss;
-      }
+      var targetSs = ss; // Her zaman aktif e-tabloyu kullan
       var sheet = getSheetWithFallback(targetSs, "TÜM TECHİZAT");
       
       var lastCol = sheet.getLastColumn();
@@ -419,26 +400,7 @@ function doPost(e) {
       response.message = "TÜM TECHİZAT sayfasındaki '" + unitLabel + "' verileri başarıyla güncellendi.";
     } else if (action === "updateGunTakip") {
       var data = postData.data; // Array of [SORUMLU BİRİM, ADI SOYADI, E-POSTA ADRESİ]
-      var targetSs = null;
-      var targetSsId = postData.spreadsheetId;
-      if (targetSsId) {
-        try {
-          targetSs = SpreadsheetApp.openById(targetSsId);
-        } catch (err) {
-          Logger.log("openById failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        var fallbackId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
-        try {
-          targetSs = SpreadsheetApp.openById(fallbackId);
-        } catch (err) {
-          Logger.log("openById fallback failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        targetSs = ss;
-      }
+      var targetSs = ss; // Her zaman aktif e-tabloyu kullan
       var sheet = getSheetWithFallback(targetSs, "GÜN TAKİP");
       
       var existingDates = {}; // key: BİRİM (UPPERCASE) -> { mail90: string, mail60: string, mail30: string }
@@ -505,26 +467,7 @@ function doPost(e) {
       var ebysNo = String(postData.ebysNo || "").trim();
       var tableData = postData.data; // Array of [Ait Olduğu Birim, Teçhizat Adı, Parça No, Seri No, Miktar, Son Kontrolü Yapan Firma, Açıklama]
       
-      var targetSs = null;
-      var targetSsId = postData.spreadsheetId;
-      if (targetSsId) {
-        try {
-          targetSs = SpreadsheetApp.openById(targetSsId);
-        } catch (err) {
-          Logger.log("openById failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        var fallbackId = "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
-        try {
-          targetSs = SpreadsheetApp.openById(fallbackId);
-        } catch (err) {
-          Logger.log("openById fallback failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        targetSs = ss;
-      }
+      var targetSs = ss; // Her zaman aktif e-tabloyu kullan
       
       var sheet = targetSs.getSheetByName("Sayfa1") || targetSs.getSheets()[0];
       if (!sheet) {
@@ -683,26 +626,7 @@ function doPost(e) {
       }
 
     } else if (action === "getDemands") {
-      var targetSs = null;
-      var targetSsId = postData.spreadsheetId;
-      if (targetSsId) {
-        try {
-          targetSs = SpreadsheetApp.openById(targetSsId);
-        } catch (err) {
-          Logger.log("openById failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        var fallbackId = "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
-        try {
-          targetSs = SpreadsheetApp.openById(fallbackId);
-        } catch (err) {
-          Logger.log("openById fallback failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        targetSs = ss;
-      }
+      var targetSs = ss; // Her zaman aktif e-tabloyu kullan
       var sheet = targetSs.getSheetByName("İşlemdeki Talepler") || targetSs.getSheetByName("Talepler") || targetSs.getSheetByName("Demands") || targetSs.getSheetByName("TASKLINE-PARÇA LİSTESİ") || targetSs.getSheetByName("Sayfa1") || targetSs.getSheets()[0];
       var rows = [];
       if (sheet) {
@@ -955,26 +879,17 @@ function doGet(e) {
 
     } else if (action === "readSheet") {
       var sheetName = e.parameter.sheetName;
-      var targetSs = null;
-      var targetSsId = e.parameter.spreadsheetId;
-      if (targetSsId) {
+      var targetSs = ss; // Her zaman aktif e-tabloyu kullan
+      
+      // Eğer Personel Bilgi çizelgesi isteniyorsa, öncelikle Drive'daki en güncel Excel dosyasını otomatik olarak senkronize et!
+      if (sheetName === "5-Personel_Bilgi" || (sheetName && sheetName.toLowerCase().indexOf("personel") !== -1)) {
         try {
-          targetSs = SpreadsheetApp.openById(targetSsId);
-        } catch (err) {
-          Logger.log("openById failed: " + err.toString());
+          syncPersonnelExcelToGoogleSheet();
+        } catch (syncErr) {
+          Logger.log("Okuma esnasında Excel senkronizasyonu başarısız: " + syncErr.toString());
         }
       }
-      if (!targetSs) {
-        var fallbackId = "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
-        try {
-          targetSs = SpreadsheetApp.openById(fallbackId);
-        } catch (err) {
-          Logger.log("openById fallback failed: " + err.toString());
-        }
-      }
-      if (!targetSs) {
-        targetSs = ss;
-      }
+      
       var sheet = getSheetWithFallback(targetSs, sheetName);
       var rows = [];
       var lastRow = sheet.getLastRow();
@@ -1959,6 +1874,146 @@ function createDailyTrigger() {
   } catch (err) {
     Logger.log("Arayüz bildirimi gösterilemedi: " + err.toString());
   }
+}
+
+/**
+ * Google Drive'daki en güncel Personel Bilgi excel dosyasını (.xlsx) arar,
+ * geçici olarak Google Sheets formatına dönüştürür, verilerini okur ve
+ * '5-Personel_Bilgi' sayfasına senkronize eder.
+ */
+function syncPersonnelExcelToGoogleSheet() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("5-Personel_Bilgi");
+    if (!sheet) {
+      Logger.log("5-Personel_Bilgi sayfası bulunamadı, oluşturuluyor...");
+      sheet = ss.insertSheet("5-Personel_Bilgi");
+    }
+    
+    // Google Drive'da personel bilgi dosyası ara (.xlsx veya .xls)
+    var files = DriveApp.searchFiles("title contains 'personel' and (mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType = 'application/vnd.ms-excel' or title contains '.xlsx' or title contains '.xls')");
+    var excelFile = null;
+    var latestTime = 0;
+    
+    while (files.hasNext()) {
+      var file = files.next();
+      var lastUpdated = file.getLastUpdated().getTime();
+      if (lastUpdated > latestTime) {
+        latestTime = lastUpdated;
+        excelFile = file;
+      }
+    }
+    
+    // Eğer genel aramada bulunamadıysa, form kayıtları klasörünü ("1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0") tara
+    if (!excelFile) {
+      try {
+        var folder = DriveApp.getFolderById("1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0");
+        var fFiles = folder.getFiles();
+        while (fFiles.hasNext()) {
+          var f = fFiles.next();
+          var name = f.getName().toLowerCase();
+          if (name.indexOf("personel") !== -1 && (name.endsWith(".xlsx") || name.endsWith(".xls"))) {
+            var fTime = f.getLastUpdated().getTime();
+            if (fTime > latestTime) {
+              latestTime = fTime;
+              excelFile = f;
+            }
+          }
+        }
+      } catch (err) {
+        Logger.log("Klasör taraması başarısız: " + err.toString());
+      }
+    }
+    
+    if (!excelFile) {
+      Logger.log("Drive üzerinde herhangi bir Personel Bilgi Excel dosyası bulunamadı.");
+      return false;
+    }
+    
+    Logger.log("En son yüklenen Personel Bilgi excel dosyası bulundu: " + excelFile.getName());
+    
+    // Excel dosyasını Google E-Tabloya dönüştür
+    var blob = excelFile.getBlob();
+    var metadata = {
+      name: "[Temp_Personnel_Import]_" + excelFile.getName().replace(/\.(xlsx|xls)$/i, ""),
+      mimeType: "application/vnd.google-apps.spreadsheet"
+    };
+    
+    var boundary = "xxxxxxxxxxxxxxxxx";
+    var delimiter = "\r\n--" + boundary + "\r\n";
+    var closeDelimiter = "\r\n--" + boundary + "--";
+    
+    var multipartRequestBody = 
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      'Content-Type: ' + blob.getMimeType() + '\r\n' +
+      'Content-Transfer-Encoding: base64\r\n\r\n' +
+      Utilities.base64Encode(blob.getBytes()) +
+      closeDelimiter;
+      
+    var response = UrlFetchApp.fetch("https://www.googleapis.com/drive/v3/files?uploadType=multipart", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + ScriptApp.getOAuthToken(),
+        "Content-Type": "multipart/related; boundary=" + boundary
+      },
+      payload: multipartRequestBody,
+      muteHttpExceptions: true
+    });
+    
+    var resText = response.getContentText();
+    var fileInfo = JSON.parse(resText);
+    if (fileInfo.error) {
+      Logger.log("Excel dönüştürme hatası: " + fileInfo.error.message);
+      return false;
+    }
+    
+    var tempSsId = fileInfo.id;
+    var tempSs = SpreadsheetApp.openById(tempSsId);
+    var tempSheet = tempSs.getSheets()[0]; // İlk sayfayı oku
+    
+    var lastRow = tempSheet.getLastRow();
+    var lastCol = tempSheet.getLastColumn();
+    
+    if (lastRow > 0 && lastCol > 0) {
+      var excelValues = tempSheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
+      
+      // '5-Personel_Bilgi' sayfasını temizle ve verileri yaz
+      sheet.clear();
+      sheet.getRange(1, 1, excelValues.length, lastCol).setValues(excelValues);
+      
+      // Biçimlendirme uygula
+      formatGeneralSheet(sheet);
+      
+      // Güncelleme tarihlerine kaydet
+      var pad = function(n) { return String(n).padStart(2, '0'); };
+      var now = new Date();
+      var formattedDate = pad(now.getDate()) + "." + pad(now.getMonth() + 1) + "." + now.getFullYear() + " " + pad(now.getHours()) + ":" + pad(now.getMinutes());
+      recordLastUpdate(ss, "5. PERSONEL BİLGİ ÇİZELGELERİ", formattedDate);
+      
+      Logger.log("Drive üzerindeki Excel dosyasından '" + excelFile.getName() + "' okunan " + excelValues.length + " satır veri e-tabloya başarıyla eşitlendi.");
+      
+      // Geçici dosyayı sil
+      try {
+        UrlFetchApp.fetch("https://www.googleapis.com/drive/v3/files/" + tempSsId, {
+          method: "DELETE",
+          headers: {
+            "Authorization": "Bearer " + ScriptApp.getOAuthToken()
+          },
+          muteHttpExceptions: true
+        });
+      } catch (delErr) {
+        Logger.log("Geçici dosya silinemedi: " + delErr.toString());
+      }
+      
+      return true;
+    }
+  } catch (err) {
+    Logger.log("syncPersonnelExcelToGoogleSheet hatası: " + err.toString());
+  }
+  return false;
 }
 
 
