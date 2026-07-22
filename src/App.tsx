@@ -1053,24 +1053,32 @@ export default function App() {
     setIsLoadingEbys(true);
     setEbysError(null);
     try {
-      // Use our server-side API proxy to completely bypass client CORS / 'Failed to fetch' error
-      const url = `/api/taskline-ebys?scriptUrl=${encodeURIComponent(EBYS_SEARCH_SCRIPT_URL)}&spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP Hata: ${response.status}`);
+      let data: any = null;
+      try {
+        const url = `/api/taskline-ebys?scriptUrl=${encodeURIComponent(EBYS_SEARCH_SCRIPT_URL)}&spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
+        const response = await fetch(url);
+        if (response.ok) {
+          data = await response.json();
+        }
+      } catch (e) {
+        console.warn("Express backend proxy /api/taskline-ebys not available, trying direct client fetch:", e);
       }
-      const result = await response.json();
-      
-      if (result && result.status === "error") {
-        throw new Error(result.message);
+
+      // Fallback to direct client GET if proxy failed or not present (e.g. Netlify static hosting)
+      if (!data || data.status === "error") {
+        const fallbackUrl = `${EBYS_SEARCH_SCRIPT_URL}?spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
+        const resp = await fetch(fallbackUrl);
+        if (resp.ok) {
+          data = await resp.json();
+        }
       }
-      
-      if (result && Array.isArray(result.data)) {
-        setEbysList(result.data);
-      } else if (Array.isArray(result)) {
-        setEbysList(result);
-      } else if (result && result.status === "success" && Array.isArray(result.data)) {
-        setEbysList(result.data);
+
+      if (data && Array.isArray(data.data)) {
+        setEbysList(data.data);
+      } else if (Array.isArray(data)) {
+        setEbysList(data);
+      } else if (data && data.status === "success" && Array.isArray(data.data)) {
+        setEbysList(data.data);
       } else {
         setEbysList([]);
       }
@@ -1086,17 +1094,31 @@ export default function App() {
   const fetchSubmittedEbysRequests = async () => {
     setIsLoadingSubmitted(true);
     try {
-      const url = `/api/taskline-ebys?scriptUrl=${encodeURIComponent(TASKLINE_SUBMIT_SCRIPT_URL)}&action=readSheet&sheetName=${encodeURIComponent("Sayfa1")}&spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
-      const response = await fetch(url);
-      if (response.ok) {
-        const result = await response.json();
-        if (result && Array.isArray(result.data)) {
-          setSubmittedEbysRequests(result.data);
-          localStorage.setItem('submitted_ebys_requests', JSON.stringify(result.data));
-        } else if (Array.isArray(result)) {
-          setSubmittedEbysRequests(result);
-          localStorage.setItem('submitted_ebys_requests', JSON.stringify(result));
+      let data: any = null;
+      try {
+        const url = `/api/taskline-ebys?scriptUrl=${encodeURIComponent(TASKLINE_SUBMIT_SCRIPT_URL)}&action=readSheet&sheetName=${encodeURIComponent("Sayfa1")}&spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
+        const response = await fetch(url);
+        if (response.ok) {
+          data = await response.json();
         }
+      } catch (e) {
+        console.warn("Express proxy not available, falling back to direct client GET for Sayfa1:", e);
+      }
+
+      if (!data || data.status === "error") {
+        const fallbackUrl = `${TASKLINE_SUBMIT_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("Sayfa1")}&spreadsheetId=1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ`;
+        const resp = await fetch(fallbackUrl);
+        if (resp.ok) {
+          data = await resp.json();
+        }
+      }
+
+      if (data && Array.isArray(data.data)) {
+        setSubmittedEbysRequests(data.data);
+        localStorage.setItem('submitted_ebys_requests', JSON.stringify(data.data));
+      } else if (Array.isArray(data)) {
+        setSubmittedEbysRequests(data);
+        localStorage.setItem('submitted_ebys_requests', JSON.stringify(data));
       }
     } catch (err) {
       console.error("TASKLINE TASKLINE-PARÇA LİSTESİ listesi çekme hatası:", err);
@@ -1123,8 +1145,8 @@ export default function App() {
       const parcaNo = row[2] || "-";                         // C sütunu: PARÇA NO (P/N) / MODEL
       const seriNo = row[3] || "-";                          // D sütunu: SERİ NO (S/N)
       const miktarKapasite = row[4] || "1";                  // E sütunu: MİKTAR / KAPASİTE
-      const firma = row[9] || "-";                           // F sütunu: SON KONTROLÜ YAPAN FİRMA
-      const aciklama = row[10] || "";                        // G sütunu: AÇIKLAMA
+      const firma = row[10] || row[9] || "-";                // F sütunu: SON KONTROLÜ YAPAN FİRMA
+      const aciklama = row[11] || row[10] || "";              // G sütunu: AÇIKLAMA
 
       return [
         aitOlduguBirim,
@@ -1223,29 +1245,56 @@ export default function App() {
         }
       });
 
-      // 3. Post selected rows to TASKLINE Submit Script via backend proxy
-      const proxyResponse = await fetch("/api/taskline-submit", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
+      // 3. Post selected rows to TASKLINE Submit Script via backend proxy or direct fetch
+      let submitSuccess = false;
+      try {
+        const proxyResponse = await fetch("/api/taskline-submit", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            ebysNo: ebysSearchQuery,
+            talepTuru: ebysTalepTuru || "MALZEME",
+            data: tableRows,
+            scriptUrl: TASKLINE_SUBMIT_SCRIPT_URL,
+            fallbackScriptUrl: GOOGLE_SCRIPT_URL,
+            spreadsheetId: "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ"
+          })
+        });
+
+        if (proxyResponse.ok) {
+          const proxyResult = await proxyResponse.json();
+          if (proxyResult.status !== "error") {
+            submitSuccess = true;
+          }
+        }
+      } catch (e) {
+        console.warn("Proxy submission unavailable or failed, attempting direct fetch:", e);
+      }
+
+      if (!submitSuccess) {
+        const directPayload = {
+          action: "appendEbysTable",
           ebysNo: ebysSearchQuery,
           talepTuru: ebysTalepTuru || "MALZEME",
           data: tableRows,
-          scriptUrl: TASKLINE_SUBMIT_SCRIPT_URL,
-          fallbackScriptUrl: GOOGLE_SCRIPT_URL,
           spreadsheetId: "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ"
-        })
-      });
+        };
 
-      if (!proxyResponse.ok) {
-        throw new Error(`Proxy sunucusu hata döndürdü: ${proxyResponse.status}`);
-      }
+        const directResp = await fetch(TASKLINE_SUBMIT_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(directPayload)
+        });
 
-      const proxyResult = await proxyResponse.json();
-      if (proxyResult.status === "error") {
-        throw new Error(proxyResult.message || "Bilinmeyen sunucu proxy hatası");
+        if (!directResp.ok) {
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify(directPayload)
+          });
+        }
       }
 
       // Show instant feedback
@@ -1305,20 +1354,29 @@ export default function App() {
 
           if (isSelected) {
             const cloned = [...r];
-            while (cloned.length < 12) cloned.push("");
-            
-            // Standard indices in 12-column row:
-            // 5: BULUNDUĞU YER
-            // 6: DURUMU
-            // 9: SON KONTROLÜ YAPAN FİRMA
-            if (bulkEditYer.trim() !== "") {
-              cloned[5] = bulkEditYer.trim();
-            }
-            if (bulkEditDurum.trim() !== "") {
-              cloned[6] = bulkEditDurum.trim();
-            }
-            if (bulkEditFirma.trim() !== "") {
-              cloned[9] = bulkEditFirma.trim();
+            if (techType === 'kara_araclari') {
+              while (cloned.length < 12) cloned.push("");
+              if (bulkEditYer.trim() !== "") {
+                cloned[3] = bulkEditYer.trim();
+              }
+              if (bulkEditDurum.trim() !== "") {
+                cloned[5] = bulkEditDurum.trim();
+              }
+              if (bulkEditFirma.trim() !== "") {
+                cloned[9] = bulkEditFirma.trim();
+              }
+            } else {
+              while (cloned.length < 13) cloned.push("");
+              if (bulkEditYer.trim() !== "") {
+                cloned[5] = bulkEditYer.trim();
+              }
+              if (bulkEditDurum.trim() !== "") {
+                cloned[6] = bulkEditDurum.trim();
+              }
+              if (bulkEditFirma.trim() !== "") {
+                cloned[10] = bulkEditFirma.trim();
+                cloned[9] = bulkEditFirma.trim();
+              }
             }
             return cloned;
           }
@@ -1676,6 +1734,8 @@ export default function App() {
   // Teçhizat Takip Matrix States
   const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all' | null>(null);
   const [techizatSearchQuery, setTechizatSearchQuery] = useState<string>("");
+  const [techizatFirmaFilter, setTechizatFirmaFilter] = useState<string>("");
+  const [techizatDurumFilter, setTechizatDurumFilter] = useState<string>("");
   const [activeTechizatMatchIdx, setActiveTechizatMatchIdx] = useState<number>(0);
 
   // States for each of the categories
@@ -6788,6 +6848,7 @@ export default function App() {
               "MİKTAR / KAPASİTE", 
               "BULUNDUĞU YER", 
               "DURUMU", 
+              "KALİBRASYONA TABİ", 
               "SON KONTROL / KALİBRASYON / BAKIM", 
               "GELECEK KONTROL / KALİBRASYON / BAKIM", 
               "SON KONTROLÜ YAPAN FİRMA", 
@@ -6802,6 +6863,7 @@ export default function App() {
               "BULUNDUĞU YER", 
               "SON KM Sİ", 
               "DURUMU", 
+              "KALİBRASYONA TABİ", 
               "SON KONTROL / KALİBRASYON / BAKIM", 
               "GELECEK KONTROL / KALİBRASYON / BAKIM", 
               "SON KONTROLÜ YAPAN FİRMA", 
@@ -6817,36 +6879,42 @@ export default function App() {
 
             const formatStandardRow = (row: string[]) => {
               const r = [...row];
+              const col7Upper = (r[7] || "").trim().toUpperCase();
+              if (col7Upper !== "EVET" && col7Upper !== "HAYIR") {
+                r.splice(7, 0, "EVET");
+              }
+              while (r.length < 13) {
+                r.push("");
+              }
+              return r.slice(0, 13);
+            };
+
+            const formatKaraAraclariRow = (row: string[]) => {
+              const r = [...row];
+              const col6Upper = (r[6] || "").trim().toUpperCase();
+              if (col6Upper !== "EVET" && col6Upper !== "HAYIR") {
+                r.splice(6, 0, "EVET");
+              }
               while (r.length < 12) {
                 r.push("");
               }
               return r.slice(0, 12);
             };
 
-            const formatKaraAraclariRow = (row: string[]) => {
-              const r = [...row];
-              while (r.length < 11) {
-                r.push("");
-              }
-              return r.slice(0, 11);
-            };
-
             const formatKaraAraciToStandardRow = (row: string[]) => {
-              const r = [...row];
-              while (r.length < 11) {
-                r.push("");
-              }
+              const r = formatKaraAraclariRow(row);
               const sira = r[0];
               const plaka = r[1];
               const model = r[2];
               const yer = r[3];
               const km = r[4] ? `${r[4]} KM` : "";
               const durum = r[5];
-              const sonBakim = r[6];
-              const gelecekBakim = r[7];
-              const firma = r[8];
-              const aciklama = r[9];
-              const mail = r[10];
+              const kalibrasyonTabi = r[6];
+              const sonBakim = r[7];
+              const gelecekBakim = r[8];
+              const firma = r[9];
+              const aciklama = r[10];
+              const mail = r[11];
               
               return [
                 sira,
@@ -6856,6 +6924,7 @@ export default function App() {
                 "1", 
                 yer,
                 durum,
+                kalibrasyonTabi,
                 sonBakim,
                 gelecekBakim,
                 firma,
@@ -6884,12 +6953,42 @@ export default function App() {
               : activeTechizatType === 'kara_araclari' ? techizatKaraAraclariData.map(formatKaraAraclariRow)
               : techizatHangarData.map(formatStandardRow);
 
+            const firmaColIdx = cols.indexOf("SON KONTROLÜ YAPAN FİRMA");
+            const durumColIdx = cols.indexOf("DURUMU");
+            const kalibrasyonTabiColIdx = cols.indexOf("KALİBRASYONA TABİ");
+
+            const uniqueFirmalar = Array.from(
+              new Set(
+                rows
+                  .map(r => (r[firmaColIdx] || "").trim())
+                  .filter(f => f && f !== "-" && f !== "MUAFIYET (TABİ DEĞİL)" && f.toUpperCase() !== "BELİRTİLMEMİŞ")
+              )
+            ).sort();
+
             const q = techizatSearchQuery.toLowerCase().trim();
+            const firmaFilter = techizatFirmaFilter.toLowerCase().trim();
+            const durumFilter = techizatDurumFilter.toUpperCase().trim();
+
             const matchesList: { r: number; c: number }[] = [];
 
             const filteredRows = rows.filter(row => {
-              if (!q) return true;
-              return row.some(cell => cell && cell.toLowerCase().includes(q));
+              // 1. Arama kelimesi filtresi
+              if (q && !row.some(cell => cell && cell.toLowerCase().includes(q))) {
+                return false;
+              }
+              // 2. Firma filtresi
+              if (firmaFilter && firmaFilter !== "tüm fİrmalar") {
+                const rowFirma = (row[firmaColIdx] || "").toLowerCase().trim();
+                if (!rowFirma.includes(firmaFilter)) return false;
+              }
+              // 3. Durum filtresi
+              if (durumFilter && durumFilter !== "TÜM DURUMLAR") {
+                const rowDurum = (row[durumColIdx] || "").toUpperCase().trim();
+                if (durumFilter === "FAAL" && !rowDurum.includes("FAAL")) return false;
+                if (durumFilter === "BAKIM / KALİBRASYON" && !rowDurum.includes("BAKIM") && !rowDurum.includes("KALİBRASYON")) return false;
+                if (durumFilter === "GAYRİ FAAL" && !rowDurum.includes("GAYRİ") && !rowDurum.includes("DEĞİL")) return false;
+              }
+              return true;
             });
 
             // Locate search match coordinates
@@ -6902,18 +7001,15 @@ export default function App() {
             });
 
             const activeMatch = matchesList[activeTechizatMatchIdx];
-            const gelecekBakimColIdx = isKaraAraci
-              ? cols.indexOf("BİR SONRAKİ BAKIM TARİHİ")
-              : cols.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
+            const gelecekBakimColIdx = cols.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
 
             // Sıralama (Normalde seçili değil, ama basılınca Turuncu -> Yeşil sıralasın)
             let processedRows = [...filteredRows];
             if (sortByColor && gelecekBakimColIdx !== -1) {
               processedRows.sort((rowA, rowB) => {
                 const getPriorityScore = (row: string[]) => {
-                  const isBakimaTabiColIdx = cols.indexOf("BAKIMA TABİ Mİ?");
-                  const isBakimaTabi = isBakimaTabiColIdx !== -1 ? row[isBakimaTabiColIdx] : "Evet";
-                  if (isBakimaTabi === "Hayır") return 4; // Bakım gerekmiyorsa en düşük öncelik
+                  const isKalibTabiVal = kalibrasyonTabiColIdx !== -1 ? (row[kalibrasyonTabiColIdx] || "").trim().toUpperCase() : "EVET";
+                  if (isKalibTabiVal === "HAYIR") return 4; // Kalibrasyon gerekmiyorsa en düşük öncelik
 
                   const val = row[gelecekBakimColIdx] || "";
                   const days = parseGelecekBakimDays(val);
@@ -7003,18 +7099,74 @@ export default function App() {
                       <div className="bg-slate-800 p-2.5 rounded-2xl border border-slate-700">
                         <Search className="w-5 h-5 text-emerald-400" />
                       </div>
+                      
+                      {/* Metin Arama Input */}
                       <div className="relative flex-1 sm:flex-initial">
                         <input
                           type="text"
-                          placeholder="Teçhizat veya durum aratın..."
+                          placeholder="Teçhizat veya seri no..."
                           value={techizatSearchQuery}
                           onChange={(e) => {
                             setTechizatSearchQuery(e.target.value);
                             setActiveTechizatMatchIdx(0);
                           }}
-                          className="bg-slate-800 text-white font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-60 border border-slate-700 placeholder-slate-400"
+                          className="bg-slate-800 text-white font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-48 border border-slate-700 placeholder-slate-400"
                         />
                       </div>
+
+                      {/* Firma Filtreleme Input / Datalist Dropdown */}
+                      <div className="relative flex-1 sm:flex-initial">
+                        <input
+                          type="text"
+                          list="techizat-firmalar-list"
+                          placeholder="🏢 Firma ile ara / seç..."
+                          value={techizatFirmaFilter}
+                          onChange={(e) => {
+                            setTechizatFirmaFilter(e.target.value);
+                            setActiveTechizatMatchIdx(0);
+                          }}
+                          className="bg-slate-800 text-emerald-300 font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-52 border border-slate-700 placeholder-slate-400"
+                        />
+                        <datalist id="techizat-firmalar-list">
+                          <option value="TÜM FİRMALAR">TÜM FİRMALAR</option>
+                          {uniqueFirmalar.map((f, i) => (
+                            <option key={i} value={f}>{f}</option>
+                          ))}
+                        </datalist>
+                      </div>
+
+                      {/* Durum Filtreleme Dropdown */}
+                      <div className="relative flex-1 sm:flex-initial">
+                        <select
+                          value={techizatDurumFilter}
+                          onChange={(e) => {
+                            setTechizatDurumFilter(e.target.value);
+                            setActiveTechizatMatchIdx(0);
+                          }}
+                          className="bg-slate-800 text-amber-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-44 border border-slate-700 cursor-pointer"
+                        >
+                          <option value="">🟢 TÜM DURUMLAR</option>
+                          <option value="FAAL">FAAL</option>
+                          <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
+                          <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                        </select>
+                      </div>
+
+                      {(techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter) && (
+                        <button
+                          onClick={() => {
+                            setTechizatSearchQuery("");
+                            setTechizatFirmaFilter("");
+                            setTechizatDurumFilter("");
+                            setActiveTechizatMatchIdx(0);
+                          }}
+                          className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-700"
+                          title="Filtreleri Temizle"
+                        >
+                          ✕ Temizle
+                        </button>
+                      )}
+
                       {techizatSearchQuery && (
                         <span className="text-[10px] font-mono font-black text-emerald-400 px-3 py-1.5 bg-emerald-950/50 rounded-xl border border-emerald-900 shrink-0">
                           {matchesList.length} EŞLEŞME
@@ -9205,6 +9357,7 @@ export default function App() {
                 "BULUNDUĞU YER", 
                 "SON KM Sİ", 
                 "DURUMU", 
+                "KALİBRASYONA TABİ",
                 "SON KONTROL / KALİBRASYON / BAKIM", 
                 "GELECEK KONTROL / KALİBRASYON / BAKIM", 
                 "SON KONTROLÜ YAPAN FİRMA", 
@@ -9219,6 +9372,7 @@ export default function App() {
                 "MİKTAR / KAPASİTE", 
                 "BULUNDUĞU YER", 
                 "DURUMU", 
+                "KALİBRASYONA TABİ",
                 "SON KONTROL / KALİBRASYON / BAKIM", 
                 "GELECEK KONTROL / KALİBRASYON / BAKIM", 
                 "SON KONTROLÜ YAPAN FİRMA", 
@@ -9313,56 +9467,103 @@ export default function App() {
                         );
                       }
 
-                      // Special field: BAKIMA TABİ Mİ? (Dropdown selection Evet / Hayır)
-                      if (col === "BAKIMA TABİ Mİ?") {
+                      // Special field: KALİBRASYONA TABİ (Dropdown selection EVET / HAYIR)
+                      if (col === "KALİBRASYONA TABİ" || col === "BAKIMA TABİ Mİ?") {
+                        const currentVal = (editRowValues[idx] || "EVET").toString().trim().toUpperCase();
                         return (
                           <div key={idx} className="flex flex-col gap-1.5">
                             <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                              ⚙️ {col}
+                              ⚙️ KALİBRASYONA TABİ
                             </label>
                             <select
-                              value={editRowValues[idx] || "Evet"}
+                              value={currentVal === "HAYIR" ? "HAYIR" : "EVET"}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 const cloned = [...editRowValues];
                                 cloned[idx] = val;
-                                // If "Hayır" is selected, clear maintenance/control dates
-                                if (val === "Hayır") {
-                                  if (!isKaraAraciEdit) {
-                                    cloned[8] = "-"; // SON KONTROL
-                                    cloned[9] = "-"; // GELECEK KONTROL
-                                  } else {
-                                    cloned[6] = "-"; // SON KONTROL / KALİBRASYON / BAKIM
-                                    cloned[7] = "-"; // GELECEK KONTROL / KALİBRASYON / BAKIM
-                                  }
+                                // If "HAYIR" is selected, clear maintenance fields and firm
+                                if (val === "HAYIR") {
+                                  const lastCntIdx = colsList.indexOf("SON KONTROL / KALİBRASYON / BAKIM");
+                                  const nextCntIdx = colsList.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
+                                  const firmIdx = colsList.indexOf("SON KONTROLÜ YAPAN FİRMA");
+                                  if (lastCntIdx !== -1) cloned[lastCntIdx] = "-";
+                                  if (nextCntIdx !== -1) cloned[nextCntIdx] = "-";
+                                  if (firmIdx !== -1) cloned[firmIdx] = "-";
                                 }
                                 setEditRowValues(cloned);
                               }}
-                              className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                              className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d] cursor-pointer"
                             >
-                              <option value="Evet">Evet (Bakıma Tabi)</option>
-                              <option value="Hayır">Hayır (Bakım Gerekmiyor)</option>
+                              <option value="EVET">EVET (Kalibrasyona / Bakıma Tabi)</option>
+                              <option value="HAYIR">HAYIR (Kalibrasyon / Bakımdan Muaf)</option>
                             </select>
                           </div>
                         );
                       }
 
-                      // Check if maintenance is disabled (Hayır is active)
-                      const isBakimaTabiColIdx = colsList.indexOf("BAKIMA TABİ Mİ?");
-                      const isBakimaTabi = isBakimaTabiColIdx !== -1 ? editRowValues[isBakimaTabiColIdx] : "Evet";
-                      const isMaintenanceField = !isKaraAraciEdit
-                        ? idx === 8 || idx === 9 // SON KONTROL, GELECEK KONTROL
-                        : idx === 6 || idx === 7; // SON KONTROL / KALİBRASYON / BAKIM, GELECEK KONTROL / KALİBRASYON / BAKIM
+                      // Check if KALİBRASYONA TABİ is HAYIR (disabled flu mode for maintenance & firm fields)
+                      const kalibColIdx = colsList.indexOf("KALİBRASYONA TABİ") !== -1 ? colsList.indexOf("KALİBRASYONA TABİ") : colsList.indexOf("BAKIMA TABİ Mİ?");
+                      const isKalibTabiHayir = kalibColIdx !== -1 && (editRowValues[kalibColIdx] || "").toString().trim().toUpperCase() === "HAYIR";
+                      const isMaintenanceOrFirmField = col === "SON KONTROL / KALİBRASYON / BAKIM" || 
+                                                       col === "GELECEK KONTROL / KALİBRASYON / BAKIM" || 
+                                                       col === "SON KONTROLÜ YAPAN FİRMA";
 
-                      if (isBakimaTabi === "Hayır" && isMaintenanceField) {
+                      if (isKalibTabiHayir && isMaintenanceOrFirmField) {
                         return (
                           <div key={idx} className="flex flex-col gap-1.5 opacity-40">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
                             <input
                               type="text"
-                              value="MUAFIYET (BAKIM YOK)"
+                              value="MUAFIYET (TABİ DEĞİL)"
                               disabled
                               className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-400 cursor-not-allowed"
+                            />
+                          </div>
+                        );
+                      }
+
+                      // Special field: DURUMU (Dropdown FAAL / BAKIM KALİBRASYON / GAYRİ FAAL)
+                      if (col === "DURUMU") {
+                        return (
+                          <div key={idx} className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                              🟢 {col}
+                            </label>
+                            <select
+                              value={editRowValues[idx] || "FAAL"}
+                              onChange={(e) => {
+                                const cloned = [...editRowValues];
+                                cloned[idx] = e.target.value;
+                                setEditRowValues(cloned);
+                              }}
+                              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all cursor-pointer"
+                            >
+                              <option value="FAAL">FAAL</option>
+                              <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
+                              <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                            </select>
+                          </div>
+                        );
+                      }
+
+                      // Special field: SON KONTROLÜ YAPAN FİRMA (With Firm Datalist)
+                      if (col === "SON KONTROLÜ YAPAN FİRMA") {
+                        return (
+                          <div key={idx} className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                              🏢 {col}
+                            </label>
+                            <input
+                              type="text"
+                              list="techizat-firmalar-list"
+                              value={editRowValues[idx] || ""}
+                              placeholder="Firma seçiniz veya yazınız..."
+                              onChange={(e) => {
+                                const cloned = [...editRowValues];
+                                cloned[idx] = e.target.value;
+                                setEditRowValues(cloned);
+                              }}
+                              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
                             />
                           </div>
                         );
@@ -10647,13 +10848,16 @@ export default function App() {
 
                     <div className="flex flex-col gap-1.5">
                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Yeni Durumu</label>
-                      <input
-                        type="text"
-                        placeholder="Değiştirmek istemiyorsanız boş bırakın"
+                      <select
                         value={bulkEditDurum}
                         onChange={(e) => setBulkEditDurum(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none"
-                      />
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none cursor-pointer"
+                      >
+                        <option value="">-- Değişiklik Yok (Değiştirmek istemiyorsanız seçmeyin) --</option>
+                        <option value="FAAL">FAAL</option>
+                        <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
+                        <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                      </select>
                     </div>
 
                     <div className="flex flex-col gap-1.5">
