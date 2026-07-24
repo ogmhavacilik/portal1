@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo, ChangeEvent } from 'react';
+import { removeBackground } from '@imgly/background-removal';
 import {
   Plane,
   Users,
@@ -744,34 +745,29 @@ export default function App() {
   const [isImageUploadingToDrive, setIsImageUploadingToDrive] = useState<boolean>(false);
 
   // Background removal and camera stream states
-  const [isRemoveBgEnabled, setIsRemoveBgEnabled] = useState<boolean>(false);
   const [isProcessingRemoveBg, setIsProcessingRemoveBg] = useState<boolean>(false);
+  const [bgRemovalStatusText, setBgRemovalStatusText] = useState<string>('');
   const [isWebcamOpen, setIsWebcamOpen] = useState<boolean>(false);
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Process background removal via Photoroom Sandbox API
-  const handleProcessBackgroundRemoval = async (file: File) => {
+  // Process background removal via client-side IMG.LY AI model (In-Memory Processing)
+  const handleProcessImglyBackgroundRemoval = async (file: File) => {
     try {
       setIsProcessingRemoveBg(true);
-      showNotification("Photoroom AI ile arka plan temizleniyor...");
+      setBgRemovalStatusText("Arka plan temizleniyor, lütfen bekleyin...");
       
-      const formData = new FormData();
-      formData.append("image_file", file);
-      
-      const res = await fetch("https://sdk.photoroom.com/v1/segment", {
-        method: "POST",
-        headers: {
-          "x-api-key": "sandbox_sk_pr_default_b7f12ef076b0ed268ce1fbac0b72ccd2873f10bc"
-        },
-        body: formData
+      const removeFn = (window as any).imglyRemoveBackground || removeBackground;
+      const blob = await removeFn(file, {
+        model: 'isnet_fp16', // Hızlı ve kaliteli model seçeneği
+        progress: (key: string, current: number, total: number) => {
+          if (total > 0) {
+            const percent = Math.round((current / total) * 100);
+            setBgRemovalStatusText(`Model yükleniyor: %${percent}`);
+          }
+        }
       });
       
-      if (!res.ok) {
-        throw new Error(`Photoroom API hatası: ${res.status}`);
-      }
-      
-      const blob = await res.blob();
       const localUrl = URL.createObjectURL(blob);
       setPendingImagePreview(localUrl);
       
@@ -785,24 +781,26 @@ export default function App() {
       reader.readAsDataURL(blob);
 
       // Save as transparent file
-      const transparentFile = new File([blob], `transparent_${file.name || "captured.png"}`, { type: "image/png" });
+      const transparentFile = new File([blob], `cleaned_${file.name || "captured.png"}`, { type: "image/png" });
       setPendingImageFile(transparentFile);
       
-      showNotification("Arka plan başarıyla silindi!");
+      setBgRemovalStatusText("İşlem tamamlandı!");
+      showNotification("Arka plan başarıyla temizlendi!");
     } catch (err: any) {
-      console.error("Photoroom background removal error:", err);
-      showNotification(`Arka plan silme başarısız oldu: ${err.message || err}`);
+      console.error("Arka plan temizleme hatası:", err);
+      setBgRemovalStatusText("Bir hata oluştu, lütfen tekrar deneyin.");
+      showNotification(`Arka plan temizleme hatası: ${err.message || err}`);
     } finally {
       setIsProcessingRemoveBg(false);
     }
   };
 
-  // Helper when image file is selected or captured
+  // Helper when image file is selected or captured from camera
   const handleImageSelected = async (file: File) => {
     setPendingImageFile(file);
     setPendingImagePreview(URL.createObjectURL(file));
     
-    // Convert to base64 immediately for standard use
+    // Convert to base64
     const reader = new FileReader();
     reader.onloadend = () => {
       setPendingImageBase64(reader.result as string);
@@ -810,9 +808,8 @@ export default function App() {
     };
     reader.readAsDataURL(file);
 
-    if (isRemoveBgEnabled) {
-      await handleProcessBackgroundRemoval(file);
-    }
+    // Run client-side AI background removal automatically
+    await handleProcessImglyBackgroundRemoval(file);
   };
 
   // Webcam controls for desktop webcam support
@@ -10212,19 +10209,57 @@ export default function App() {
                       <div className="flex flex-col gap-2">
                         <div className="flex items-center justify-between">
                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
-                            Görsel Yükleme & Kamera
+                            Mobil Otomatik Arka Plan Temizleme
                           </label>
-                          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                        </div>
+
+                        {/* Mobil Kamerayı Doğrudan Açan Buton */}
+                        <div className="flex flex-col items-center justify-center gap-2 bg-slate-50 border-2 border-slate-200/80 rounded-2xl p-4">
+                          <label className="btn-camera bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs uppercase px-5 py-3 rounded-xl cursor-pointer flex items-center justify-center gap-2 active:scale-95 transition-all shadow-md w-full text-center">
+                            📷 Fotoğraf Çek
                             <input
-                              type="checkbox"
-                              checked={isRemoveBgEnabled}
-                              onChange={(e) => setIsRemoveBgEnabled(e.target.checked)}
-                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-3 h-3 cursor-pointer"
+                              type="file"
+                              id="cameraInput"
+                              accept="image/*"
+                              capture="environment"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  handleImageSelected(file);
+                                }
+                              }}
+                              className="hidden"
                             />
-                            <span className="text-[9px] font-bold text-emerald-700 uppercase tracking-wide">
-                              ✨ Photoroom AI Arka Plan Sil
-                            </span>
                           </label>
+                          <div className="flex items-center gap-2 w-full">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const inputEl = document.getElementById('drag-drop-image-input');
+                                inputEl?.click();
+                              }}
+                              className="flex-1 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-[10px] uppercase rounded-xl transition-all cursor-pointer text-center"
+                            >
+                              📁 Dosya Seç
+                            </button>
+                            <button
+                              type="button"
+                              onClick={startWebcam}
+                              className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] uppercase rounded-xl transition-all cursor-pointer text-center"
+                            >
+                              🖥️ Live Webcam
+                            </button>
+                          </div>
+                          <input
+                            id="drag-drop-image-input"
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleImageSelected(file);
+                            }}
+                            className="hidden"
+                          />
                         </div>
 
                         {isImageUploadingToDrive ? (
@@ -10234,24 +10269,37 @@ export default function App() {
                             <p className="text-[10px] text-emerald-600 font-semibold">Görsel Google Drive'a kaydediliyor, lütfen bekleyiniz.</p>
                           </div>
                         ) : isProcessingRemoveBg ? (
-                          <div className="border-2 border-dashed border-purple-300 bg-purple-50/20 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[140px] animate-pulse">
-                            <div className="w-8 h-8 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mb-1" />
-                            <p className="text-xs font-black text-purple-800">ARKA PLAN TEMİZLENİYOR...</p>
-                            <p className="text-[10px] text-purple-600 font-semibold">Photoroom API üzerinden akıllı segmentasyon yapılıyor, lütfen bekleyiniz.</p>
+                          <div className="border-2 border-dashed border-blue-300 bg-blue-50/20 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[140px] animate-pulse">
+                            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-1" />
+                            <p className="text-xs font-black text-blue-800">ARKA PLAN TEMİZLENİYOR...</p>
+                            <div id="status" className="text-xs font-bold text-blue-700">{bgRemovalStatusText || "Lütfen bekleyin..."}</div>
                           </div>
                         ) : pendingImagePreview ? (
                           <div className="border-2 border-solid border-emerald-400 bg-emerald-50/10 rounded-2xl p-4 flex flex-col gap-3 min-h-[140px] animate-fade-in">
-                            <div className="flex items-center gap-3">
+                            <div className="flex flex-col items-center gap-3">
+                              {/* İşlenmiş Şeffaf (PNG) Görsel */}
                               <img
+                                id="resultImage"
                                 src={pendingImagePreview}
-                                alt="Seçilen Görsel"
-                                className="w-16 h-16 object-contain rounded-xl border border-emerald-200 bg-white shadow-sm"
+                                alt="Temizlenmiş Görsel"
+                                style={{
+                                  maxWidth: "100%",
+                                  maxHeight: "220px",
+                                  borderRadius: "12px",
+                                  border: "2px dashed #ccc",
+                                  display: "block",
+                                  backgroundImage: "repeating-linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc), repeating-linear-gradient(45deg, #ccc 25%, #fff 25%, #fff 75%, #ccc 75%, #ccc)",
+                                  backgroundPosition: "0 0, 9px 9px",
+                                  backgroundSize: "18px 18px",
+                                  objectFit: "contain"
+                                }}
                               />
-                              <div className="flex-1 min-w-0">
+                              <div className="text-center">
                                 <p className="text-xs font-bold text-slate-800 truncate">{pendingImageFile?.name || 'Kameradan Çekilen Fotoğraf'}</p>
                                 <p className="text-[10px] text-slate-400 font-semibold font-mono">
-                                  {(pendingImageFile ? pendingImageFile.size / 1024 : 0).toFixed(1)} KB
+                                  {(pendingImageFile ? pendingImageFile.size / 1024 : 0).toFixed(1)} KB (Şeffaf PNG)
                                 </p>
+                                <div id="status" className="text-[10px] font-bold text-emerald-700 mt-1">{bgRemovalStatusText || "İşlem tamamlandı!"}</div>
                               </div>
                             </div>
                             <div className="flex flex-col gap-1.5">
@@ -10327,6 +10375,7 @@ export default function App() {
                                   onClick={() => {
                                     setPendingImageFile(null);
                                     setPendingImagePreview(null);
+                                    setBgRemovalStatusText("");
                                   }}
                                   className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer"
                                 >
@@ -10337,106 +10386,16 @@ export default function App() {
                                 type="button"
                                 onClick={() => {
                                   if (pendingImageFile) {
-                                    handleProcessBackgroundRemoval(pendingImageFile);
+                                    handleProcessImglyBackgroundRemoval(pendingImageFile);
                                   }
                                 }}
-                                className="w-full py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-black text-[9px] uppercase tracking-wider rounded-lg transition-all cursor-pointer shadow-sm active:scale-[0.98]"
+                                className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-[9px] uppercase tracking-wider rounded-lg transition-all cursor-pointer shadow-sm active:scale-[0.98]"
                               >
-                                ✨ Görsel Arka Planını Photoroom AI ile Temizle
+                                ✨ Arka Planı Yeniden Temizle (IMG.LY AI)
                               </button>
                             </div>
                           </div>
-                        ) : (
-                          <div className="flex flex-col gap-2">
-                            <div
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                setIsDragging(true);
-                              }}
-                              onDragLeave={(e) => {
-                                e.preventDefault();
-                                setIsDragging(false);
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                setIsDragging(false);
-                                const file = e.dataTransfer.files?.[0];
-                                if (file && file.type.startsWith('image/')) {
-                                  handleImageSelected(file);
-                                }
-                              }}
-                              onClick={() => {
-                                const inputEl = document.getElementById('drag-drop-image-input');
-                                inputEl?.click();
-                              }}
-                              className={`border-2 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center gap-1.5 text-center cursor-pointer transition-all min-h-[110px] ${
-                                isDragging
-                                  ? 'border-emerald-500 bg-emerald-50/40 text-emerald-800 scale-[0.98]'
-                                  : 'border-slate-300 hover:border-emerald-600 hover:bg-emerald-50/10 text-slate-500'
-                              }`}
-                            >
-                              <span className="text-xl animate-bounce">📥</span>
-                              <p className="text-[10px] font-black uppercase tracking-wider text-slate-700">
-                                Sürükleyip Buraya Bırakın
-                              </p>
-                              <p className="text-[9px] text-slate-400 font-semibold leading-relaxed">
-                                veya bilgisayarınızdan seçmek için <strong>TIKLAYIN</strong>
-                              </p>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2">
-                              {/* Native Mobile Camera Trigger */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const camEl = document.getElementById('mobile-camera-input');
-                                  camEl?.click();
-                                }}
-                                className="py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow"
-                              >
-                                📷 MOBİL KAMERA
-                              </button>
-
-                              {/* Desktop Webcam Modal Trigger */}
-                              <button
-                                type="button"
-                                onClick={startWebcam}
-                                className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 shadow"
-                              >
-                                🖥️ CANLI WEBCAM
-                              </button>
-                            </div>
-
-                            {/* Hidden Standard File Input */}
-                            <input
-                              id="drag-drop-image-input"
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  handleImageSelected(file);
-                                }
-                              }}
-                              className="hidden"
-                            />
-
-                            {/* Hidden Native Camera Input with capture="environment" for best mobile camera quality */}
-                            <input
-                              id="mobile-camera-input"
-                              type="file"
-                              accept="image/*"
-                              capture="environment"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  handleImageSelected(file);
-                                }
-                              }}
-                              className="hidden"
-                            />
-                          </div>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
