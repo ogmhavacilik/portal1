@@ -114,7 +114,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { ImageEditorAndRetoucher } from './components/ImageEditorAndRetoucher';
-import { CachedDriveImage } from './components/CachedDriveImage';
+import { CachedDriveImage, fetchDriveImageAsBase64 } from './components/CachedDriveImage';
 
 export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzz6XVe-NDXbNUks8KFMfTVYN0JfN6PhQGLVNDG26yolgwGtD8DTBTKD8PgXW5V-n6vEQ/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
@@ -732,7 +732,7 @@ export default function App() {
   // Modal active state
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState('SİSTEM');
-  const [modalType, setModalType] = useState<'iframe' | 'design' | 'category' | 'form_table' | 'excel_sync' | 'techizat_matrix'>('iframe');
+  const [modalType, setModalType] = useState<'iframe' | 'design' | 'category' | 'form_table' | 'excel_sync' | 'techizat_matrix' | 'denetleme'>('iframe');
   const [modalUrl, setModalUrl] = useState('');
   const [iframeLoading, setIframeLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>(null);
@@ -798,6 +798,19 @@ export default function App() {
   const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isImageUploadingToDrive, setIsImageUploadingToDrive] = useState<boolean>(false);
+
+  // Hover preview state for equipment table
+  const [hoveredRowImage, setHoveredRowImage] = useState<{ url: string; title: string; subtitle: string; x: number; y: number } | null>(null);
+
+  // Excel Export with Images modal state
+  const [excelExportModalData, setExcelExportModalData] = useState<{
+    type: string;
+    cols: string[];
+    rows: string[][];
+    title: string;
+  } | null>(null);
+  const [isExcelExportLoading, setIsExcelExportLoading] = useState<boolean>(false);
+  const [excelExportProgressText, setExcelExportProgressText] = useState<string>('');
 
   // Background removal and camera stream states
   const [isProcessingRemoveBg, setIsProcessingRemoveBg] = useState<boolean>(false);
@@ -2160,8 +2173,13 @@ export default function App() {
     });
   };
 
-  // Excel exporter for Teçhizat Takip
+  // Excel exporter for Teçhizat Takip - Opens choice dialog ("Görselli olarak indirilsin mi?")
   const exportTechizatToExcel = (type: string, cols: string[], rows: string[][], title: string = "TEÇHİZAT LİSTESİ") => {
+    setExcelExportModalData({ type, cols, rows, title });
+  };
+
+  // Fast text-only Excel export
+  const executeTextOnlyExcelExport = (type: string, cols: string[], rows: string[][], title: string = "TEÇHİZAT LİSTESİ") => {
     try {
       let html = `
         <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
@@ -2296,9 +2314,147 @@ export default function App() {
       link.click();
       document.body.removeChild(link);
       
-      showNotification("Teçhizat listesi tasarımlı HTML Excel (.xls) olarak başarıyla indirildi.");
+      showNotification("Teçhizat listesi metin içerikli Excel (.xls) olarak başarıyla indirildi.");
     } catch (err) {
       alert("Excel indirme hatası: " + err);
+    }
+  };
+
+  // Process Excel export with optional embedded images
+  const downloadTechizatExcelWithImages = async (withImages: boolean) => {
+    if (!excelExportModalData) return;
+    const { type, cols, rows, title } = excelExportModalData;
+
+    try {
+      if (!withImages) {
+        executeTextOnlyExcelExport(type, cols, rows, title);
+        setExcelExportModalData(null);
+        return;
+      }
+
+      setIsExcelExportLoading(true);
+      setExcelExportProgressText("Excel görselli aktarımı başlatılıyor...");
+
+      const exportCols = [cols[0] || "SIRA NO", "TEÇHİZAT FOTOĞRAFI", ...cols.slice(1)];
+
+      let html = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta charset="utf-8">
+          <!--[if gte mso 9]>
+          <xml>
+            <x:ExcelWorkbook>
+              <x:ExcelWorksheets>
+                <x:ExcelWorksheet>
+                  <x:Name>Görselli Teçhizat Listesi</x:Name>
+                  <x:WorksheetOptions>
+                    <x:DisplayGridlines/>
+                  </x:WorksheetOptions>
+                </x:ExcelWorksheet>
+              </x:ExcelWorksheets>
+            </x:ExcelWorkbook>
+          </xml>
+          <![endif]-->
+          <style>
+            table { border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif; }
+            .title-row { background-color: #0b3d1d; color: #ffffff; font-weight: bold; font-size: 15px; text-align: center; height: 45px; }
+            th { background-color: #1e293b; color: #ffffff; font-weight: bold; border: 1px solid #475569; padding: 12px; text-align: center; font-size: 11px; }
+            td { border: 1px solid #cbd5e1; padding: 8px 10px; font-size: 10px; color: #0f172a; white-space: pre-wrap; vertical-align: middle; }
+            br { mso-data-placement: same-cell; }
+            .zebra { background-color: #f8fafc; }
+            .num { mso-number-format: "\\@"; text-align: center; }
+            .img-td { text-align: center; vertical-align: middle; padding: 6px; width: 115px; height: 115px; background-color: #ffffff; }
+          </style>
+        </head>
+        <body>
+          <table>
+            <thead>
+              <tr>
+                <th colspan="${exportCols.length}" class="title-row" style="background-color: #0b3d1d; color: white; font-weight: bold; font-size: 15px; text-align: center; height: 45px;">
+                  ${title.toUpperCase()} (GÖRSELLİ PORTAL LİSTESİ)
+                </th>
+              </tr>
+              <tr>
+                ${exportCols.map(h => `<th style="background-color: #1e293b; color: #ffffff; font-weight: bold; border: 1px solid #475569; padding: 10px; text-align: center;">${h}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      const isAll = type === 'all';
+      for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+        const row = rows[rIdx];
+        const isZebra = rIdx % 2 === 1;
+
+        setExcelExportProgressText(`Drive fotoğrafları çekiliyor ve ekleniyor (${rIdx + 1} / ${rows.length})...`);
+
+        const targetTechType = isAll ? getRealTechType(row[0]) : type;
+        const targetRow = isAll ? row.slice(1) : row;
+        const imageKey = targetTechType + "_" + (targetRow[1] || "").replace(/\s+/g, '_') + "_" + (targetRow[3] || "").replace(/\s+/g, '_');
+        const imgUrl = techizatImages[imageKey];
+
+        let imageBase64Html = `<td class="img-td" style="color: #94a3b8; font-style: italic; font-size: 9px; text-align: center;">Görsel Yok</td>`;
+
+        if (imgUrl) {
+          try {
+            const b64Data = await fetchDriveImageAsBase64(imgUrl);
+            if (b64Data) {
+              imageBase64Html = `<td class="img-td" style="width: 115px; height: 115px; text-align: center; vertical-align: middle;"><img src="${b64Data}" width="95" height="95" style="object-fit: contain; max-width: 95px; max-height: 95px; border-radius: 6px;" alt="Foto" /></td>`;
+            }
+          } catch (e) {
+            console.warn("Image conversion failed for row", rIdx, e);
+          }
+        }
+
+        html += `<tr class="${isZebra ? 'zebra' : ''}" style="height: 115px;">`;
+        html += `<td class="num" style="vertical-align: middle; text-align: center;">${row[0] || ""}</td>`;
+        html += imageBase64Html;
+
+        for (let cIdx = 1; cIdx < row.length; cIdx++) {
+          const val = row[cIdx] || "";
+          let tdClass = "";
+          let style = "vertical-align: middle;";
+          const colName = cols[cIdx]?.toUpperCase() || "";
+
+          if (colName.includes("SIRA") || colName.includes("NO") || colName.includes("P/N") || colName.includes("S/N") || colName.includes("MİKTAR") || colName.includes("TELEFON") || colName.includes("TC")) {
+            tdClass = "num";
+          }
+
+          if (colName.includes("DURUM")) {
+            if (val.toUpperCase().includes("FAAL") && !val.toUpperCase().includes("GAYRİ")) {
+              style += " background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
+            } else if (val.toUpperCase().includes("GAYRİ") || val.toUpperCase().includes("ARIZALI") || val.toUpperCase().includes("FAAL DEĞİL")) {
+              style += " background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+            }
+          }
+
+          html += `<td class="${tdClass}" style="${style}">${val}</td>`;
+        }
+
+        html += `</tr>`;
+      }
+
+      html += `
+            </tbody>
+          </table>
+        </body>
+        </html>
+      `;
+
+      const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `techizat_takip_${type}_gorselli.xls`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setIsExcelExportLoading(false);
+      setExcelExportModalData(null);
+      showNotification("Teçhizat listesi Drive fotoğraflarıyla birlikte Excel olarak başarıyla indirildi.");
+    } catch (err) {
+      setIsExcelExportLoading(false);
+      alert("Görselli Excel indirme hatası: " + err);
     }
   };
 
@@ -3789,6 +3945,12 @@ export default function App() {
   };
 
   const handleBack = () => {
+    if (modalType === 'denetleme') {
+      setModalType('category');
+      setSelectedCategory('FORM KAYITLARI');
+      setModalTitle(getCategoryTitle('FORM KAYITLARI'));
+      return;
+    }
     if (modalType === 'techizat_matrix') {
       setModalType('category');
       if (activeTechizatType === 'kara_araclari') {
@@ -5758,7 +5920,7 @@ export default function App() {
             {/* Action Buttons */}
             <div className="flex items-center gap-2 pointer-events-auto">
               {/* Show Veri Güncelle button on Form/Teçhizat views */}
-              {(selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedCategory === 'KARA_ARACLARI_MENU' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
+              {modalType !== 'denetleme' && (selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedCategory === 'KARA_ARACLARI_MENU' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
                 <button
                   onClick={() => {
                     setPasswordInput('');
@@ -6161,26 +6323,28 @@ export default function App() {
                       </div>
                     </a>
 
-                    <a
-                      href="https://bulut.ogm.gov.tr/DENETLEME"
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      onClick={() => {
+                        setModalUrl('https://ogmhavacilik.github.io/surecyonet/');
+                        setModalType('iframe');
+                        setModalTitle('8. DENETLEME RAPOR VE EKLER');
+                        setIframeLoading(true);
+                      }}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm relative">
                         <Folder className="w-8 h-8 text-[#0b3d1d]" />
-                        <span className="absolute -top-1 -right-1 bg-emerald-800 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">YENİ SEKME ➜</span>
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">8. DENETLEME RAPOR VE EKLER</span>
                       <span className="text-[9px] text-[#0b3d1d]/60 uppercase tracking-wider font-semibold font-mono mb-2">Denetleme Rapor ve Ekleri</span>
-                      <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2 py-0.5 rounded-full">bulut.ogm.gov.tr/DENETLEME ➜</span>
+                      <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">GÖRÜNTÜLE ➜</span>
                       
                       <div className="mt-auto pt-4 border-t border-gray-100 w-full text-center">
                         <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest font-mono">
                           GÜNCELLEME TARİHİ: -
                         </span>
                       </div>
-                    </a>
+                    </button>
                   </>
                 )}
 
@@ -7318,8 +7482,8 @@ export default function App() {
             }
 
             return (
-              <div className="absolute inset-0 flex flex-col bg-slate-50 p-4 md:p-6 lg:p-8 animate-fade-in overflow-y-auto">
-                <div className="max-w-7xl mx-auto w-full flex flex-col h-full">
+              <div className="absolute inset-0 flex flex-col bg-slate-50 p-2 sm:p-4 md:p-6 animate-fade-in overflow-y-auto">
+                <div className="w-full max-w-[1920px] mx-auto flex flex-col h-full">
                   
                   {/* Header Titles */}
                   <div className="text-center mb-6 select-none print:hidden">
@@ -7557,7 +7721,7 @@ export default function App() {
                     </div>
 
                     {/* Table Grid Scroll Wrapper */}
-                    <div className="flex-1 overflow-auto max-h-[60vh] print:max-h-none print:overflow-visible">
+                    <div className="flex-1 overflow-auto max-h-[75vh] print:max-h-none print:overflow-visible">
                       <table className="w-full border-collapse text-left min-w-[1200px]">
                         <thead>
                           <tr className="bg-slate-900 border-b border-slate-800 print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10">
@@ -7617,14 +7781,35 @@ export default function App() {
                             </tr>
                           ) : (
                              processedRows.map((row, rIdx) => {
+                               const isAll = activeTechizatType === 'all';
+                               const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
+                               const targetRow = isAll ? row.slice(1) : row;
+                               const rowImageKey = targetTechType + "_" + (targetRow[1] || "").replace(/\s+/g, '_') + "_" + (targetRow[3] || "").replace(/\s+/g, '_');
+                               const rowImageUrl = techizatImages[rowImageKey];
+
                                return (
                                  <tr 
                                    key={rIdx} 
+                                   onMouseEnter={(e) => {
+                                     if (rowImageUrl) {
+                                       setHoveredRowImage({
+                                         url: rowImageUrl,
+                                         title: targetRow[1] || "Teçhizat",
+                                         subtitle: `${targetRow[2] || ""} ${targetRow[3] ? "• " + targetRow[3] : ""}`,
+                                         x: e.clientX,
+                                         y: e.clientY
+                                       });
+                                     }
+                                   }}
+                                   onMouseMove={(e) => {
+                                     if (rowImageUrl) {
+                                       setHoveredRowImage(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
+                                     }
+                                   }}
+                                   onMouseLeave={() => setHoveredRowImage(null)}
                                    onClick={() => {
+                                      setHoveredRowImage(null);
                                       setMobileEditTab('form');
-                                      const isAll = activeTechizatType === 'all';
-                                      const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
-                                      const targetRow = isAll ? row.slice(1) : row;
 
                                       let resolvedRow = targetRow;
                                       if (isAll) {
@@ -7670,8 +7855,8 @@ export default function App() {
                                       setShowImageSavePasswordPrompt(false);
                                       setTempImageAction(null);
                                     }}
-                                   className="hover:bg-emerald-50/30 transition-colors duration-150 odd:bg-white even:bg-slate-50/50 cursor-pointer"
-                                   title="Düzenlemek ve görsel eklemek için Tıklayın"
+                                   className="hover:bg-emerald-50/40 transition-colors duration-150 odd:bg-white even:bg-slate-50/50 cursor-pointer"
+                                   title="Düzenlemek ve görsel eklemek için Tıklayın (Görseli kare içinde görmek için imleci üzerinde tutun)"
                                  >
 
                                    {row.map((cell, cIdx) => {
@@ -7742,7 +7927,7 @@ export default function App() {
                                          >
                                            <div 
                                              title={cell ? `${label}: ${cell} (Düzenlemek ve görsel eklemek için Tıklayın)` : "Boş Veri"}
-                                             className={`${cell && cell.includes('\n') ? 'whitespace-pre-line leading-relaxed min-w-[100px]' : 'truncate'} px-2 py-1 rounded-xl transition-all text-xs text-center select-text hover:bg-emerald-100/50 hover:text-emerald-950 ${
+                                             className={`${cell && cell.includes('\n') ? 'whitespace-pre-line leading-relaxed min-w-[100px]' : 'truncate'} px-2 py-1 rounded-xl transition-all text-xs text-center select-text hover:bg-emerald-100/50 hover:text-emerald-950 flex items-center justify-center gap-1 ${
                                                isActiveMatch 
                                                  ? 'bg-blue-600 text-white font-black scale-105 shadow-md ring-2 ring-blue-400 animate-pulse'
                                                  : isMatch
@@ -7750,7 +7935,7 @@ export default function App() {
                                                    : cellStyleClass
                                              }`}
                                            >
-                                             {cell || "-"}
+                                             <span className="truncate">{cell || "-"}</span>
                                            </div>
                                          </td>
                                        </React.Fragment>
@@ -9362,29 +9547,6 @@ export default function App() {
           {/* Iframe Penceresi Kendisi */}
           {modalType === 'iframe' && modalUrl && (
             <div className="w-full h-full relative flex flex-col items-center justify-center bg-slate-50">
-              {/* If it's a Netlify or external site, we show a highly visible helpful banner at the top */}
-              <div className="absolute top-20 max-w-lg w-11/12 mx-auto z-[120] bg-white/95 border-2 border-emerald-800/10 backdrop-blur-md shadow-2xl p-5 rounded-[2rem] flex flex-col gap-3 select-none text-slate-800 pointer-events-auto text-center">
-                <div className="flex items-center justify-center gap-2 text-emerald-800">
-                  <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping" />
-                  <span className="text-[10px] font-black uppercase tracking-widest">GÜVENLİ ENTEGRASYON SİSTEMİ</span>
-                </div>
-                <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-tight">
-                  {modalTitle} Portalı Hazır
-                </h4>
-                <p className="text-[10px] text-slate-500 leading-relaxed font-sans px-2">
-                  Dış platform güvenlik politikaları (Netlify/GitHub) nedeniyle bu pencere içinde yüklenemeyebilir. Doğrudan ve tam erişim için lütfen aşağıdaki butona tıklayın:
-                </p>
-                <div className="flex gap-2 justify-center mt-1">
-                  <button
-                    onClick={() => window.open(modalUrl, '_blank')}
-                    className="px-5 py-2.5 bg-emerald-800 hover:bg-emerald-900 active:scale-95 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-md cursor-pointer flex items-center justify-center gap-1.5"
-                  >
-                    <ExternalLink className="w-4 h-4 text-emerald-100" />
-                    <span>YENİ SEKMEDE DOĞRUDAN AÇ</span>
-                  </button>
-                </div>
-              </div>
-
               <iframe
                 id="system-iframe"
                 src={modalUrl}
@@ -9394,6 +9556,20 @@ export default function App() {
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
                 onLoad={() => setIframeLoading(false)}
+              ></iframe>
+            </div>
+          )}
+
+          {/* DENETLEME RAPOR VE EKLERİ İÇ BÜNYE MODÜLÜ */}
+          {modalType === 'denetleme' && (
+            <div className="w-full h-full relative flex flex-col bg-slate-900 animate-fade-in pt-16">
+              <iframe
+                id="denetleme-iframe"
+                src="https://ogmhavacilik.github.io/surecyonet/"
+                className="w-full h-full border-none bg-white"
+                title="8. DENETLEME RAPOR VE EKLER"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
               ></iframe>
             </div>
           )}
@@ -12139,6 +12315,129 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* EXCEL EXPORT CHOICE MODAL ("Görselli olarak indirilsin mi?") */}
+      <AnimatePresence>
+        {excelExportModalData && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[3000] p-4 animate-fade-in select-none">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white border-2 border-emerald-600 rounded-[2.5rem] shadow-2xl max-w-lg w-full p-6 md:p-8 relative overflow-hidden text-slate-800"
+            >
+              {/* Decorative top bar */}
+              <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-emerald-700 via-emerald-500 to-teal-600"></div>
+
+              {/* Close button */}
+              <button 
+                disabled={isExcelExportLoading}
+                onClick={() => setExcelExportModalData(null)}
+                className="absolute top-5 right-5 p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {/* Modal Header */}
+              <div className="flex items-center gap-4 mb-5">
+                <div className="w-14 h-14 rounded-2xl bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-800 shrink-0 shadow-sm">
+                  <FileSpreadsheet className="w-8 h-8" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+                    EXCEL AKTARIM SİSTEMİ
+                  </span>
+                  <h3 className="text-xl font-black text-slate-900 mt-1 leading-tight">
+                    Görselli Olarak İndirilsin mi?
+                  </h3>
+                </div>
+              </div>
+
+              {/* Description */}
+              <p className="text-xs text-slate-600 leading-relaxed mb-6 bg-slate-50 border border-slate-200/80 p-4 rounded-2xl">
+                Teçhizat listesini Google Drive üzerindeki <strong>teçhizat fotoğraflarıyla birlikte</strong> Excel dosyası olarak indirebilirsiniz. 
+                <br/><br/>
+                <span className="text-emerald-800 font-bold">🖼️ Görselli Seçenek:</span> Drive'daki tüm ürün fotoğrafları indirilip Excel hücrelerinin içine yerleştirilir.
+              </p>
+
+              {/* Loading Progress State */}
+              {isExcelExportLoading ? (
+                <div className="bg-emerald-950 text-white p-6 rounded-2xl border border-emerald-800 flex flex-col items-center justify-center gap-3 text-center my-2 shadow-inner">
+                  <div className="w-10 h-10 border-4 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                  <p className="text-xs font-black text-emerald-300 uppercase tracking-wide font-mono animate-pulse">
+                    {excelExportProgressText || "Drive fotoğrafları çekiliyor..."}
+                  </p>
+                  <p className="text-[10px] text-emerald-400/80">Lütfen indirme tamamlanana kadar sayfayı kapatmayın.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {/* Görselli İndir Button */}
+                  <button
+                    type="button"
+                    onClick={() => downloadTechizatExcelWithImages(true)}
+                    className="w-full py-4 px-5 bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-600 hover:to-emerald-500 active:scale-[0.98] text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-900/20 border border-emerald-500 flex items-center justify-center gap-3 cursor-pointer transition-all group"
+                  >
+                    <span className="text-xl group-hover:scale-125 transition-transform">🖼️</span>
+                    <div className="text-left">
+                      <div className="text-sm font-extrabold uppercase tracking-wide">GÖRSELLİ EXCEL İNDİR</div>
+                      <div className="text-[10px] text-emerald-200 font-normal">Fotoğraflar Excel sütununa otomatik eklenir</div>
+                    </div>
+                  </button>
+
+                  {/* Sadece Metin İndir Button */}
+                  <button
+                    type="button"
+                    onClick={() => downloadTechizatExcelWithImages(false)}
+                    className="w-full py-3.5 px-5 bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-slate-200 font-extrabold text-xs rounded-2xl border border-slate-700 flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  >
+                    <span>📄</span>
+                    <span>SADECE METİN (GÖRSELSEZ METİN EXCEL) İNDİR</span>
+                  </button>
+
+                  {/* İptal Button */}
+                  <button
+                    type="button"
+                    onClick={() => setExcelExportModalData(null)}
+                    className="w-full py-2.5 px-4 text-slate-500 hover:text-slate-800 font-bold text-xs rounded-xl cursor-pointer transition-all text-center mt-1"
+                  >
+                    Vazgeç / İptal
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* HOVER PRODUCT IMAGE PREVIEW SQUARE BOX */}
+      {hoveredRowImage && (
+        <div 
+          className="fixed z-[9999] pointer-events-none transform -translate-y-1/2 transition-all duration-75 animate-fade-in"
+          style={{
+            top: Math.min(window.innerHeight - 250, Math.max(30, hoveredRowImage.y)),
+            left: hoveredRowImage.x + 280 > window.innerWidth ? Math.max(10, hoveredRowImage.x - 260) : hoveredRowImage.x + 20
+          }}
+        >
+          <div className="bg-slate-900/95 text-white p-3 rounded-2xl border-2 border-emerald-500 shadow-2xl backdrop-blur-md flex flex-col items-center gap-2 max-w-[240px]">
+            <div className="w-48 h-48 sm:w-52 sm:h-52 rounded-xl overflow-hidden bg-slate-950 border border-slate-700/80 flex items-center justify-center p-1 relative group">
+              <CachedDriveImage
+                src={hoveredRowImage.url}
+                alt={hoveredRowImage.title}
+                className="w-full h-full object-contain rounded-lg"
+              />
+              <div className="absolute top-2 right-2 bg-emerald-600/90 text-white text-[9px] font-black font-mono px-2 py-0.5 rounded-full shadow">
+                🖼️ GÖRSEL ÖNİZLEME
+              </div>
+            </div>
+            <div className="text-center w-full px-1">
+              <p className="text-xs font-black text-amber-300 truncate">{hoveredRowImage.title}</p>
+              {hoveredRowImage.subtitle && (
+                <p className="text-[10px] text-slate-300 font-mono truncate">{hoveredRowImage.subtitle}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

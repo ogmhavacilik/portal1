@@ -50,6 +50,77 @@ const getMimeTypeFromName = (name: string): string => {
 // Global memory cache to prevent duplicate loads during session
 const memoryCache = new Map<string, string>();
 
+export const fetchDriveImageAsBase64 = async (src: string | null | undefined): Promise<string | null> => {
+  if (!src) return null;
+  if (src.startsWith('data:')) return src;
+
+  const fileId = getDriveFileId(src);
+  if (fileId) {
+    const cacheKey = `cached_drive_img_${fileId}`;
+    const cachedData = memoryCache.get(fileId) || sessionStorage.getItem(cacheKey);
+    if (cachedData) return cachedData;
+
+    try {
+      const fetchUrl = `${GOOGLE_SCRIPT_URL}?action=getPdfBase64&fileId=${fileId}`;
+      const res = await fetch(fetchUrl);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.base64) {
+          const mimeType = getMimeTypeFromName(data.name || "");
+          const dataUrl = `data:${mimeType};base64,${data.base64}`;
+          memoryCache.set(fileId, dataUrl);
+          try {
+            sessionStorage.setItem(cacheKey, dataUrl);
+          } catch (e) {}
+          return dataUrl;
+        }
+      }
+    } catch (e) {
+      console.warn("fetchDriveImageAsBase64 failed via Apps Script:", e);
+    }
+  }
+
+  // Fallback: load image via DOM Image & Canvas to convert to base64
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const embedUrl = getEmbeddableDriveUrl(src) || src;
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        const maxDim = 600;
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+          resolve(dataUrl);
+          return;
+        }
+      } catch (e) {
+        console.warn("Canvas export failed:", e);
+      }
+      resolve(embedUrl);
+    };
+    img.onerror = () => {
+      resolve(null);
+    };
+    img.src = embedUrl;
+  });
+};
+
 interface CachedDriveImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   src: string | null | undefined;
   fallbackToDirect?: boolean;
