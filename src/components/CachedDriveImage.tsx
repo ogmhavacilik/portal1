@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { GOOGLE_SCRIPT_URL } from '../App';
 
-const getEmbeddableDriveUrl = (url: string | null | undefined): string | null => {
+export const getEmbeddableDriveUrl = (url: string | null | undefined): string | null => {
   if (!url) return null;
   if (url.startsWith('data:') || url.startsWith('blob:')) return url;
 

@@ -9,7 +9,55 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo, ChangeEvent } from 'react';
-import { removeBackground } from '@imgly/background-removal';
+import { removeBackground, preload } from '@imgly/background-removal';
+
+// Helper function to resize oversized camera photos down to max 640px before AI processing
+const prepareOptimizedImageForAI = async (file: File, maxDimension: number = 640): Promise<Blob | File> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+      if (width <= maxDimension && height <= maxDimension) {
+        resolve(file);
+        return;
+      }
+      if (width > height) {
+        height = Math.round((height * maxDimension) / width);
+        width = maxDimension;
+      } else {
+        width = Math.round((width * maxDimension) / height);
+        height = maxDimension;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'medium';
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          canvas.width = 0;
+          canvas.height = 0;
+          if (blob) {
+            resolve(new File([blob], file.name || 'optimized.jpg', { type: 'image/jpeg' }));
+          } else {
+            resolve(file);
+          }
+        }, 'image/jpeg', 0.82);
+      } else {
+        resolve(file);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file);
+    };
+    img.src = objectUrl;
+  });
+};
 import {
   Plane,
   Users,
@@ -667,6 +715,13 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   useEffect(() => {
+    // Preload lightweight mobile AI model for ultra fast background removal
+    try {
+      preload({ model: 'isnet_fp16' }).catch(() => {});
+    } catch (e) {
+      // Ignore
+    }
+
     const handleResize = () => {
       setIsMobile(window.innerWidth < 768);
     };
@@ -710,7 +765,7 @@ export default function App() {
   const [mobileEditTab, setMobileEditTab] = useState<'form' | 'image'>('form');
   const [activeTechizatRowEdit, setActiveTechizatRowEdit] = useState<{
     rIdx: number;
-    techType: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all';
+    techType: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all';
     row: string[];
   } | null>(null);
   const [techizatImages, setTechizatImages] = useState<Record<string, string>>(() => {
@@ -746,6 +801,7 @@ export default function App() {
 
   // Background removal and camera stream states
   const [isProcessingRemoveBg, setIsProcessingRemoveBg] = useState<boolean>(false);
+  const [bgRemovalProgressPercent, setBgRemovalProgressPercent] = useState<number>(0);
   const [bgRemovalStatusText, setBgRemovalStatusText] = useState<string>('');
   const [isWebcamOpen, setIsWebcamOpen] = useState<boolean>(false);
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
@@ -753,21 +809,47 @@ export default function App() {
 
   // Process background removal via client-side IMG.LY AI model (In-Memory Processing)
   const handleProcessImglyBackgroundRemoval = async (file: File) => {
+    let currentP = 15;
+    let bgProgressTimer: any = null;
     try {
       setIsProcessingRemoveBg(true);
-      setBgRemovalStatusText("Arka plan temizleniyor, lütfen bekleyin...");
+      setBgRemovalProgressPercent(15);
+      setBgRemovalStatusText("Görsel işleniyor (%15)...");
+
+      bgProgressTimer = setInterval(() => {
+        if (currentP < 95) {
+          currentP = Math.min(95, currentP + (currentP < 50 ? 6 : 3));
+          setBgRemovalProgressPercent(currentP);
+          setBgRemovalStatusText(`Arka Plan Analizi: %${currentP}`);
+        }
+      }, 100);
       
+      // Dev fotoğrafı AI segmentasyonu için optimum boyuta (maks. 640px) getir
+      const processedFile = await prepareOptimizedImageForAI(file, 640);
+      currentP = Math.max(currentP, 35);
+      setBgRemovalProgressPercent(currentP);
+      setBgRemovalStatusText(`Model hazırlanıyor (%${currentP})...`);
+
       const removeFn = (window as any).imglyRemoveBackground || removeBackground;
-      const blob = await removeFn(file, {
-        model: 'isnet_fp16', // Hızlı ve kaliteli model seçeneği
+      const blob = await removeFn(processedFile, {
+        model: 'isnet_fp16', // Hızlı ve yüksek kaliteli AI modeli
         progress: (key: string, current: number, total: number) => {
           if (total > 0) {
-            const percent = Math.round((current / total) * 100);
-            setBgRemovalStatusText(`Model yükleniyor: %${percent}`);
+            const calculatedPercent = Math.min(95, Math.max(35, Math.round(35 + (current / total) * 60)));
+            if (calculatedPercent > currentP) {
+              currentP = calculatedPercent;
+              setBgRemovalProgressPercent(currentP);
+              setBgRemovalStatusText(`Arka Plan Analizi: %${currentP}`);
+            }
           }
         }
       });
       
+      if (bgProgressTimer) clearInterval(bgProgressTimer);
+
+      setBgRemovalProgressPercent(100);
+      setBgRemovalStatusText("İşlem tamamlandı! (%100)");
+
       const localUrl = URL.createObjectURL(blob);
       setPendingImagePreview(localUrl);
       
@@ -784,11 +866,13 @@ export default function App() {
       const transparentFile = new File([blob], `cleaned_${file.name || "captured.png"}`, { type: "image/png" });
       setPendingImageFile(transparentFile);
       
-      setBgRemovalStatusText("İşlem tamamlandı!");
       showNotification("Arka plan başarıyla temizlendi!");
+      return blob;
     } catch (err: any) {
+      if (bgProgressTimer) clearInterval(bgProgressTimer);
       console.error("Arka plan temizleme hatası:", err);
       setBgRemovalStatusText("Bir hata oluştu, lütfen tekrar deneyin.");
+      setBgRemovalProgressPercent(0);
       showNotification(`Arka plan temizleme hatası: ${err.message || err}`);
     } finally {
       setIsProcessingRemoveBg(false);
@@ -1038,6 +1122,7 @@ export default function App() {
     if (techType === 'at802') return 'AT-802F';
     if (techType === 't70') return 'T-70 YER DESTEK';
     if (techType === 't70_bumbi_backet') return 'T-70 BUMBİ BACKET';
+    if (techType === 't70_helitak') return 'T-70 HELİTAK';
     if (techType === 'c650') return 'C-650';
     if (techType === 'b360') return 'B-360';
     if (techType === 'hangar') return 'HANGAR YER DESTEK';
@@ -1816,6 +1901,26 @@ export default function App() {
     return [];
   });
 
+  const [techizatT70HelitakColumns, setTechizatT70HelitakColumns] = useState<string[]>(() => {
+    const saved = localStorage.getItem('excel_techizat_t70_helitak_cols');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.map((col: string) => {
+          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
+          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
+          return col;
+        });
+      } catch (e) { console.error(e); }
+    }
+    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatT70HelitakData, setTechizatT70HelitakData] = useState<string[][]>(() => {
+    const saved = localStorage.getItem('excel_techizat_t70_helitak_data');
+    if (saved) return JSON.parse(saved);
+    return [];
+  });
+
   const [techizatB360Columns, setTechizatB360Columns] = useState<string[]>(() => {
     const saved = localStorage.getItem('excel_techizat_b360_cols');
     if (saved) {
@@ -1967,13 +2072,92 @@ export default function App() {
   }, [gePlaka, techizatKaraAraclariData]);
 
   // Helper method to open Teçhizat Takip Matrix
-  const openTechizatMatrix = (type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all', title: string) => {
+  const openTechizatMatrix = (type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all', title: string) => {
     setActiveTechizatType(type);
     setModalType('techizat_matrix');
     setModalTitle(title);
     setModalOpen(true);
     setTechizatSearchQuery('');
     setActiveTechizatMatchIdx(0);
+  };
+
+  /**
+   * Akıllı Çoklu Lokasyon ve Miktar Birleştirici:
+   * Yüklenen Excel veya Canlı E-Tabloda aynı ürünün birden fazla lokasyonu/miktarı
+   * hizada alt alta satırlar şeklinde girildiğinde (ürün adı boş, tire veya aynı isimde),
+   * bunu yeni ürün yapmak yerine mevcut ürünün 'BULUNDUĞU YER' ve 'MİKTAR / KAPASİTE'
+   * alanlarına alt alta (\n ile) birleştirir.
+   */
+  const groupMultiLocationRows = (
+    rawRows: string[][],
+    nameColIdx: number = 1,
+    locColIdx: number = 5,
+    miktarColIdx: number = 4,
+    siraColIdx: number = 0
+  ): string[][] => {
+    const grouped: string[][] = [];
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const row = [...rawRows[i]];
+      const rawSira = (row[siraColIdx] || "").trim();
+      const rawName = (row[nameColIdx] || "").trim();
+      const rawLoc = locColIdx >= 0 ? (row[locColIdx] || "").trim() : "";
+      const rawMiktar = miktarColIdx >= 0 ? (row[miktarColIdx] || "").trim() : "";
+
+      const lastRow = grouped.length > 0 ? grouped[grouped.length - 1] : null;
+      const lastName = lastRow ? (lastRow[nameColIdx] || "").trim() : "";
+      const lastSira = lastRow ? (lastRow[siraColIdx] || "").trim() : "";
+      const lastLoc = lastRow && locColIdx >= 0 ? (lastRow[locColIdx] || "").trim() : "";
+
+      const isNameEmptyOrDash = !rawName || rawName === "-" || rawName === "--";
+      const isSiraEmptyOrDash = !rawSira || rawSira === "-" || rawSira === "--";
+      const isSameName = rawName.toUpperCase() === lastName.toUpperCase() && lastName !== "";
+      const isSameSira = rawSira === lastSira && lastSira !== "";
+
+      // Check if this row is a continuation/sub-location row of the previous product
+      const isSubLocation =
+        !!lastRow &&
+        (isNameEmptyOrDash || isSameName) &&
+        (isSiraEmptyOrDash || isSameSira || isNameEmptyOrDash) &&
+        (rawLoc !== "" || rawMiktar !== "") &&
+        (rawLoc === "" || lastLoc === "" || !lastLoc.split('\n').includes(rawLoc) || isNameEmptyOrDash);
+
+      if (isSubLocation && lastRow) {
+        // Append location
+        if (locColIdx >= 0 && rawLoc) {
+          lastRow[locColIdx] = lastRow[locColIdx]
+            ? `${lastRow[locColIdx]}\n${rawLoc}`
+            : rawLoc;
+        }
+        // Append miktar/kapasite
+        if (miktarColIdx >= 0 && rawMiktar) {
+          lastRow[miktarColIdx] = lastRow[miktarColIdx]
+            ? `${lastRow[miktarColIdx]}\n${rawMiktar}`
+            : rawMiktar;
+        }
+        // Fill other missing fields if main row has empty and sub-row provides it
+        for (let c = 0; c < row.length; c++) {
+          if (c !== siraColIdx && c !== nameColIdx && c !== locColIdx && c !== miktarColIdx) {
+            const cellVal = (row[c] || "").trim();
+            if (cellVal && cellVal !== "-" && (!lastRow[c] || lastRow[c] === "-")) {
+              lastRow[c] = cellVal;
+            }
+          }
+        }
+      } else {
+        // Independent new product row
+        grouped.push(row);
+      }
+    }
+
+    // Ensure consecutive SIRA NO
+    return grouped.map((row, idx) => {
+      const r = [...row];
+      if (siraColIdx >= 0) {
+        r[siraColIdx] = String(idx + 1);
+      }
+      return r;
+    });
   };
 
   // Excel exporter for Teçhizat Takip
@@ -2001,7 +2185,8 @@ export default function App() {
             table { border-collapse: collapse; font-family: 'Segoe UI', Arial, sans-serif; }
             .title-row { background-color: #0b3d1d; color: #ffffff; font-weight: bold; font-size: 14px; text-align: center; height: 40px; }
             th { background-color: #1e293b; color: #ffffff; font-weight: bold; border: 1px solid #475569; padding: 10px; text-align: center; font-size: 11px; }
-            td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 10px; color: #1e293b; }
+            td { border: 1px solid #e2e8f0; padding: 8px 10px; font-size: 10px; color: #1e293b; white-space: pre-wrap; vertical-align: middle; }
+            br { mso-data-placement: same-cell; }
             .zebra { background-color: #f8fafc; }
             .num { mso-number-format: "\\@"; text-align: center; } /* formats string values safely */
             .badge-faal { background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center; }
@@ -2026,28 +2211,74 @@ export default function App() {
       
       rows.forEach((row, rIdx) => {
         const isZebra = rIdx % 2 === 1;
-        html += `<tr class="${isZebra ? 'zebra' : ''}">`;
-        row.forEach((cell, cIdx) => {
-          const val = cell || "";
-          let tdClass = "";
-          let style = "";
-          
-          const colName = cols[cIdx]?.toUpperCase() || "";
-          if (colName.includes("SIRA") || colName.includes("NO") || colName.includes("P/N") || colName.includes("S/N") || colName.includes("MİKTAR") || colName.includes("TELEFON") || colName.includes("TC")) {
-            tdClass = "num";
-          }
-          
-          if (colName.includes("DURUM")) {
-            if (val.toUpperCase().includes("FAAL") && !val.toUpperCase().includes("GAYRİ")) {
-              style = "background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
-            } else if (val.toUpperCase().includes("GAYRİ") || val.toUpperCase().includes("ARIZALI") || val.toUpperCase().includes("FAAL DEĞİL")) {
-              style = "background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+
+        // Check if any cell has multiple lines (e.g. multi-location / multi-quantity)
+        const splittedCells = row.map(cell => (cell || "").split('\n'));
+        const maxSubLines = Math.max(1, ...splittedCells.map(sc => sc.length));
+
+        if (maxSubLines <= 1) {
+          // Standard single row
+          html += `<tr class="${isZebra ? 'zebra' : ''}">`;
+          row.forEach((cell, cIdx) => {
+            const val = cell || "";
+            let tdClass = "";
+            let style = "vertical-align: middle;";
+            
+            const colName = cols[cIdx]?.toUpperCase() || "";
+            if (colName.includes("SIRA") || colName.includes("NO") || colName.includes("P/N") || colName.includes("S/N") || colName.includes("MİKTAR") || colName.includes("TELEFON") || colName.includes("TC")) {
+              tdClass = "num";
             }
+            
+            if (colName.includes("DURUM")) {
+              if (val.toUpperCase().includes("FAAL") && !val.toUpperCase().includes("GAYRİ")) {
+                style += " background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
+              } else if (val.toUpperCase().includes("GAYRİ") || val.toUpperCase().includes("ARIZALI") || val.toUpperCase().includes("FAAL DEĞİL")) {
+                style += " background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+              }
+            }
+            
+            html += `<td class="${tdClass}" style="${style}">${val}</td>`;
+          });
+          html += '</tr>';
+        } else {
+          // Multi-location row -> Generate sub-rows with rowspan for single-value cells
+          for (let subIdx = 0; subIdx < maxSubLines; subIdx++) {
+            html += `<tr class="${isZebra ? 'zebra' : ''}">`;
+            row.forEach((cell, cIdx) => {
+              const lines = splittedCells[cIdx];
+              const isMultiLineCol = lines.length > 1;
+              const colName = cols[cIdx]?.toUpperCase() || "";
+
+              let tdClass = "";
+              let style = "vertical-align: middle;";
+              if (colName.includes("SIRA") || colName.includes("NO") || colName.includes("P/N") || colName.includes("S/N") || colName.includes("MİKTAR") || colName.includes("TELEFON") || colName.includes("TC")) {
+                tdClass = "num";
+              }
+
+              if (colName.includes("DURUM")) {
+                const val = cell || "";
+                if (val.toUpperCase().includes("FAAL") && !val.toUpperCase().includes("GAYRİ")) {
+                  style += " background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
+                } else if (val.toUpperCase().includes("GAYRİ") || val.toUpperCase().includes("ARIZALI") || val.toUpperCase().includes("FAAL DEĞİL")) {
+                  style += " background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+                }
+              }
+
+              if (subIdx === 0) {
+                if (isMultiLineCol) {
+                  html += `<td class="${tdClass}" style="${style}">${lines[0] || ""}</td>`;
+                } else {
+                  html += `<td rowspan="${maxSubLines}" class="${tdClass}" style="${style}">${cell || ""}</td>`;
+                }
+              } else {
+                if (isMultiLineCol) {
+                  html += `<td class="${tdClass}" style="${style}">${lines[subIdx] || ""}</td>`;
+                }
+              }
+            });
+            html += '</tr>';
           }
-          
-          html += `<td class="${tdClass}" style="${style}">${val.replace(/\n/g, '<br>')}</td>`;
-        });
-        html += '</tr>';
+        }
       });
       
       html += `
@@ -3650,6 +3881,14 @@ export default function App() {
       updated = u;
       setTechizatT70BumbiBacketData(u);
       localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(u));
+    } else if (techType === 't70_helitak') {
+      const u = [...techizatT70HelitakData];
+      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
+      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
+      u[targetIdx] = editedRow;
+      updated = u;
+      setTechizatT70HelitakData(u);
+      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(u));
     } else if (techType === 'b360') {
       const u = [...techizatB360Data];
       const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
@@ -3804,6 +4043,7 @@ export default function App() {
     if (techType === 'at802') return 'AT-802F';
     if (techType === 't70') return 'T-70 YER DESTEK';
     if (techType === 't70_bumbi_backet') return 'T-70 BUMBİ BACKET';
+    if (techType === 't70_helitak') return 'T-70 HELİTAK';
     if (techType === 'c650') return 'C-650';
     if (techType === 'b360') return 'B-360';
     if (techType === 'hangar') return 'HANGAR YER DESTEK';
@@ -3816,6 +4056,7 @@ export default function App() {
     if (unitLabel === 'AT-802F') return 'at802';
     if (unitLabel === 'T-70 YER DESTEK') return 't70';
     if (unitLabel === 'T-70 BUMBİ BACKET') return 't70_bumbi_backet';
+    if (unitLabel === 'T-70 HELİTAK') return 't70_helitak';
     if (unitLabel === 'C-650') return 'c650';
     if (unitLabel === 'B-360') return 'b360';
     if (unitLabel === 'HANGAR YER DESTEK') return 'hangar';
@@ -3953,34 +4194,36 @@ export default function App() {
           }
         });
         
-        setTechizatBell429Data(bell429Rows);
-        localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(bell429Rows));
+        const groupedBell429 = groupMultiLocationRows(bell429Rows, 1, 5, 4, 0);
+        setTechizatBell429Data(groupedBell429);
+        localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(groupedBell429));
 
-        setTechizatAt802Data(at802Rows);
-        localStorage.setItem('excel_techizat_at802_data', JSON.stringify(at802Rows));
+        const groupedAt802 = groupMultiLocationRows(at802Rows, 1, 5, 4, 0);
+        setTechizatAt802Data(groupedAt802);
+        localStorage.setItem('excel_techizat_at802_data', JSON.stringify(groupedAt802));
 
-        setTechizatT70Data(t70Rows);
-        localStorage.setItem('excel_techizat_t70_data', JSON.stringify(t70Rows));
+        const groupedT70 = groupMultiLocationRows(t70Rows, 1, 5, 4, 0);
+        setTechizatT70Data(groupedT70);
+        localStorage.setItem('excel_techizat_t70_data', JSON.stringify(groupedT70));
 
-        setTechizatT70BumbiBacketData(t70BumbiRows);
-        localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(t70BumbiRows));
+        const groupedT70Bumbi = groupMultiLocationRows(t70BumbiRows, 1, 5, 4, 0);
+        setTechizatT70BumbiBacketData(groupedT70Bumbi);
+        localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(groupedT70Bumbi));
 
-        setTechizatC650Data(c650Rows);
-        localStorage.setItem('excel_techizat_c650_data', JSON.stringify(c650Rows));
+        const groupedC650 = groupMultiLocationRows(c650Rows, 1, 5, 4, 0);
+        setTechizatC650Data(groupedC650);
+        localStorage.setItem('excel_techizat_c650_data', JSON.stringify(groupedC650));
 
-        setTechizatB360Data(b360Rows);
-        localStorage.setItem('excel_techizat_b360_data', JSON.stringify(b360Rows));
+        const groupedB360 = groupMultiLocationRows(b360Rows, 1, 5, 4, 0);
+        setTechizatB360Data(groupedB360);
+        localStorage.setItem('excel_techizat_b360_data', JSON.stringify(groupedB360));
 
-        setTechizatHangarData(hangarRows);
-        localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(hangarRows));
+        const groupedHangar = groupMultiLocationRows(hangarRows, 1, 5, 4, 0);
+        setTechizatHangarData(groupedHangar);
+        localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(groupedHangar));
 
         let finalKaraAraclari = karaAraclariRows.map(row => convertOldKaraAraclariRowToNew(row));
-        // Reindex rows to make sure SIRA NO is clean and sequential
-        finalKaraAraclari = finalKaraAraclari.map((row, idx) => {
-          const r = [...row];
-          r[0] = String(idx + 1);
-          return r;
-        });
+        finalKaraAraclari = groupMultiLocationRows(finalKaraAraclari, 1, 3, -1, 0);
         setTechizatKaraAraclariData(finalKaraAraclari);
         localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(finalKaraAraclari));
 
@@ -4466,7 +4709,7 @@ export default function App() {
 
     // 1. Handle Teçhizat Takip Excel Upload
     if (isTechizatTarget) {
-      const techType = syncSelectedTarget.replace('techizat_', '') as 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari';
+      const techType = syncSelectedTarget.replace('techizat_', '') as 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari';
       if (!fileNameLower.endsWith('.xlsx') && !fileNameLower.endsWith('.xls') && !fileNameLower.endsWith('.csv')) {
         alert("Teçhizat Takip güncellemesi için lütfen Excel (.xlsx, .xls) veya CSV belgesi yükleyin.");
         return;
@@ -4503,7 +4746,7 @@ export default function App() {
           const finalHeaders = rawHeaders.map((h, hIdx) => h || `KOLON ${hIdx + 1}`);
 
           // Extract rows below the header
-          const parsedRows: string[][] = [];
+          const rawParsedRows: string[][] = [];
           for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
             const rawRow = rawRows[r] || [];
             const isRowEmpty = rawRow.every(cell => String(cell || '').trim() === '');
@@ -4513,24 +4756,42 @@ export default function App() {
               return rawRow[cIdx] !== undefined ? String(rawRow[cIdx]).trim() : "";
             });
 
-            // Ensure we have consecutive sequence number in the first column
-            if (trimmedRow[0] === "") {
-              trimmedRow[0] = String(parsedRows.length + 1);
-            }
-
-            parsedRows.push(trimmedRow);
+            rawParsedRows.push(trimmedRow);
           }
 
           // Fallback if no rows could be parsed
-          if (parsedRows.length === 0) {
+          if (rawParsedRows.length === 0) {
             for (let r = headerRowIdx + 1; r < Math.min(200, rawRows.length); r++) {
               const rawRow = rawRows[r] || [];
               const trimmedRow = finalHeaders.map((_, cIdx) => {
                 return rawRow[cIdx] !== undefined ? String(rawRow[cIdx]).trim() : "";
               });
-              parsedRows.push(trimmedRow);
+              rawParsedRows.push(trimmedRow);
             }
           }
+
+          // Smartly find column indices for grouping multi-location rows
+          const nameColIdx = finalHeaders.findIndex(h => {
+            const s = h.toUpperCase();
+            return s.includes("TEÇHİZAT") || s.includes("TECHİZAT") || s.includes("ARAÇ") || s.includes("TANIM") || s.includes("MALZEME") || s.includes("ÜRÜN");
+          });
+          const locColIdx = finalHeaders.findIndex(h => {
+            const s = h.toUpperCase();
+            return s.includes("BULUNDUĞU") || s.includes("LOKASYON") || s.includes("YER");
+          });
+          const miktarColIdx = finalHeaders.findIndex(h => {
+            const s = h.toUpperCase();
+            return s.includes("MİKTAR") || s.includes("KAPASİTE") || s.includes("ADET");
+          });
+          const siraColIdx = finalHeaders.findIndex(h => h.toUpperCase().includes("SIRA"));
+
+          const parsedRows = groupMultiLocationRows(
+            rawParsedRows,
+            nameColIdx >= 0 ? nameColIdx : 1,
+            locColIdx >= 0 ? locColIdx : (techType === 'kara_araclari' ? 3 : 5),
+            miktarColIdx >= 0 ? miktarColIdx : (techType === 'kara_araclari' ? -1 : 4),
+            siraColIdx >= 0 ? siraColIdx : 0
+          );
 
           // Save columns and rows to states and localStorage
           if (techType === 'bell429') {
@@ -4553,6 +4814,11 @@ export default function App() {
             setTechizatT70BumbiBacketData(parsedRows);
             localStorage.setItem('excel_techizat_t70_bumbi_backet_cols', JSON.stringify(finalHeaders));
             localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(parsedRows));
+          } else if (techType === 't70_helitak') {
+            setTechizatT70HelitakColumns(finalHeaders);
+            setTechizatT70HelitakData(parsedRows);
+            localStorage.setItem('excel_techizat_t70_helitak_cols', JSON.stringify(finalHeaders));
+            localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(parsedRows));
           } else if (techType === 'b360') {
             setTechizatB360Columns(finalHeaders);
             setTechizatB360Data(parsedRows);
@@ -4611,6 +4877,8 @@ export default function App() {
                 driveFileName = "hava_araçları_yer_destek_t-70.xlsx";
               } else if (techType === 't70_bumbi_backet') {
                 driveFileName = "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx";
+              } else if (techType === 't70_helitak') {
+                driveFileName = "hava_araçları_yer_destek_t-70_helitak.xlsx";
               } else if (techType === 'b360') {
                 driveFileName = "hava_araçları_yer_destek_b-360.xlsx";
               } else if (techType === 'c650') {
@@ -4625,6 +4893,7 @@ export default function App() {
                 : techType === 'at802' ? 'AT-802F YER DESTEK TEÇHİZATLARI'
                 : techType === 't70' ? 'T-70 YER DESTEK TEÇHİZATI'
                 : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
+                : techType === 't70_helitak' ? 'T-70 HELİTAK TEÇHİZATI'
                 : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
                 : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
                 : techType === 'kara_araclari' ? 'KARA ARAÇLARI TAKİP SİSTEMİ'
@@ -4669,6 +4938,7 @@ export default function App() {
                 : techType === 'at802' ? 'AT-802F Yer Destek' 
                 : techType === 't70' ? 'T-70 Yer Destek' 
                 : techType === 't70_bumbi_backet' ? 'T-70 Bumbi Backet'
+                : techType === 't70_helitak' ? 'T-70 Helitak'
                 : techType === 'b360' ? 'B-360 Yer Destek'
                 : techType === 'c650' ? 'C-650 Yer Destek'
                 : techType === 'kara_araclari' ? 'Kara Araçları Takip'
@@ -4680,6 +4950,7 @@ export default function App() {
                 : techType === 'at802' ? 'AT-802F YER DESTEK TEÇHİZATLARI'
                 : techType === 't70' ? 'T-70 YER DESTEK TEÇHİZATI'
                 : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
+                : techType === 't70_helitak' ? 'T-70 HELİTAK TEÇHİZATI'
                 : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
                 : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
                 : techType === 'kara_araclari' ? 'KARA ARAÇLARI TAKİP SİSTEMİ'
@@ -5713,6 +5984,17 @@ export default function App() {
                         BB
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">BUMBİ BACKET</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">T-70 Alt Birimi</span>
+                    </button>
+
+                    <button
+                      onClick={() => openTechizatMatrix('t70_helitak', 'T-70 HELİTAK TEÇHİZATI')}
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm text-[#0b3d1d] font-extrabold text-sm">
+                        HT
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HELİTAK</span>
                       <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">T-70 Alt Birimi</span>
                     </button>
 
@@ -6936,6 +7218,7 @@ export default function App() {
                   ...techizatAt802Data.map(r => ["AT-802F", ...formatStandardRow(r)]),
                   ...techizatT70Data.map(r => ["T-70 YER DESTEK", ...formatStandardRow(r)]),
                   ...techizatT70BumbiBacketData.map(r => ["T-70 BUMBİ BACKET", ...formatStandardRow(r)]),
+                  ...techizatT70HelitakData.map(r => ["T-70 HELİTAK", ...formatStandardRow(r)]),
                   ...techizatC650Data.map(r => ["C-650", ...formatStandardRow(r)]),
                   ...techizatB360Data.map(r => ["B-360", ...formatStandardRow(r)]),
                   ...techizatHangarData.map(r => ["HANGAR YER DESTEK", ...formatStandardRow(r)]),
@@ -6945,6 +7228,7 @@ export default function App() {
               : activeTechizatType === 'at802' ? techizatAt802Data.map(formatStandardRow)
               : activeTechizatType === 't70' ? techizatT70Data.map(formatStandardRow)
               : activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData.map(formatStandardRow)
+              : activeTechizatType === 't70_helitak' ? techizatT70HelitakData.map(formatStandardRow)
               : activeTechizatType === 'b360' ? techizatB360Data.map(formatStandardRow)
               : activeTechizatType === 'c650' ? techizatC650Data.map(formatStandardRow)
               : activeTechizatType === 'kara_araclari' ? techizatKaraAraclariData.map(formatKaraAraclariRow)
@@ -7372,7 +7656,6 @@ export default function App() {
                                       setEditRowValues([...resolvedRow]);
                                       setTechizatImageScale(1);
                                       setIsFullScreenImage(false);
-                                      setIsImageUpdateUnlocked(false);
                                       setImagePasswordInput('');
                                       setImagePasswordError(false);
                                       setShowImagePasswordPrompt(false);
@@ -7459,7 +7742,7 @@ export default function App() {
                                          >
                                            <div 
                                              title={cell ? `${label}: ${cell} (Düzenlemek ve görsel eklemek için Tıklayın)` : "Boş Veri"}
-                                             className={`truncate px-2 py-1 rounded-xl transition-all text-xs text-center select-text hover:bg-emerald-100/50 hover:text-emerald-950 ${
+                                             className={`${cell && cell.includes('\n') ? 'whitespace-pre-line leading-relaxed min-w-[100px]' : 'truncate'} px-2 py-1 rounded-xl transition-all text-xs text-center select-text hover:bg-emerald-100/50 hover:text-emerald-950 ${
                                                isActiveMatch 
                                                  ? 'bg-blue-600 text-white font-black scale-105 shadow-md ring-2 ring-blue-400 animate-pulse'
                                                  : isMatch
@@ -8609,6 +8892,7 @@ export default function App() {
                           <option value="techizat_at802">TEÇHİZAT ENVANTER TAKİBİ - AT-802 (EXCEL)</option>
                           <option value="techizat_t70">TEÇHİZAT ENVANTER TAKİBİ - T-70 (EXCEL)</option>
                           <option value="techizat_t70_bumbi_backet">TEÇHİZAT ENVANTER TAKİBİ - T-70 BUMBİ BACKET (EXCEL)</option>
+                          <option value="techizat_t70_helitak">TEÇHİZAT ENVANTER TAKİBİ - T-70 HELİTAK (EXCEL)</option>
                           <option value="techizat_b360">TEÇHİZAT ENVANTER TAKİBİ - B-360 (EXCEL)</option>
                           <option value="techizat_c650">TEÇHİZAT ENVANTER TAKİBİ - C-650 (EXCEL)</option>
                           <option value="techizat_hangar">TEÇHİZAT ENVANTER TAKİBİ - HANGAR YER DESTEK (EXCEL)</option>
@@ -9008,6 +9292,11 @@ export default function App() {
                                     data = techizatT70BumbiBacketData;
                                     sheetName = "T70_Bumbi_Backet";
                                     fileName = "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx";
+                                  } else if (techType === 't70_helitak') {
+                                    headers = techizatT70HelitakColumns;
+                                    data = techizatT70HelitakData;
+                                    sheetName = "T70_Helitak";
+                                    fileName = "hava_araçları_yer_destek_t-70_helitak.xlsx";
                                   } else if (techType === 'b360') {
                                     headers = techizatB360Columns;
                                     data = techizatB360Data;
@@ -9448,113 +9737,283 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {colsList.map((col, idx) => {
-                      // Skip Sıra No (index 0) - make it read-only
-                      if (idx === 0) {
+                    {(() => {
+                      const locColIdx = colsList.indexOf("BULUNDUĞU YER");
+                      const miktarColIdx = colsList.findIndex(c => c.includes("MİKTAR") || c.includes("KAPASİTE"));
+
+                      const rawLoc = locColIdx !== -1 ? (editRowValues[locColIdx] || "") : "";
+                      const rawMiktar = miktarColIdx !== -1 ? (editRowValues[miktarColIdx] || "") : "";
+
+                      const parsedLocs = rawLoc ? rawLoc.split('\n') : [""];
+                      const parsedMiktars = rawMiktar ? rawMiktar.split('\n') : ["1"];
+
+                      const pairCount = Math.max(1, parsedLocs.length, parsedMiktars.length);
+                      while (parsedLocs.length < pairCount) parsedLocs.push("");
+                      while (parsedMiktars.length < pairCount) parsedMiktars.push("1");
+
+                      return colsList.map((col, idx) => {
+                        // Skip Sıra No (index 0) - make it read-only
+                        if (idx === 0) {
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
+                              <input
+                                type="text"
+                                value={editRowValues[idx] || ""}
+                                disabled
+                                className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
+                              />
+                            </div>
+                          );
+                        }
+
+                        // Paired Miktar / Kapasite column field
+                        if (idx === miktarColIdx && locColIdx !== -1) {
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                                📦 {col}
+                              </label>
+                              <div className="flex flex-col gap-2">
+                                {parsedMiktars.map((mVal, pIdx) => (
+                                  <div key={pIdx} className="flex items-center gap-1.5 h-[42px]">
+                                    <input
+                                      type="text"
+                                      value={mVal}
+                                      placeholder="1"
+                                      onChange={(e) => {
+                                        const newMiktars = [...parsedMiktars];
+                                        newMiktars[pIdx] = e.target.value;
+                                        const cloned = [...editRowValues];
+                                        cloned[miktarColIdx] = newMiktars.join('\n');
+                                        setEditRowValues(cloned);
+                                      }}
+                                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
+                                    />
+                                    {pairCount > 1 && <div className="w-8 h-8 shrink-0" />}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Paired Bulunduğu Yer column field
+                        if (idx === locColIdx) {
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                                📍 {col}
+                              </label>
+                              <div className="flex flex-col gap-2">
+                                {parsedLocs.map((lVal, pIdx) => (
+                                  <div key={pIdx} className="flex items-center gap-1.5 h-[42px]">
+                                    <input
+                                      type="text"
+                                      value={lVal}
+                                      placeholder={pIdx === 0 ? "Örn: Y/D HANGAR" : "Örn: Muğla / Antalya"}
+                                      onChange={(e) => {
+                                        const newLocs = [...parsedLocs];
+                                        newLocs[pIdx] = e.target.value;
+                                        const cloned = [...editRowValues];
+                                        cloned[locColIdx] = newLocs.join('\n');
+                                        setEditRowValues(cloned);
+                                      }}
+                                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
+                                    />
+                                    {pairCount > 1 && (
+                                      <button
+                                        type="button"
+                                        title="Bu Lokasyonu ve Miktarını Sil"
+                                        onClick={() => {
+                                          const newLocs = parsedLocs.filter((_, i) => i !== pIdx);
+                                          const newMiktars = parsedMiktars.filter((_, i) => i !== pIdx);
+                                          const cloned = [...editRowValues];
+                                          cloned[locColIdx] = newLocs.join('\n');
+                                          if (miktarColIdx !== -1) cloned[miktarColIdx] = newMiktars.join('\n');
+                                          setEditRowValues(cloned);
+                                        }}
+                                        className="w-8 h-8 shrink-0 flex items-center justify-center bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl transition-colors cursor-pointer border border-rose-200/80 active:scale-95"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const newLocs = [...parsedLocs, ""];
+                                    const newMiktars = [...parsedMiktars, "1"];
+                                    const cloned = [...editRowValues];
+                                    cloned[locColIdx] = newLocs.join('\n');
+                                    if (miktarColIdx !== -1) cloned[miktarColIdx] = newMiktars.join('\n');
+                                    setEditRowValues(cloned);
+                                  }}
+                                  className="mt-1 self-start inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#0b3d1d] text-xs font-extrabold rounded-xl border border-emerald-200/80 transition-all cursor-pointer active:scale-95 shadow-sm"
+                                >
+                                  <Plus className="w-3.5 h-3.5 text-emerald-700" />
+                                  <span>+ Yeni Lokasyon Ekle</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Special field: KALİBRASYONA TABİ (Dropdown selection EVET / HAYIR)
+                        if (col === "KALİBRASYONA TABİ" || col === "BAKIMA TABİ Mİ?") {
+                          const currentVal = (editRowValues[idx] || "EVET").toString().trim().toUpperCase();
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                                ⚙️ KALİBRASYONA TABİ
+                              </label>
+                              <select
+                                value={currentVal === "HAYIR" ? "HAYIR" : "EVET"}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const cloned = [...editRowValues];
+                                  cloned[idx] = val;
+                                  // If "HAYIR" is selected, clear maintenance fields and firm
+                                  if (val === "HAYIR") {
+                                    const lastCntIdx = colsList.indexOf("SON KONTROL / KALİBRASYON / BAKIM");
+                                    const nextCntIdx = colsList.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
+                                    const firmIdx = colsList.indexOf("SON KONTROLÜ YAPAN FİRMA");
+                                    if (lastCntIdx !== -1) cloned[lastCntIdx] = "-";
+                                    if (nextCntIdx !== -1) cloned[nextCntIdx] = "-";
+                                    if (firmIdx !== -1) cloned[firmIdx] = "-";
+                                  }
+                                  setEditRowValues(cloned);
+                                }}
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d] cursor-pointer"
+                              >
+                                <option value="EVET">EVET (Kalibrasyona / Bakıma Tabi)</option>
+                                <option value="HAYIR">HAYIR (Kalibrasyon / Bakımdan Muaf)</option>
+                              </select>
+                            </div>
+                          );
+                        }
+
+                        // Check if KALİBRASYONA TABİ is HAYIR (disabled flu mode for maintenance & firm fields)
+                        const kalibColIdx = colsList.indexOf("KALİBRASYONA TABİ") !== -1 ? colsList.indexOf("KALİBRASYONA TABİ") : colsList.indexOf("BAKIMA TABİ Mİ?");
+                        const isKalibTabiHayir = kalibColIdx !== -1 && (editRowValues[kalibColIdx] || "").toString().trim().toUpperCase() === "HAYIR";
+                        const isMaintenanceOrFirmField = col === "SON KONTROL / KALİBRASYON / BAKIM" || 
+                                                         col === "GELECEK KONTROL / KALİBRASYON / BAKIM" || 
+                                                         col === "SON KONTROLÜ YAPAN FİRMA";
+
+                        if (isKalibTabiHayir && isMaintenanceOrFirmField) {
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5 opacity-40">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
+                              <input
+                                type="text"
+                                value="MUAFIYET (TABİ DEĞİL)"
+                                disabled
+                                className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-400 cursor-not-allowed"
+                              />
+                            </div>
+                          );
+                        }
+
+                        // Special field: DURUMU (Dropdown FAAL / BAKIM KALİBRASYON / GAYRİ FAAL)
+                        if (col === "DURUMU") {
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                                🟢 {col}
+                              </label>
+                              <select
+                                value={editRowValues[idx] || "FAAL"}
+                                onChange={(e) => {
+                                  const cloned = [...editRowValues];
+                                  cloned[idx] = e.target.value;
+                                  setEditRowValues(cloned);
+                                }}
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all cursor-pointer"
+                              >
+                                <option value="FAAL">FAAL</option>
+                                <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
+                                <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                              </select>
+                            </div>
+                          );
+                        }
+
+                        // Special field: SON KONTROLÜ YAPAN FİRMA (With Firm Datalist)
+                        if (col === "SON KONTROLÜ YAPAN FİRMA") {
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                                🏢 {col}
+                              </label>
+                              <input
+                                type="text"
+                                list="techizat-firmalar-list"
+                                value={editRowValues[idx] || ""}
+                                placeholder="Firma seçiniz veya yazınız..."
+                                onChange={(e) => {
+                                  const cloned = [...editRowValues];
+                                  cloned[idx] = e.target.value;
+                                  setEditRowValues(cloned);
+                                }}
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
+                              />
+                            </div>
+                          );
+                        }
+
+                        const isDateField = col.includes("TARİH") || col.includes("KONTROL / KALİBRASYON / BAKIM");
+                        const isMailSendDate = col === "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ" || 
+                          col.toUpperCase().includes("MAİL GÖNDERİM") || 
+                          col.toUpperCase().includes("MAIL GONDERIM") || 
+                          col.toUpperCase().includes("MAİL GÖNDERİLDİĞİ") || 
+                          col.toUpperCase().includes("MAIL GONDERILDI") || 
+                          col.toLowerCase().includes("mail") || 
+                          col.toLowerCase().includes("e-posta");
+
+                        if (isMailSendDate) {
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
+                              <input
+                                type="text"
+                                value={editRowValues[idx] || "Belirtilmemiş"}
+                                disabled
+                                className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
+                              />
+                            </div>
+                          );
+                        }
+
+                        if (isDateField) {
+                          const dateVal = convertToInputDateFormat(editRowValues[idx] || "");
+                          return (
+                            <div key={idx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">📅 {col}</label>
+                              <input
+                                type="date"
+                                value={dateVal}
+                                onChange={(e) => {
+                                  const formatted = convertToDisplayDateFormat(e.target.value);
+                                  const cloned = [...editRowValues];
+                                  cloned[idx] = formatted;
+                                  setEditRowValues(cloned);
+                                }}
+                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
+                              />
+                            </div>
+                          );
+                        }
+
+                        // Render normal input fields
                         return (
                           <div key={idx} className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">{col}</label>
                             <input
                               type="text"
                               value={editRowValues[idx] || ""}
-                              disabled
-                              className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
-                            />
-                          </div>
-                        );
-                      }
-
-                      // Special field: KALİBRASYONA TABİ (Dropdown selection EVET / HAYIR)
-                      if (col === "KALİBRASYONA TABİ" || col === "BAKIMA TABİ Mİ?") {
-                        const currentVal = (editRowValues[idx] || "EVET").toString().trim().toUpperCase();
-                        return (
-                          <div key={idx} className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                              ⚙️ KALİBRASYONA TABİ
-                            </label>
-                            <select
-                              value={currentVal === "HAYIR" ? "HAYIR" : "EVET"}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                const cloned = [...editRowValues];
-                                cloned[idx] = val;
-                                // If "HAYIR" is selected, clear maintenance fields and firm
-                                if (val === "HAYIR") {
-                                  const lastCntIdx = colsList.indexOf("SON KONTROL / KALİBRASYON / BAKIM");
-                                  const nextCntIdx = colsList.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
-                                  const firmIdx = colsList.indexOf("SON KONTROLÜ YAPAN FİRMA");
-                                  if (lastCntIdx !== -1) cloned[lastCntIdx] = "-";
-                                  if (nextCntIdx !== -1) cloned[nextCntIdx] = "-";
-                                  if (firmIdx !== -1) cloned[firmIdx] = "-";
-                                }
-                                setEditRowValues(cloned);
-                              }}
-                              className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d] cursor-pointer"
-                            >
-                              <option value="EVET">EVET (Kalibrasyona / Bakıma Tabi)</option>
-                              <option value="HAYIR">HAYIR (Kalibrasyon / Bakımdan Muaf)</option>
-                            </select>
-                          </div>
-                        );
-                      }
-
-                      // Check if KALİBRASYONA TABİ is HAYIR (disabled flu mode for maintenance & firm fields)
-                      const kalibColIdx = colsList.indexOf("KALİBRASYONA TABİ") !== -1 ? colsList.indexOf("KALİBRASYONA TABİ") : colsList.indexOf("BAKIMA TABİ Mİ?");
-                      const isKalibTabiHayir = kalibColIdx !== -1 && (editRowValues[kalibColIdx] || "").toString().trim().toUpperCase() === "HAYIR";
-                      const isMaintenanceOrFirmField = col === "SON KONTROL / KALİBRASYON / BAKIM" || 
-                                                       col === "GELECEK KONTROL / KALİBRASYON / BAKIM" || 
-                                                       col === "SON KONTROLÜ YAPAN FİRMA";
-
-                      if (isKalibTabiHayir && isMaintenanceOrFirmField) {
-                        return (
-                          <div key={idx} className="flex flex-col gap-1.5 opacity-40">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
-                            <input
-                              type="text"
-                              value="MUAFIYET (TABİ DEĞİL)"
-                              disabled
-                              className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-400 cursor-not-allowed"
-                            />
-                          </div>
-                        );
-                      }
-
-                      // Special field: DURUMU (Dropdown FAAL / BAKIM KALİBRASYON / GAYRİ FAAL)
-                      if (col === "DURUMU") {
-                        return (
-                          <div key={idx} className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                              🟢 {col}
-                            </label>
-                            <select
-                              value={editRowValues[idx] || "FAAL"}
-                              onChange={(e) => {
-                                const cloned = [...editRowValues];
-                                cloned[idx] = e.target.value;
-                                setEditRowValues(cloned);
-                              }}
-                              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all cursor-pointer"
-                            >
-                              <option value="FAAL">FAAL</option>
-                              <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
-                              <option value="GAYRİ FAAL">GAYRİ FAAL</option>
-                            </select>
-                          </div>
-                        );
-                      }
-
-                      // Special field: SON KONTROLÜ YAPAN FİRMA (With Firm Datalist)
-                      if (col === "SON KONTROLÜ YAPAN FİRMA") {
-                        return (
-                          <div key={idx} className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                              🏢 {col}
-                            </label>
-                            <input
-                              type="text"
-                              list="techizat-firmalar-list"
-                              value={editRowValues[idx] || ""}
-                              placeholder="Firma seçiniz veya yazınız..."
+                              placeholder="Belirtilmemiş"
                               onChange={(e) => {
                                 const cloned = [...editRowValues];
                                 cloned[idx] = e.target.value;
@@ -9564,69 +10023,8 @@ export default function App() {
                             />
                           </div>
                         );
-                      }
-
-                      const isDateField = col.includes("TARİH") || col.includes("KONTROL / KALİBRASYON / BAKIM");
-                      const isMailSendDate = col === "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ" || 
-                        col.toUpperCase().includes("MAİL GÖNDERİM") || 
-                        col.toUpperCase().includes("MAIL GONDERIM") || 
-                        col.toUpperCase().includes("MAİL GÖNDERİLDİĞİ") || 
-                        col.toUpperCase().includes("MAIL GONDERILDI") || 
-                        col.toLowerCase().includes("mail") || 
-                        col.toLowerCase().includes("e-posta");
-
-                      if (isMailSendDate) {
-                        return (
-                          <div key={idx} className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
-                            <input
-                              type="text"
-                              value={editRowValues[idx] || "Belirtilmemiş"}
-                              disabled
-                              className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
-                            />
-                          </div>
-                        );
-                      }
-
-                      if (isDateField) {
-                        const dateVal = convertToInputDateFormat(editRowValues[idx] || "");
-                        return (
-                          <div key={idx} className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">📅 {col}</label>
-                            <input
-                              type="date"
-                              value={dateVal}
-                              onChange={(e) => {
-                                const formatted = convertToDisplayDateFormat(e.target.value);
-                                const cloned = [...editRowValues];
-                                cloned[idx] = formatted;
-                                setEditRowValues(cloned);
-                              }}
-                              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                            />
-                          </div>
-                        );
-                      }
-
-                      // Render normal input fields
-                      return (
-                        <div key={idx} className="flex flex-col gap-1.5">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">{col}</label>
-                          <input
-                            type="text"
-                            value={editRowValues[idx] || ""}
-                            placeholder="Belirtilmemiş"
-                            onChange={(e) => {
-                              const cloned = [...editRowValues];
-                              cloned[idx] = e.target.value;
-                              setEditRowValues(cloned);
-                            }}
-                            className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                          />
-                        </div>
-                      );
-                    })}
+                      });
+                    })()}
                   </div>
 
                   {/* Save buttons */}
@@ -9755,7 +10153,7 @@ export default function App() {
                 </div>
 
                 {/* Right Side: Image Upload, Background Removal and Manual Retouch Panel */}
-                <div className={`w-full lg:w-5/12 border-t lg:border-t-0 lg:border-l border-slate-200 pt-6 lg:pt-0 lg:pl-8 flex flex-col gap-6 text-left ${mobileEditTab === 'image' ? 'flex' : 'hidden lg:flex'}`}>
+                <div className={`w-full lg:w-5/12 border-t lg:border-t-0 lg:border-l border-slate-200 pt-6 lg:pt-0 lg:pl-8 lg:overflow-y-auto lg:max-h-[82vh] pr-1 flex flex-col gap-6 text-left ${mobileEditTab === 'image' ? 'flex' : 'hidden lg:flex'}`}>
                   <ImageEditorAndRetoucher
                     imageKey={imageKey}
                     currentImageUrl={techizatImages[imageKey] || null}
@@ -10269,10 +10667,26 @@ export default function App() {
                             <p className="text-[10px] text-emerald-600 font-semibold">Görsel Google Drive'a kaydediliyor, lütfen bekleyiniz.</p>
                           </div>
                         ) : isProcessingRemoveBg ? (
-                          <div className="border-2 border-dashed border-blue-300 bg-blue-50/20 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[140px] animate-pulse">
-                            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-1" />
-                            <p className="text-xs font-black text-blue-800">ARKA PLAN TEMİZLENİYOR...</p>
-                            <div id="status" className="text-xs font-bold text-blue-700">{bgRemovalStatusText || "Lütfen bekleyin..."}</div>
+                          <div className="border-2 border-dashed border-blue-300 bg-blue-50/40 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[160px]">
+                            <div className="relative flex items-center justify-center">
+                              <div className="w-14 h-14 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+                              <span className="absolute text-xs font-black font-mono text-blue-700">
+                                %{bgRemovalProgressPercent}
+                              </span>
+                            </div>
+                            <div className="flex flex-col items-center gap-1 w-full max-w-xs">
+                              <p className="text-xs font-black text-blue-900 uppercase tracking-wider">
+                                ARKA PLAN TEMİZLENİYOR (%{bgRemovalProgressPercent})
+                              </p>
+                              {/* Dynamic Progress Bar */}
+                              <div className="w-full bg-slate-200 h-3 rounded-full overflow-hidden p-0.5 shadow-inner border border-slate-300/80 my-1">
+                                <div
+                                  className="bg-gradient-to-r from-blue-500 via-indigo-600 to-blue-600 h-full rounded-full transition-all duration-300 shadow-sm"
+                                  style={{ width: `${Math.max(5, bgRemovalProgressPercent)}%` }}
+                                />
+                              </div>
+                              <div id="status" className="text-xs font-bold text-slate-700">{bgRemovalStatusText || "Lütfen bekleyin..."}</div>
+                            </div>
                           </div>
                         ) : pendingImagePreview ? (
                           <div className="border-2 border-solid border-emerald-400 bg-emerald-50/10 rounded-2xl p-4 flex flex-col gap-3 min-h-[140px] animate-fade-in">
