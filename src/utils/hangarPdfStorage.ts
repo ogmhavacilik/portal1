@@ -323,20 +323,24 @@ export async function deleteHangarPdfDoc(
     }
 
     // Direct Google Apps Script fallback for trashing file in Drive
-    try {
-      fetch(DEFAULT_GOOGLE_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'deleteTechPublication',
-          fileId: targetDriveId,
-          id: targetDriveId,
-          fileName: cleanFileName
-        })
-      }).catch(err => console.warn('[deleteHangarPdfDoc] GAS trash warning:', err));
-    } catch (e) {
-      console.warn('[deleteHangarPdfDoc] GAS fallback warning:', e);
-    }
+    const gasActions = ['deleteTechPublication', 'deleteDriveFile', 'deleteFile', 'trashFile', 'deleteTechizatDoc'];
+    gasActions.forEach(act => {
+      try {
+        fetch(DEFAULT_GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: act,
+            fileId: targetDriveId,
+            id: targetDriveId,
+            docId: targetDriveId,
+            fileName: cleanFileName
+          })
+        }).catch(err => console.warn('[deleteHangarPdfDoc] GAS trash warning:', err));
+      } catch (e) {
+        console.warn('[deleteHangarPdfDoc] GAS fallback warning:', e);
+      }
+    });
   }
 }
 

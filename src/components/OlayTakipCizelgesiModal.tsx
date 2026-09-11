@@ -702,7 +702,45 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
         const parsedSheets = parseOlayTakipWorkbook(wb);
         if (parsedSheets.length > 0) {
           setAllUnitsData(prev => {
-            const updated = { ...prev, [unitKey]: parsedSheets };
+            const existingSheets = prev[unitKey] || [];
+            
+            const mergedSheets = parsedSheets.map((pSheet, sIdx) => {
+              const { sheet: guaranteedSheet, colIndex: linkIdx } = ensureEkDosyaLinkColumn(pSheet);
+              const oldSheet = existingSheets.find(s => s.sheetName === pSheet.sheetName) || existingSheets[sIdx];
+              const oldLinkIdx = oldSheet ? oldSheet.columns.findIndex(c => isLinkColumnName(c)) : -1;
+              const docColIdx = guaranteedSheet.columns.findIndex(c => /belge|d[oö]k[uü]man/i.test(c));
+
+              const updatedRows = guaranteedSheet.rows.map((row, rIdx) => {
+                const rowCopy = [...row];
+                while (rowCopy.length < guaranteedSheet.columns.length) rowCopy.push('');
+                
+                const currentDriveLink = linkIdx >= 0 ? (rowCopy[linkIdx] || '').trim() : '';
+                
+                // 1. If Drive cell link is empty, check if old local state had a link for this row
+                if (!currentDriveLink && oldSheet && oldSheet.rows[rIdx] && oldLinkIdx >= 0) {
+                  const oldLink = (oldSheet.rows[rIdx][oldLinkIdx] || '').trim();
+                  if (oldLink && linkIdx >= 0) {
+                    rowCopy[linkIdx] = oldLink;
+                  }
+                }
+
+                // 2. If link is still empty, check if hangarPdfDocs has an attached doc/link for this row
+                if (linkIdx >= 0 && (!rowCopy[linkIdx] || !rowCopy[linkIdx].trim())) {
+                  const docKey = `olay_${unitKey}_${guaranteedSheet.id || sIdx}_row_${rIdx}`;
+                  const docs = hangarPdfDocs.filter(d => d.itemKey === docKey);
+                  if (docs.length > 0) {
+                    const link = docs[0].driveUrl || (docs[0].driveFileId ? `https://drive.google.com/file/d/${docs[0].driveFileId}/view` : '');
+                    if (link) rowCopy[linkIdx] = link;
+                  }
+                }
+
+                return rowCopy;
+              });
+
+              return { ...guaranteedSheet, rows: updatedRows };
+            });
+
+            const updated = { ...prev, [unitKey]: mergedSheets };
             safeSetJSON(STORAGE_KEY, updated);
             return updated;
           });
@@ -857,16 +895,20 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
       if (!sheets || sheets.length === 0) return;
 
       const wb = XLSX.utils.book_new();
-      sheets.forEach(sheet => {
+      sheets.forEach((sheet, sIdx) => {
         const { sheet: guaranteedSheet, colIndex: linkIdx } = ensureEkDosyaLinkColumn(sheet);
+        const docColIdx = guaranteedSheet.columns.findIndex(c => /belge|d[oö]k[uü]man/i.test(c));
         const aoa: any[][] = [];
         aoa.push(guaranteedSheet.columns);
         
         guaranteedSheet.rows.forEach((r, rIdx) => {
           const rowCopy = [...r];
-          // Auto fill link if empty and row has docs
+          while (rowCopy.length < guaranteedSheet.columns.length) rowCopy.push('');
+
+          // Auto fill link if empty and row has docs or custom link
           if (linkIdx >= 0 && (!rowCopy[linkIdx] || !rowCopy[linkIdx].trim())) {
-            const docs = getRowDocs(rIdx, rowCopy[belgeColIndex] || '');
+            const docKey = `olay_${selectedUnit}_${guaranteedSheet.id || sIdx}_row_${rIdx}`;
+            const docs = hangarPdfDocs.filter(d => d.itemKey === docKey);
             if (docs.length > 0) {
               const link = docs[0].driveUrl || (docs[0].driveFileId ? `https://drive.google.com/file/d/${docs[0].driveFileId}/view` : '');
               if (link) rowCopy[linkIdx] = link;
@@ -896,7 +938,20 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
           base64Data: base64Data,
           folderId: DRIVE_FOLDER_ID
         })
-      }).catch(err => console.warn('Background sync warning:', err));
+      }).catch(err => {
+        console.warn('Background sync warning via API route:', err);
+        fetch(GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'uploadTechizatExcel',
+            fileName: standardFileName,
+            targetKey: `olay_takip_${selectedUnit}`,
+            base64Data: base64Data,
+            folderId: DRIVE_FOLDER_ID
+          })
+        }).catch(gasErr => console.warn('Background GAS fallback warning:', gasErr));
+      });
     } catch (e) {
       console.warn('Background XLSX generation warning:', e);
     }
@@ -1066,6 +1121,9 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
 
   // Delete row
   const handleDeleteRow = (rowIndex: number) => {
+    const confirmed = window.confirm("Bu satırı ve bağlı tüm verileri silmek istediğinize emin misiniz?");
+    if (!confirmed) return;
+
     requirePassword(() => {
       if (!currentSheet) return;
       const updatedSheets = currentUnitSheets.map((sheet, idx) => {
@@ -1533,6 +1591,9 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
    */
   const handleRemoveCustomLink = async () => {
     if (!activeDocRow || !currentSheet) return;
+    const confirmed = window.confirm("Bu satırdaki bağlantı linkini kaldırmak istediğinize emin misiniz?");
+    if (!confirmed) return;
+
     const { sheet: guaranteedSheet, colIndex: linkIdx } = ensureEkDosyaLinkColumn(currentSheet);
     const updatedRow = [...(guaranteedSheet.rows[activeDocRow.rowIndex] || activeDocRow.row)];
     if (linkIdx >= 0 && updatedRow.length > linkIdx) {
@@ -1554,6 +1615,9 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
   };
 
   const handleDeleteDoc = async (docId: string, docName: string) => {
+    const confirmed = window.confirm(`"${docName}" belgesini / bağlantısını silmek istediğinize emin misiniz?\n\nBu işlem belgeyi Google Drive'da çöpe taşıyacak ve çizelgeden kaldıracaktır.`);
+    if (!confirmed) return;
+
     try {
       const targetDoc = hangarPdfDocs.find(d => d.id === docId || d.driveFileId === docId);
       const driveFileId = targetDoc?.driveFileId || (docId.startsWith('drive_doc_') ? docId.replace('drive_doc_', '') : '');

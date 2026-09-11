@@ -791,33 +791,45 @@ async function startServer() {
         "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
       ];
 
+      const deleteActions = [
+        "deleteTechPublication",
+        "deleteDriveFile",
+        "deleteFile",
+        "trashFile",
+        "deleteTechizatDoc"
+      ];
+
       let gasDeleted = false;
       let responseMsg = "";
 
       for (const sUrl of scriptUrls) {
-        try {
-          const resp = await fetch(sUrl, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify({
-              action: "deleteTechPublication",
-              fileId: cleanFileId,
-              id: cleanFileId,
-              fileName: cleanFileName
-            })
-          });
+        for (const act of deleteActions) {
+          try {
+            const resp = await fetch(sUrl, {
+              method: "POST",
+              headers: { "Content-Type": "text/plain;charset=utf-8" },
+              body: JSON.stringify({
+                action: act,
+                fileId: cleanFileId,
+                id: cleanFileId,
+                docId: cleanFileId,
+                fileName: cleanFileName
+              })
+            });
 
-          if (resp.ok) {
-            const json = await resp.json();
-            if (json && (json.status === "success" || json.deleted)) {
-              gasDeleted = true;
-              responseMsg = json.message || "Dosya Google Drive'da çöpe taşındı.";
-              break;
+            if (resp.ok) {
+              const json = await resp.json();
+              if (json && (json.status === "success" || json.deleted || json.success)) {
+                gasDeleted = true;
+                responseMsg = json.message || "Dosya Google Drive'da çöpe taşındı.";
+                break;
+              }
             }
+          } catch (e: any) {
+            // try next url/action
           }
-        } catch (e: any) {
-          // try next url
         }
+        if (gasDeleted) break;
       }
 
       return res.json({
