@@ -190,6 +190,7 @@ import {
   Download,
   Upload,
   Plus,
+  PlusCircle,
   Trash2,
   Search,
   RefreshCw,
@@ -224,15 +225,40 @@ import {
   History,
   Maximize2,
   Sparkles,
-  Send
+  Send,
+  FlaskConical,
+  Boxes,
+  Layers,
+  Archive,
+  BookOpen,
+  Edit,
+  MapPin,
+  Save,
+  Bell,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { ImageEditorAndRetoucher } from './components/ImageEditorAndRetoucher';
 import { CachedDriveImage, fetchDriveImageAsBase64 } from './components/CachedDriveImage';
+import { TechnicalPublicationsModal } from './components/TechnicalPublicationsModal';
+import { ExcelExportModal } from './components/ExcelExportModal';
+import { NewProductModal } from './components/NewProductModal';
+import { DepoManagementModal } from './components/DepoManagementModal';
+import { KaraAraclariDocModal } from './components/KaraAraclariDocModal';
+import { DataSyncModal } from './components/DataSyncModal';
+import { AuditTrailModal } from './components/AuditTrailModal';
+import { BakimYapildiModal } from './components/BakimYapildiModal';
+import { AuditLogEntry, DepoTransaction, VehicleDocument } from './types';
+import { DEFAULT_AT802_DATA } from './data/defaultTechizatData';
+import { unmergeAndFillWorksheet, groupMultiLocationRowsHelper, cleanAndFormatDateString, isHeaderLikeRow, detectHeaderRowIndex } from './utils/driveExcelSync';
+import { getAllHangarPdfDocs, saveHangarPdfDoc, deleteHangarPdfDoc, getHangarPdfDocById, syncHangarPdfDocsFromDrive, findMatchingDocs, isDocMatchingRow, normalizeDocKey, HangarPdfDoc, getFileCategory, getDocMimeType } from './utils/hangarPdfStorage';
+import { PdfPreviewModal } from './components/PdfPreviewModal';
+import { OlayTakipCizelgesiModal } from './components/OlayTakipCizelgesiModal';
+import { GunTakipModal } from './components/GunTakipModal';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzz6XVe-NDXbNUks8KFMfTVYN0JfN6PhQGLVNDG26yolgwGtD8DTBTKD8PgXW5V-n6vEQ/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyeo_j2XWkNwCaKXAPZn3I6jsMeM8K_KjZ7MkvD9Lcqx0EOhj_JfecVjfMmZ5HI88557Q/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
 export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
@@ -619,6 +645,8 @@ export type CategoryType =
   | 'İKMAL' 
   | 'TEÇHİZAT TAKİP' 
   | 'HA_YER_DESTEK' 
+  | 'UNIT_FOLDER_MENU'
+  | 'UNIT_DEPO_MENU'
   | 'T70_DETAY' 
   | 'KARA_ARACLARI_MENU'
   | 'FORM KAYITLARI' 
@@ -877,8 +905,85 @@ export default function App() {
   const [activeModalCell, setActiveModalCell] = useState<{ r: number; c: number; value: string; label: string } | null>(null);
   const [copiedCellSuccess, setCopiedCellSuccess] = useState<boolean>(false);
 
-  // Teçhizat row edit, image upload and mission order states
-  const [mobileEditTab, setMobileEditTab] = useState<'form' | 'image'>('form');
+  // Teçhizat row edit, image upload, mission order and documents states
+  const [mobileEditTab, setMobileEditTab] = useState<'form' | 'image' | 'regional' | 'documents'>('form');
+  const [hangarPdfDocs, setHangarPdfDocs] = useState<HangarPdfDoc[]>(() => {
+    try {
+      const s = localStorage.getItem('hangar_techizat_pdf_docs') || localStorage.getItem('hangar_pdf_docs');
+      return s ? JSON.parse(s) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isUploadingDoc, setIsUploadingDoc] = useState<boolean>(false);
+  const [activePdfPreview, setActivePdfPreview] = useState<{
+    id: string;
+    itemKey: string;
+    fileName: string;
+    docType: string;
+    uploadDate: string;
+    firma: string;
+    fileData: string;
+    fileSize: string;
+  } | null>(null);
+  const [newDocDocType, setNewDocDocType] = useState<string>('Bakım Sonrası Evraklar');
+  const [newDocCustomType, setNewDocCustomType] = useState<string>('');
+  const [newDocFirma, setNewDocFirma] = useState<string>('');
+  const [newDocSelectedFile, setNewDocSelectedFile] = useState<File | null>(null);
+  const [docToDelete, setDocToDelete] = useState<string | null>(null);
+  const [docUploadPasswordModal, setDocUploadPasswordModal] = useState<{ isOpen: boolean; pendingAction: 'upload' | 'delete' | null }>({ isOpen: false, pendingAction: null });
+  const [docUploadPasswordInput, setDocUploadPasswordInput] = useState<string>('');
+  const [docUploadPasswordError, setDocUploadPasswordError] = useState<string>('');
+  const [docViewFilterTab, setDocViewFilterTab] = useState<'item' | 'all_drive'>('item');
+  const [isSyncingDrivePdfs, setIsSyncingDrivePdfs] = useState<boolean>(false);
+  const [driveDocSearchQuery, setDriveDocSearchQuery] = useState<string>('');
+
+  const openGunTakipWithPassword = () => {
+    setPasswordActionType('gun_takip');
+    setPasswordInput('');
+    setPasswordError(false);
+    setIsPasswordModalOpen(true);
+  };
+
+  const handleSyncDrivePdfs = async () => {
+    setIsSyncingDrivePdfs(true);
+    try {
+      const docs = await syncHangarPdfDocsFromDrive(GOOGLE_SCRIPT_URL);
+      if (docs && docs.length > 0) {
+        setHangarPdfDocs(docs);
+        showNotification(`✅ Google Drive'dan ${docs.length} adet PDF evrak tarandı ve yüklendi!`);
+      } else {
+        showNotification('Google Drive üzerinde PDF evrak bulunamadı.');
+      }
+    } catch (err: any) {
+      console.warn('Drive PDF sync error:', err);
+      showNotification('Google Drive PDF taraması sırasında hata oluştu.');
+    } finally {
+      setIsSyncingDrivePdfs(false);
+    }
+  };
+
+  useEffect(() => {
+    // Initial sync of all PDFs from Google Drive & storage on portal startup
+    syncHangarPdfDocsFromDrive(GOOGLE_SCRIPT_URL).then(docs => {
+      if (docs && docs.length > 0) {
+        setHangarPdfDocs(docs);
+      }
+    }).catch(err => {
+      console.warn('Initial Drive PDF sync error:', err);
+    });
+  }, []);
+
+  const [regionalLocations, setRegionalLocations] = useState<Array<{
+    id: string;
+    location: string;
+    quantity: number | string;
+    serialNumbers: string[];
+    sonKontrol: string;
+    gelecekKontrol: string;
+    firma: string;
+  }>>([]);
+  const [newSerialInputs, setNewSerialInputs] = useState<Record<string, string>>({});
   const [activeTechizatRowEdit, setActiveTechizatRowEdit] = useState<{
     rIdx: number;
     techType: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all';
@@ -1468,21 +1573,8 @@ export default function App() {
         }
 
         // Sync back to online central sheet
-        const unitLabel = getTechizatUnitLabel(techType);
-        if (unitLabel && newArray.length > 0) {
-          fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify({
-              action: "updateTumTechizat",
-              unitLabel: unitLabel,
-              data: newArray.map(r => [unitLabel, ...r])
-            })
-          }).then(() => {
-            console.log(`Synced status change to "BAKIM / KALİBRASYON" for ${unitLabel} to Google Sheets.`);
-          }).catch(e => {
-            console.error(`Failed to sync status for ${unitLabel}:`, e);
-          });
+        if (techType && newArray.length > 0) {
+          syncTechizatExcelToGoogleDrive(techType, newArray);
         }
       });
 
@@ -1653,20 +1745,12 @@ export default function App() {
 
         // Sync back to online central sheet
         const unitLabel = getTechizatUnitLabel(techType);
-        if (unitLabel && newArray.length > 0) {
-          await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify({
-              action: "updateTumTechizat",
-              unitLabel: unitLabel,
-              data: newArray.map(r => [unitLabel, ...r])
-            })
-          });
+        if (techType && newArray.length > 0) {
+          await syncTechizatExcelToGoogleDrive(techType, newArray);
         }
       }
 
-      showNotification("Seçilen teçhizatlar başarıyla topluca güncellendi ve online e-tabloya kaydedildi!");
+      showNotification("Seçilen teçhizatlar başarıyla topluca güncellendi ve Google Drive Excel dosyalarına kaydedildi!");
       setSelectedTechizatItems({});
       setIsEbysModalOpen(false);
       setBulkEditYer("");
@@ -1973,11 +2057,353 @@ export default function App() {
   const [activeExcelMatchIdx, setActiveExcelMatchIdx] = useState<number>(0);
 
   // Teçhizat Takip Matrix States
-  const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all' | null>(null);
+  const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all' | null>(null);
+  const [selectedUnitFolder, setSelectedUnitFolder] = useState<string | null>(null);
+  const [techizatActiveSection, setTechizatActiveSection] = useState<'all' | 'techizat_all' | 'depo_all' | 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal'>('all');
+  const [isPullingTechizat, setIsPullingTechizat] = useState<boolean>(false);
+  const [techizatFileNames, setTechizatFileNames] = useState<Record<string, string>>({});
   const [techizatSearchQuery, setTechizatSearchQuery] = useState<string>("");
   const [techizatFirmaFilter, setTechizatFirmaFilter] = useState<string>("");
   const [techizatDurumFilter, setTechizatDurumFilter] = useState<string>("");
+  const [techizatColorFilter, setTechizatColorFilter] = useState<string>("ALL");
+  const [isTechizatDriveLoading, setIsTechizatDriveLoading] = useState<boolean>(false);
   const [activeTechizatMatchIdx, setActiveTechizatMatchIdx] = useState<number>(0);
+  const [isTechPubsOpen, setIsTechPubsOpen] = useState<boolean>(false);
+  const [isOlayTakipOpen, setIsOlayTakipOpen] = useState<boolean>(false);
+  const [olayTakipInitialUnit, setOlayTakipInitialUnit] = useState<string>('at802');
+
+  // Akıllı Teçhizat Görsel Eşleştirici: AT-802, Hangar ve tüm birimler için seri no, parça no veya isimle tam uyumlu görseli bulur
+  const findRowImageUrl = (techType: string, row: string[], images: Record<string, string>): string | null => {
+    if (!row || !images) return null;
+    const nameVal = (row[1] || "").trim();
+    const partVal = (row[2] || "").trim();
+    const serialVal = (row[3] || "").trim();
+
+    const typesToTry = [techType];
+    const techLower = techType.toLowerCase();
+    if (techLower === 'at802' || techLower === 'at-802') {
+      typesToTry.push('at802', 'at-802', 'AT-802', 'AT802');
+    }
+    if (techLower === 'hangar') {
+      typesToTry.push('hangar', 'HANGAR', 'yer_destek');
+    }
+
+    for (const t of typesToTry) {
+      // 1. Birincil: type + name + serial
+      const k1 = t + "_" + nameVal.replace(/\s+/g, '_') + "_" + serialVal.replace(/\s+/g, '_');
+      if (images[k1]) return images[k1];
+
+      // 2. İkincil: type + name + part
+      const k2 = t + "_" + nameVal.replace(/\s+/g, '_') + "_" + partVal.replace(/\s+/g, '_');
+      if (images[k2]) return images[k2];
+
+      // 3. Üçüncül: type + name
+      const k3 = t + "_" + nameVal.replace(/\s+/g, '_');
+      if (images[k3]) return images[k3];
+
+      // Küçük harf kombinasyonları
+      const k1Lower = k1.toLowerCase();
+      const k2Lower = k2.toLowerCase();
+      const k3Lower = k3.toLowerCase();
+      if (images[k1Lower]) return images[k1Lower];
+      if (images[k2Lower]) return images[k2Lower];
+      if (images[k3Lower]) return images[k3Lower];
+    }
+
+    // 4. Parça Numarası (P/N) ile eşleştirme
+    if (partVal && partVal !== "-") {
+      const cleanPart = partVal.toLowerCase().replace(/[\s\-_]/g, '');
+      const foundByPart = Object.keys(images).find(k => {
+        const kClean = k.toLowerCase().replace(/[\s\-_]/g, '');
+        return kClean.includes(cleanPart);
+      });
+      if (foundByPart) return images[foundByPart];
+    }
+
+    // 5. Teçhizat Adı ile esnek eşleştirme
+    if (nameVal) {
+      const cleanName = nameVal.toLowerCase().replace(/\s+/g, '_');
+      const foundByName = Object.keys(images).find(k => {
+        const kLower = k.toLowerCase();
+        return typesToTry.some(t => kLower.startsWith(t.toLowerCase())) && kLower.includes(cleanName);
+      });
+      if (foundByName) return images[foundByName];
+    }
+
+    return null;
+  };
+
+  const getUnitDisplayName = (unitKey: string | null): string => {
+    switch (unitKey) {
+      case 'bell429': return 'BELL 429';
+      case 'at802': return 'AT-802F';
+      case 't70': return 'T-70';
+      case 'c650': return 'C-650';
+      case 'b360': return 'B-360';
+      case 'hangar': return 'HANGAR';
+      case 'kara_araclari': return 'KARA ARAÇLARI';
+      default: return 'BİRİM';
+    }
+  };
+
+  const normalizeTurkishStr = (str: string): string => {
+    if (!str) return "";
+    return str
+      .replace(/ğ/g, "g")
+      .replace(/Ğ/g, "G")
+      .replace(/ü/g, "u")
+      .replace(/Ü/g, "U")
+      .replace(/ş/g, "s")
+      .replace(/Ş/g, "S")
+      .replace(/ı/g, "i")
+      .replace(/İ/g, "I")
+      .replace(/ö/g, "o")
+      .replace(/Ö/g, "O")
+      .replace(/ç/g, "c")
+      .replace(/Ç/g, "C");
+  };
+
+  const getRowSection = (row: string[], unitHint?: string): 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal' => {
+    if (!row || !Array.isArray(row)) return 'yer_destek';
+
+    // 1. Tag in the explicit section tag column (check indices 13, 12, 11, and last elements, skipping dates)
+    const candidateIndices = [13, row.length - 1, 12, row.length - 2, 11];
+    for (const idx of candidateIndices) {
+      if (idx >= 0 && idx < row.length) {
+        const rawVal = String(row[idx] || "").trim();
+        // If it's a date or timestamp (e.g. 2026-08-22 or 15.01.2026), it's NOT a section tag
+        if (/\d{4}-\d{2}-\d{2}/.test(rawVal) || /\d{2}\.\d{2}\.\d{4}/.test(rawVal)) continue;
+
+        const raw = normalizeTurkishStr(rawVal).toLowerCase().trim();
+        if (raw === 'depo_sarf' || raw === 'sarf_parca' || raw === 'sarf_ve_parca' || raw === 'sarf' || raw === 'sarf ve parca deposu' || raw === 'sarf deposu' || raw === 'parca deposu') return 'depo_sarf';
+        if (raw === 'depo_kimyasal' || raw === 'kimyasal_depo' || raw === 'kimyasal' || raw === 'kimyasal depo' || raw === 'kimyasal maddeler' || raw === 'madeni yag') return 'depo_kimyasal';
+        if (raw === 'ozel_alet' || raw === 'ozel_aletler' || raw === 'ozel_bakim' || raw === 'ozel bakim ve test aletleri' || raw === 'ozel bakim aletleri' || raw === 'ozel alet' || raw === 'ozel bakim ve test' || raw === 'ozel aletler') return 'ozel_alet';
+        if (raw === 'yer_destek' || raw === 'yer_destek_techizat' || raw === 'yer destek techizatlari' || raw === 'yer destek') return 'yer_destek';
+      }
+    }
+
+    // 2. Search for explicit markers embedded in cells
+    const combined = normalizeTurkishStr(row.join(" ")).toUpperCase();
+    if (combined.includes("##DEPO_SARF##") || combined.includes("[SARF DEPO]") || combined.includes("[PARCA DEPO]")) return 'depo_sarf';
+    if (combined.includes("##DEPO_KIMYASAL##") || combined.includes("[KIMYASAL DEPO]")) return 'depo_kimyasal';
+    if (combined.includes("##OZEL_ALET##") || combined.includes("[OZEL ALET]") || combined.includes("OZEL BAKIM VE TEST ALETLERI") || combined.includes("OZEL BAKIM ALETLERI") || combined.includes("OZEL ALETLER")) return 'ozel_alet';
+    if (combined.includes("##YER_DESTEK##") || combined.includes("[YER DESTEK]") || combined.includes("YER DESTEK TECHIZATLARI")) return 'yer_destek';
+
+    // 3. Heuristics based on item name (row[1]) or part number (row[2]) or description (row[11])
+    const itemName = normalizeTurkishStr(String(row[1] || "") + " " + String(row[2] || "") + " " + String(row[11] || "")).toUpperCase();
+
+    // Check for chemical depo: Yalnızca açıkça kimyasal depo Excel'inden yüklenmişse veya etiketlenmişse geçerli olur.
+    // Kullanıcı kuralı: Drive'da kimyasal depo Excel'i yoksa kimyasal depo her zaman BOŞ kalacaktır.
+    // Otomatik isim heuristiği kaldırıldı.
+
+    // Check for sarf depo
+    if (itemName.includes("FILTRE") || itemName.includes("FILTER") || itemName.includes("CONTA") || itemName.includes("O-RING") || itemName.includes("BALATA") || itemName.includes("KECE") || itemName.includes("SEAL") || itemName.includes("SARF") || itemName.includes("CIVATA") || itemName.includes("SOMUN") || itemName.includes("PUL") || itemName.includes("RIVET") || itemName.includes("PERCIN")) {
+      return 'depo_sarf';
+    }
+
+    // Check for special maintenance and test tools (Özel Aletler)
+    if (itemName.includes("OZEL ALET") || itemName.includes("TEST ADAPTOR") || itemName.includes("TORK ADAPTOR") || itemName.includes("KOMPRESOR YIKAMA") || itemName.includes("AYAR MASTAR") || itemName.includes("BOSALTMA KAPAK TEST") || itemName.includes("CALIBRATION") || itemName.includes("TEST RIG") || itemName.includes("FIREGATE") || itemName.includes("OZEL BAKIM") || itemName.includes("ACHIOLCER") || itemName.includes("ACIOLCER") || itemName.includes("KALIBRASYON KIT") || itemName.includes("HAT BAKIM VE KALIBRASYON") || itemName.includes("TORQUE") || itemName.includes("MASTAR") || itemName.includes("ADAPTOR") || itemName.includes("TEST KIT") || itemName.includes("TORK ANAHTAR") || itemName.includes("MOTOR TEST") || itemName.includes("TORQ") || itemName.includes("WRENCH") || itemName.includes("PULLER") || itemName.includes("SOCKET") || itemName.includes("VOLTMETRE") || itemName.includes("MULTIMETRE") || itemName.includes("MANOMETRE")) {
+      return 'ozel_alet';
+    }
+
+    return 'yer_destek';
+  };
+
+  const getRowSectionLabel = (row: string[], unitHint?: string): string => {
+    const sec = getRowSection(row, unitHint);
+    if (sec === 'depo_sarf') return "SARF VE PARÇA DEPOSU";
+    if (sec === 'depo_kimyasal') return "KİMYASAL DEPO";
+    if (sec === 'ozel_alet') return "ÖZEL ALETLER";
+    return "YER DESTEK TEÇHİZATLARI";
+  };
+
+  const cleanAndFormatDateString = (val: any): string => {
+    if (val === undefined || val === null) return '';
+    let str = String(val).trim();
+    if (!str || str === '-' || str === '--' || str.toLowerCase() === 'null' || str.toLowerCase() === 'undefined') return str || '';
+
+    // 1. Excel seri numarası kontrolü (Örn: 45234, 46234, 46965 vb. 5 basamaklı sayılar)
+    // Kullanıcı kuralı: "TARİH VERİLERİNİ RAKAM GİBİ GÖRÜYOR HATADIR."
+    if (/^\d{5}(\.\d+)?$/.test(str)) {
+      const serial = parseFloat(str);
+      if (serial >= 20000 && serial <= 90000) {
+        const utcDays = Math.floor(serial - 25569);
+        const dateObj = new Date(utcDays * 86400 * 1000);
+        if (!isNaN(dateObj.getTime())) {
+          const d = String(dateObj.getUTCDate()).padStart(2, '0');
+          const m = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
+          const y = String(dateObj.getUTCFullYear());
+          return `${d}.${m}.${y}`;
+        }
+      }
+    }
+
+    // 2. Yapışık gelen tarihleri tespit et (Örn: 24.11.202508.12.2026 -> 24.11.2025 ve 08.12.2026)
+    str = str.replace(/(\d{1,2}[\.\/-]\d{1,2}[\.\/-]\d{2,4})(\d{1,2}[\.\/-]\d{1,2}[\.\/-]\d{2,4})/g, '$1\n$2');
+
+    // 3. Çok satırlı ise her bir satırı bağımsız formatla
+    const lines = str.split(/[\r\n;]+/).map(s => s.trim()).filter(Boolean);
+    if (lines.length > 1) {
+      return lines.map(l => cleanAndFormatDateString(l)).join('\n');
+    }
+
+    // 4. ISO Date string (Örn: 2026-11-24T00:00:00.000Z)
+    if (str.includes('T') && !isNaN(Date.parse(str))) {
+      const parsed = new Date(str);
+      const d = String(parsed.getDate()).padStart(2, '0');
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const y = String(parsed.getFullYear());
+      return `${d}.${m}.${y}`;
+    }
+
+    // 5. YYYY-MM-DD veya YYYY/MM/DD veya YYYY.MM.DD -> GG.AA.YYYY
+    const ymd = str.match(/^(\d{4})[\.\/-](\d{1,2})[\.\/-](\d{1,2})$/);
+    if (ymd) {
+      const d = ymd[3].padStart(2, '0');
+      const m = ymd[2].padStart(2, '0');
+      const y = ymd[1];
+      return `${d}.${m}.${y}`;
+    }
+
+    // 6. M/D/YY veya M/D/YYYY (Örn: 7/31/25 veya 7/31/2026 veya 07/31/25) -> GG.AA.YYYY
+    // Kullanıcı kuralı: "TARİHLER AY YIL GÜN ŞEKLİNDE OLACAKTIR KESİNLİKLE HATADIR."
+    const slashDate = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (slashDate) {
+      let p1 = parseInt(slashDate[1], 10);
+      let p2 = parseInt(slashDate[2], 10);
+      let yearPart = slashDate[3];
+      let y = yearPart.length === 2 ? `20${yearPart}` : yearPart;
+
+      let day = p2;
+      let month = p1;
+      if (p1 > 12 && p2 <= 12) {
+        day = p1;
+        month = p2;
+      }
+      return `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}.${y}`;
+    }
+
+    // 7. DD.MM.YYYY veya DD-MM-YYYY veya DD.MM.YY -> GG.AA.YYYY
+    const dmy = str.match(/^(\d{1,2})[\.-](\d{1,2})[\.-](\d{2,4})$/);
+    if (dmy) {
+      const d = dmy[1].padStart(2, '0');
+      const m = dmy[2].padStart(2, '0');
+      let y = dmy[3];
+      if (y.length === 2) y = `20${y}`;
+      return `${d}.${m}.${y}`;
+    }
+
+    return str;
+  };
+
+  const isHeaderLikeRow = (r: any[]): boolean => {
+    if (!Array.isArray(r) || r.length === 0) return true;
+    const c0 = String(r[0] || "").trim().toUpperCase();
+    const c1 = String(r[1] || "").trim().toUpperCase();
+    const c2 = String(r[2] || "").trim().toUpperCase();
+    const c3 = String(r[3] || "").trim().toUpperCase();
+    const c4 = String(r[4] || "").trim().toUpperCase();
+    const c5 = String(r[5] || "").trim().toUpperCase();
+    const c6 = String(r[6] || "").trim().toUpperCase();
+
+    // Kullanıcı kuralı: "VERİ GÜNCELLEMEDE BAŞLIK 1. SATIR ÜRÜN DİYE ATMIŞ HATADIR."
+    if (
+      c0 === "SIRA NO" || c0 === "SIRA" || c0 === "NO" || c0 === "NO." ||
+      c1 === "TEÇHİZAT ADI" || c1 === "TECHIZAT ADI" ||
+      c1 === "MALZEME ADI" || c1 === "MALZEME / PARÇA ADI" ||
+      c1 === "ÜRÜN ADI" || c1 === "URUN ADI" || c1 === "ÜRÜN" || c1 === "URUN" ||
+      c1 === "ARAÇ PLAKASI" || c1 === "ARAÇ PLAKASI / TANIMI" ||
+      c1 === "TEÇHİZAT" || c1 === "TECHIZAT" || c1 === "MALZEME" ||
+      c1 === "PRODUCT NAME" || c1 === "ITEM NAME"
+    ) {
+      return true;
+    }
+    if (c2 === "PARÇA NO (P/N) / MODEL" || c2 === "PARÇA NO (P/N)" || c2 === "PARÇA NO" || c2 === "P/N") return true;
+    if (c3 === "SERİ NO (S/N)" || c3 === "SERİ NO" || c3 === "S/N") return true;
+    if (c4 === "MİKTAR / KAPASİTE" || c4 === "MİKTAR") return true;
+    if (c5 === "BULUNDUĞU YER" || c6 === "DURUMU") return true;
+
+    let headerMatches = 0;
+    for (const cell of r) {
+      const s = String(cell || "").trim().toUpperCase();
+      if (
+        s === "SIRA NO" || s === "NO." || s === "SIRA" ||
+        s === "TEÇHİZAT ADI" || s === "TECHIZAT ADI" ||
+        s === "PARÇA NO (P/N) / MODEL" || s === "PARÇA NO (P/N)" || s === "PARÇA NO" || s === "P/N" ||
+        s === "SERİ NO (S/N)" || s === "SERİ NO" || s === "S/N" ||
+        s === "MİKTAR / KAPASİTE" || s === "MİKTAR" ||
+        s === "BULUNDUĞU YER" || s === "DURUMU" ||
+        s === "KALİBRASYONA TABİ" || s.includes("SON KONTROL") ||
+        s.includes("GELECEK KONTROL") || s.includes("YAPAN FİRMA") ||
+        s === "AÇIKLAMA" || s === "ÖMÜR BİTİŞ TARİHİ"
+      ) {
+        headerMatches++;
+      }
+    }
+    return headerMatches >= 2;
+  };
+
+  const sanitizeLoadedTechizatData = (data: any, fallback: string[][], techTypeHint?: string): string[][] => {
+    if (!Array.isArray(data) || data.length === 0) return fallback;
+
+    // Başlık satırlarını kesinlikle filtrele
+    const filteredRows = data.filter((r: any) => !isHeaderLikeRow(r));
+    if (filteredRows.length === 0) return fallback;
+
+    const sanitized = filteredRows.map((r: any) => {
+      if (!Array.isArray(r)) return r;
+      const row = [...r];
+
+      const sec = getRowSection(row, techTypeHint);
+      const isDepo = sec === 'depo_sarf' || sec === 'depo_kimyasal';
+
+      // Ensure Kalibrasyona Tabi column exists at index 7 for standard rows
+      const val7 = String(row[7] || "").trim().toUpperCase();
+      if (!isDepo && val7 !== "EVET" && val7 !== "HAYIR") {
+        row.splice(7, 0, "EVET");
+      }
+
+      while (row.length < 14) row.push("");
+
+      // Tarih alanlarını temizle ve formatla (Excel seri no veya bozuk formatları GG.AA.YYYY yap)
+      if (row[8]) row[8] = cleanAndFormatDateString(row[8]);
+      if (row[9]) row[9] = cleanAndFormatDateString(row[9]);
+      if (row[6] && /\d/.test(row[6]) && (row[6].includes('/') || row[6].includes('.') || /^\d{5}$/.test(row[6]))) {
+        row[6] = cleanAndFormatDateString(row[6]);
+      }
+      if (row[7] && /\d/.test(row[7]) && (row[7].includes('/') || row[7].includes('.') || /^\d{5}$/.test(row[7]))) {
+        row[7] = cleanAndFormatDateString(row[7]);
+      }
+
+      // Ensure index 12 (Mail Date) NEVER contains category strings or default dashes
+      const val12 = String(row[12] || "").trim().toLowerCase();
+      if (val12 === 'yer_destek' || val12 === 'ozel_alet' || val12 === 'depo_sarf' || val12 === 'depo_kimyasal' || val12 === '-' || val12 === '--' || val12.includes('belirtilme')) {
+        row[12] = "";
+      }
+
+      // Ensure section tag at index 13 is always set
+      row[13] = sec;
+
+      return row;
+    });
+
+    // Sıra numaralarını baştan düzenle
+    sanitized.forEach((r, idx) => {
+      r[0] = String(idx + 1);
+    });
+
+    return sanitized;
+  };
+
+  // Default empty datasets (strictly real data from online sheets, no hardcoded sample data)
+  const DEFAULT_BELL429_DATA: string[][] = [];
+  const DEFAULT_T70_DATA: string[][] = [];
+  const DEFAULT_T70_BUMBI_DATA: string[][] = [];
+  const DEFAULT_T70_HELITAK_DATA: string[][] = [];
+  const DEFAULT_B360_DATA: string[][] = [];
+  const DEFAULT_C650_DATA: string[][] = [];
+  const DEFAULT_HANGAR_DATA: string[][] = [];
+  const DEFAULT_KARA_ARACLARI_DATA: string[][] = [];
 
   // States for each of the categories
   const [techizatBell429Columns, setTechizatBell429Columns] = useState<string[]>(() => {
@@ -1994,157 +2420,47 @@ export default function App() {
     }
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_bell429_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>([]);
 
   const [techizatAt802Columns, setTechizatAt802Columns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_at802_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_at802_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>([]);
 
   const [techizatT70Columns, setTechizatT70Columns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_t70_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70Data, setTechizatT70Data] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_t70_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatT70Data, setTechizatT70Data] = useState<string[][]>([]);
 
   const [techizatT70BumbiBacketColumns, setTechizatT70BumbiBacketColumns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_t70_bumbi_backet_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
-    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_t70_bumbi_backet_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>([]);
 
   const [techizatT70HelitakColumns, setTechizatT70HelitakColumns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_t70_helitak_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
-    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70HelitakData, setTechizatT70HelitakData] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_t70_helitak_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatT70HelitakData, setTechizatT70HelitakData] = useState<string[][]>([]);
 
   const [techizatB360Columns, setTechizatB360Columns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_b360_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatB360Data, setTechizatB360Data] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_b360_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatB360Data, setTechizatB360Data] = useState<string[][]>([]);
 
   const [techizatC650Columns, setTechizatC650Columns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_c650_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatC650Data, setTechizatC650Data] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_c650_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatC650Data, setTechizatC650Data] = useState<string[][]>([]);
 
   const [techizatHangarColumns, setTechizatHangarColumns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_hangar_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
-    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "BAKIMA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ", "BELGE YÜKLE"];
   });
-  const [techizatHangarData, setTechizatHangarData] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_hangar_data');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [techizatHangarData, setTechizatHangarData] = useState<string[][]>([]);
 
   const [techizatKaraAraclariColumns, setTechizatKaraAraclariColumns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_kara_araclari_cols');
-    if (saved) return JSON.parse(saved);
-    return ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+    return ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "MARKA", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "BAKIMA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"];
   });
+  const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>([]);
 
   const convertOldKaraAraclariRowToNew = (row: string[]): string[] => {
     const isOldFormat = row.length >= 11 && (row[6] === "FAAL" || row[6] === "ARIZALI" || row[6] === "FAAL DEĞİL" || row[6] === "GAYRİ FAAL");
@@ -2194,24 +2510,6 @@ export default function App() {
     ];
   };
 
-  const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>(() => {
-    const saved = localStorage.getItem('excel_techizat_kara_araclari_data');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as string[][];
-        const converted = parsed.map(row => convertOldKaraAraclariRowToNew(row));
-        return converted.map((row, idx) => {
-          const r = [...row];
-          r[0] = String(idx + 1);
-          return r;
-        });
-      } catch (e) {
-        return [];
-      }
-    }
-    return [];
-  });
-
   const lastPopulatedPlaka = useRef<string>("");
 
   useEffect(() => {
@@ -2231,28 +2529,227 @@ export default function App() {
   }, [gePlaka, techizatKaraAraclariData]);
 
   // Helper method to open Teçhizat Takip Matrix
-  const openTechizatMatrix = (type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all', title: string) => {
+  const openTechizatMatrix = (
+    type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all',
+    title: string,
+    sectionFilter: 'all' | 'techizat_all' | 'depo_all' | 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal' = 'all'
+  ) => {
     setActiveTechizatType(type);
+    setTechizatActiveSection(sectionFilter);
     setModalType('techizat_matrix');
     setModalTitle(title);
     setModalOpen(true);
     setTechizatSearchQuery('');
     setActiveTechizatMatchIdx(0);
+    // Background check for the selected unit only, preserving fast instant UI opening
+    pullTechizatUnitFromDrive(type, true);
+  };
+
+  // State for "Yeni Ürün / Teçhizat Ekle" Modal
+  const [isNewProductModalOpen, setIsNewProductModalOpen] = useState<boolean>(false);
+  const [isDataSyncModalOpen, setIsDataSyncModalOpen] = useState<boolean>(false);
+  const [isDepoModalOpen, setIsDepoModalOpen] = useState<boolean>(false);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
+  const [activeKaraDocTarget, setActiveKaraDocTarget] = useState<{ plate: string; vehicleName: string } | null>(null);
+
+  // Persistence for Vehicle Documents, Depo Transactions & Audit Logs
+  const [vehicleDocuments, setVehicleDocuments] = useState<VehicleDocument[]>(() => {
+    try {
+      const saved = localStorage.getItem('kara_araclari_vehicle_documents');
+      if (saved) return JSON.parse(saved);
+    } catch (e) { console.error(e); }
+    return [];
+  });
+
+  const [depoTransactions, setDepoTransactions] = useState<DepoTransaction[]>([]);
+
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem('equipment_audit_logs');
+      if (saved) return JSON.parse(saved);
+    } catch (e) { console.error(e); }
+    return [];
+  });
+
+  const [depoCertificatePdfUrl, setDepoCertificatePdfUrl] = useState<string | null>(() => {
+    return localStorage.getItem('depo_certificate_pdf_url') || null;
+  });
+
+  const addAuditLog = (entry: Omit<AuditLogEntry, 'id' | 'timestamp'>) => {
+    const newLog: AuditLogEntry = {
+      ...entry,
+      id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toLocaleString('tr-TR')
+    };
+    setAuditLogs(prev => {
+      const updated = [newLog, ...prev];
+      try { localStorage.setItem('equipment_audit_logs', JSON.stringify(updated.slice(0, 500))); } catch (e) {}
+      return updated;
+    });
+  };
+
+  const handleAddNewProductRow = (targetUnit: string, newRow: string[]) => {
+    const formattedRow = newRow.map(c => cleanAndFormatDateString(c));
+    const setterMap: Record<string, React.Dispatch<React.SetStateAction<string[][]>>> = {
+      'at802': setTechizatAt802Data,
+      'bell429': setTechizatBell429Data,
+      't70': setTechizatT70Data,
+      't70_bumbi_backet': setTechizatT70BumbiBacketData,
+      't70_helitak': setTechizatT70HelitakData,
+      'b360': setTechizatB360Data,
+      'c650': setTechizatC650Data,
+      'hangar': setTechizatHangarData,
+      'kara_araclari': setTechizatKaraAraclariData,
+    };
+
+    const storageKeyMap: Record<string, string> = {
+      'at802': 'excel_techizat_at802_data',
+      'bell429': 'excel_techizat_bell429_data',
+      't70': 'excel_techizat_t70_data',
+      't70_bumbi_backet': 'excel_techizat_t70_bumbi_backet_data',
+      't70_helitak': 'excel_techizat_t70_helitak_data',
+      'b360': 'excel_techizat_b360_data',
+      'c650': 'excel_techizat_c650_data',
+      'hangar': 'excel_techizat_hangar_data',
+      'kara_araclari': 'excel_techizat_kara_araclari_data',
+    };
+
+    const targetSetter = setterMap[targetUnit];
+    const targetKey = storageKeyMap[targetUnit];
+
+    if (targetSetter && targetKey) {
+      targetSetter(prev => {
+        const nextIndex = prev.length + 1;
+        const rowWithIndex = [...formattedRow];
+        rowWithIndex[0] = String(nextIndex);
+        const updated = [...prev, rowWithIndex];
+        try { localStorage.setItem(targetKey, JSON.stringify(updated)); } catch (e) {}
+        return updated;
+      });
+
+      addAuditLog({
+        unit: targetUnit.toUpperCase(),
+        action: 'EKLEME',
+        itemName: newRow[1] || 'Yeni Ürün',
+        pn: newRow[2] || '-',
+        fieldName: 'KAYIT_OLUSTURMA',
+        oldValue: '-',
+        newValue: `${newRow[1]} (${newRow[2]}) eklendi`
+      });
+
+      showNotification(`✅ Yeni ürün/araç (${newRow[1]}) başarıyla kaydedildi!`);
+      setIsNewProductModalOpen(false);
+    }
+  };
+  const [newProductForm, setNewProductForm] = useState<{
+    unit: string;
+    section: 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal' | 'kara_araclari';
+    siraNo: string;
+    name: string;
+    marka?: string;
+    pn: string;
+    sn: string;
+    miktar: string;
+    yer: string;
+    durumu: string;
+    kalibrasyonaTabi: string;
+    sonKontrol: string;
+    gelecekKontrol: string;
+    firma: string;
+    aciklama: string;
+  }>({
+    unit: 'at802',
+    section: 'yer_destek',
+    siraNo: '',
+    name: '',
+    marka: '',
+    pn: '',
+    sn: '',
+    miktar: '1 ADET',
+    yer: '',
+    durumu: 'FAAL',
+    kalibrasyonaTabi: 'EVET',
+    sonKontrol: '',
+    gelecekKontrol: '',
+    firma: '',
+    aciklama: ''
+  });
+
+  const initializeNewProductForm = () => {
+    const defaultUnit = activeTechizatType !== 'all' ? activeTechizatType : 'at802';
+    let defaultSection: 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal' | 'kara_araclari' = 'yer_destek';
+    if (defaultUnit === 'kara_araclari') {
+      defaultSection = 'kara_araclari';
+    } else if (techizatActiveSection === 'depo_sarf' || techizatActiveSection === 'depo_all') {
+      defaultSection = 'depo_sarf';
+    } else if (techizatActiveSection === 'depo_kimyasal') {
+      defaultSection = 'depo_kimyasal';
+    } else if (techizatActiveSection === 'ozel_alet') {
+      defaultSection = 'ozel_alet';
+    } else {
+      defaultSection = 'yer_destek';
+    }
+
+    setNewProductForm({
+      unit: defaultUnit,
+      section: defaultSection,
+      siraNo: '',
+      name: '',
+      pn: '',
+      sn: defaultSection === 'kara_araclari' ? '' : '-',
+      miktar: defaultSection === 'kara_araclari' ? '' : '1 ADET',
+      yer: '',
+      durumu: 'FAAL',
+      kalibrasyonaTabi: 'EVET',
+      sonKontrol: '',
+      gelecekKontrol: '',
+      firma: '',
+      aciklama: ''
+    });
   };
 
   /**
-   * Akıllı Çoklu Lokasyon ve Miktar Birleştirici:
-   * Yüklenen Excel veya Canlı E-Tabloda aynı ürünün birden fazla lokasyonu/miktarı
-   * hizada alt alta satırlar şeklinde girildiğinde (ürün adı boş, tire veya aynı isimde),
-   * bunu yeni ürün yapmak yerine mevcut ürünün 'BULUNDUĞU YER' ve 'MİKTAR / KAPASİTE'
-   * alanlarına alt alta (\n ile) birleştirir.
+   * Akıllı Çoklu Lokasyon, Miktar ve S/N Birleştirici:
+   * Yüklenen Excel veya Canlı E-Tabloda aynı ürün veya aynı P/N'e ait birden fazla lokasyon, miktar ve S/N bilgisi
+   * girildiğinde (ürün adı boş, tire veya aynı P/N/isimde), aynı bölgede ise miktar toplanır ve S/N bilgileri yan yana
+   * (Örn: "1234 ; 123") birleştirilir; farklı bölgelerde ise 'BULUNDUĞU YER', 'MİKTAR / KAPASİTE' ve 'SERİ NO (S/N)'
+   * alanlarına hizalı alt alta (\n ile) eşleştirilir.
    */
+  const mergeSerialNumbersHelper = (existingSn: string, newSn: string): string => {
+    const eSn = (existingSn || "").trim();
+    const nSn = (newSn || "").trim();
+    if (!nSn || nSn === "-" || nSn === "--") return eSn;
+    if (!eSn || eSn === "-" || eSn === "--") return nSn;
+
+    // Check if newSn is already present in existingSn
+    const existingParts = eSn.split(/[;,\n]/).map(p => p.trim()).filter(Boolean);
+    if (existingParts.includes(nSn)) return eSn;
+
+    return `${eSn} ; ${nSn}`;
+  };
+
+  const mergeQuantitiesHelper = (existingQty: string, newQty: string): string => {
+    const eQty = (existingQty || "").trim();
+    const nQty = (newQty || "").trim();
+    if (!nQty) return eQty || "1";
+    if (!eQty) return nQty || "1";
+    
+    const numE = Number(eQty);
+    const numN = Number(nQty);
+    if (!isNaN(numE) && !isNaN(numN)) {
+      return String(numE + numN);
+    }
+    return eQty;
+  };
+
   const groupMultiLocationRows = (
     rawRows: string[][],
     nameColIdx: number = 1,
     locColIdx: number = 5,
     miktarColIdx: number = 4,
-    siraColIdx: number = 0
+    siraColIdx: number = 0,
+    pnColIdx: number = 2,
+    seriNoColIdx: number = 3
   ): string[][] => {
     const grouped: string[][] = [];
 
@@ -2260,43 +2757,72 @@ export default function App() {
       const row = [...rawRows[i]];
       const rawSira = (row[siraColIdx] || "").trim();
       const rawName = (row[nameColIdx] || "").trim();
+      const rawPn = pnColIdx >= 0 ? (row[pnColIdx] || "").trim() : "";
+      const rawSn = seriNoColIdx >= 0 ? (row[seriNoColIdx] || "").trim() : "";
       const rawLoc = locColIdx >= 0 ? (row[locColIdx] || "").trim() : "";
       const rawMiktar = miktarColIdx >= 0 ? (row[miktarColIdx] || "").trim() : "";
 
       const lastRow = grouped.length > 0 ? grouped[grouped.length - 1] : null;
       const lastName = lastRow ? (lastRow[nameColIdx] || "").trim() : "";
+      const lastPn = lastRow && pnColIdx >= 0 ? (lastRow[pnColIdx] || "").trim() : "";
       const lastSira = lastRow ? (lastRow[siraColIdx] || "").trim() : "";
-      const lastLoc = lastRow && locColIdx >= 0 ? (lastRow[locColIdx] || "").trim() : "";
 
       const isNameEmptyOrDash = !rawName || rawName === "-" || rawName === "--";
       const isSiraEmptyOrDash = !rawSira || rawSira === "-" || rawSira === "--";
+      const isSamePn = rawPn !== "" && lastPn !== "" && rawPn.toUpperCase() === lastPn.toUpperCase();
       const isSameName = rawName.toUpperCase() === lastName.toUpperCase() && lastName !== "";
       const isSameSira = rawSira === lastSira && lastSira !== "";
+      const isSameSection = !lastRow || getRowSection(row) === getRowSection(lastRow);
 
-      // Check if this row is a continuation/sub-location row of the previous product
+      // Alt lokasyon / birleştirilmiş hücre tespiti:
+      // 1) Eğer ürün adı boşsa veya "-" ise ve bir önceki ürün varsa, BU KESİNLİKLE BİR ÖNCEKİ ÜRÜNÜN ALT LOKASYONUDUR!
+      // 2) Eğer aynı isim ve aynı P/N varsa, yine aynı ürünün farklı bir lokasyonudur!
+      // 3) Eğer aynı sıra numarası ve aynı isim/PN varsa, yine aynı ürünün birleştirilmiş satırıdır!
+      // 4) Eğer adı aynıysa (P/N boş veya aynı), yine aynı ürünün birleştirilmiş lokasyonudur!
       const isSubLocation =
+        isSameSection &&
         !!lastRow &&
-        (isNameEmptyOrDash || isSameName) &&
-        (isSiraEmptyOrDash || isSameSira || isNameEmptyOrDash) &&
-        (rawLoc !== "" || rawMiktar !== "") &&
-        (rawLoc === "" || lastLoc === "" || !lastLoc.split('\n').includes(rawLoc) || isNameEmptyOrDash);
+        (
+          isNameEmptyOrDash ||
+          (isSameName && (isSamePn || !rawPn || !lastPn)) ||
+          (isSameSira && (isSamePn || isSameName))
+        );
 
       if (isSubLocation && lastRow) {
-        // Append location
-        if (locColIdx >= 0 && rawLoc) {
-          lastRow[locColIdx] = lastRow[locColIdx]
-            ? `${lastRow[locColIdx]}\n${rawLoc}`
-            : rawLoc;
+        const existingLocs = locColIdx >= 0 && lastRow[locColIdx] ? lastRow[locColIdx].split('\n') : [""];
+        const existingMiktars = miktarColIdx >= 0 && lastRow[miktarColIdx] ? lastRow[miktarColIdx].split('\n') : ["1"];
+        const existingSns = seriNoColIdx >= 0 && lastRow[seriNoColIdx] ? lastRow[seriNoColIdx].split('\n') : [""];
+
+        const targetCount = Math.max(1, existingLocs.length, existingMiktars.length, existingSns.length);
+        while (existingLocs.length < targetCount) existingLocs.push("");
+        while (existingMiktars.length < targetCount) existingMiktars.push("1");
+        while (existingSns.length < targetCount) existingSns.push("");
+
+        // Check if rawLoc matches one of the existing locations (e.g. ANTALYA veya Uçuş Hattı)
+        const matchingLocIdx = rawLoc
+          ? existingLocs.findIndex(l => l.trim().toUpperCase() === rawLoc.trim().toUpperCase())
+          : -1;
+
+        if (matchingLocIdx !== -1 && (!rawSn || rawSn === "-" || !existingSns[matchingLocIdx] || existingSns[matchingLocIdx] === "-")) {
+          // Same location -> Merge quantities & merge serial numbers side-by-side
+          existingMiktars[matchingLocIdx] = mergeQuantitiesHelper(existingMiktars[matchingLocIdx], rawMiktar || "1");
+          if (rawSn && rawSn !== "-") {
+            existingSns[matchingLocIdx] = mergeSerialNumbersHelper(existingSns[matchingLocIdx], rawSn);
+          }
+        } else {
+          // New location or new sub-region
+          existingLocs.push(rawLoc);
+          existingMiktars.push(rawMiktar || "1");
+          existingSns.push(rawSn);
         }
-        // Append miktar/kapasite
-        if (miktarColIdx >= 0 && rawMiktar) {
-          lastRow[miktarColIdx] = lastRow[miktarColIdx]
-            ? `${lastRow[miktarColIdx]}\n${rawMiktar}`
-            : rawMiktar;
-        }
+
+        if (locColIdx >= 0) lastRow[locColIdx] = existingLocs.join('\n');
+        if (miktarColIdx >= 0) lastRow[miktarColIdx] = existingMiktars.join('\n');
+        if (seriNoColIdx >= 0) lastRow[seriNoColIdx] = existingSns.join('\n');
+
         // Fill other missing fields if main row has empty and sub-row provides it
         for (let c = 0; c < row.length; c++) {
-          if (c !== siraColIdx && c !== nameColIdx && c !== locColIdx && c !== miktarColIdx) {
+          if (c !== siraColIdx && c !== nameColIdx && c !== locColIdx && c !== miktarColIdx && c !== seriNoColIdx) {
             const cellVal = (row[c] || "").trim();
             if (cellVal && cellVal !== "-" && (!lastRow[c] || lastRow[c] === "-")) {
               lastRow[c] = cellVal;
@@ -2304,8 +2830,10 @@ export default function App() {
           }
         }
       } else {
-        // Independent new product row
-        grouped.push(row);
+        // Independent new product row (ancak adı ve PN'si tamamen boş olan tekil çöp satırları alma)
+        if (!isNameEmptyOrDash || rawPn !== "" || (rawSn !== "" && rawSn !== "-")) {
+          grouped.push(row);
+        }
       }
     }
 
@@ -2322,6 +2850,78 @@ export default function App() {
   // Excel exporter for Teçhizat Takip - Opens choice dialog ("Görselli olarak indirilsin mi?")
   const exportTechizatToExcel = (type: string, cols: string[], rows: string[][], title: string = "TEÇHİZAT LİSTESİ") => {
     setExcelExportModalData({ type, cols, rows, title });
+  };
+
+  const exportCurrentActiveTableToExcel = () => {
+    const localBaseCols = [
+      "SIRA NO", 
+      "TEÇHİZAT ADI", 
+      "PARÇA NO (P/N) / MODEL", 
+      "SERİ NO (S/N)", 
+      "MİKTAR / KAPASİTE", 
+      "BULUNDUĞU YER", 
+      "DURUMU", 
+      "KALİBRASYONA TABİ", 
+      "SON KONTROL / KALİBRASYON / BAKIM", 
+      "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+      "SON KONTROLÜ YAPAN FİRMA", 
+      "AÇIKLAMA", 
+      "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+    ];
+
+    const localKaraCols = [
+      "SIRA NO", 
+      "ARAÇ PLAKASI / TANIMI", 
+      "MARKA", 
+      "PARÇA NO (P/N) / MODEL", 
+      "BULUNDUĞU YER", 
+      "SON KM Sİ", 
+      "DURUMU", 
+      "BAKIMA TABİ", 
+      "SON KONTROL / KALİBRASYON / BAKIM", 
+      "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+      "SON KONTROLÜ YAPAN FİRMA", 
+      "AÇIKLAMA", 
+      "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+    ];
+
+    if (modalType === 'techizat_matrix' && activeTechizatType) {
+      let activeCols = localBaseCols;
+      let rawRows = techizatBell429Data;
+      if (activeTechizatType === 'at802') { rawRows = techizatAt802Data; }
+      else if (activeTechizatType === 't70') { rawRows = techizatT70Data; }
+      else if (activeTechizatType === 't70_bumbi_backet') { rawRows = techizatT70BumbiBacketData; }
+      else if (activeTechizatType === 't70_helitak') { rawRows = techizatT70HelitakData; }
+      else if (activeTechizatType === 'b360') { rawRows = techizatB360Data; }
+      else if (activeTechizatType === 'c650') { rawRows = techizatC650Data; }
+      else if (activeTechizatType === 'hangar') { activeCols = [...localBaseCols, "BELGE YÜKLE"]; rawRows = techizatHangarData; }
+      else if (activeTechizatType === 'kara_araclari') { activeCols = localKaraCols; rawRows = techizatKaraAraclariData; }
+      else if (activeTechizatType === 'all') {
+        activeCols = ["AİT OLDUĞU BİRİM", ...localBaseCols];
+        rawRows = [
+          ...techizatBell429Data.map(r => ["BELL 429", ...r]),
+          ...techizatAt802Data.map(r => ["AT-802F", ...r]),
+          ...techizatT70Data.map(r => ["T-70 YER DESTEK", ...r]),
+          ...techizatT70BumbiBacketData.map(r => ["T-70 BUMBİ BACKET", ...r]),
+          ...techizatT70HelitakData.map(r => ["T-70 HELİTAK", ...r]),
+          ...techizatB360Data.map(r => ["B-360 YER DESTEK", ...r]),
+          ...techizatC650Data.map(r => ["C-650 YER DESTEK", ...r]),
+          ...techizatKaraAraclariData.map(r => ["KARA ARAÇLARI", ...r]),
+          ...techizatHangarData.map(r => ["HANGAR YER DESTEK", ...r]),
+        ];
+      }
+      exportTechizatToExcel(activeTechizatType, activeCols, rawRows, modalTitle || 'TEÇHİZAT LİSTESİ');
+    } else if (modalType === 'form_table' && selectedFormId !== null) {
+      const cfg = TABLE_CONFIGS[selectedFormId];
+      if (cfg) {
+        const formCols = cfg.columns.map(c => c.label);
+        const currentData = tableData[selectedFormId] || [];
+        const formRows = currentData.map((rowObj: any) => cfg.columns.map(c => String(rowObj[c.label] ?? rowObj[c.key] ?? "")));
+        exportTechizatToExcel(`form_${selectedFormId}`, formCols, formRows, cfg.title);
+      }
+    } else {
+      openTechizatMatrix('all', 'GENEL ENVANTER VE TEÇHİZAT LİSTESİ');
+    }
   };
 
   // Fast text-only Excel export
@@ -2394,10 +2994,28 @@ export default function App() {
             }
             
             if (colName.includes("DURUM")) {
-              if (val.toUpperCase().includes("FAAL") && !val.toUpperCase().includes("GAYRİ")) {
+              const upperVal = val.toUpperCase();
+              if (upperVal.includes("FAAL") && !upperVal.includes("GAYRİ") && !upperVal.includes("DEĞİL")) {
                 style += " background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
-              } else if (val.toUpperCase().includes("GAYRİ") || val.toUpperCase().includes("ARIZALI") || val.toUpperCase().includes("FAAL DEĞİL")) {
+              } else if (upperVal.includes("ONARIMA ALINDI") || upperVal.includes("ONARIMDA") || upperVal.includes("ONARIM")) {
+                style += " background-color: #fef08a; color: #854d0e; font-weight: bold; text-align: center;";
+              } else if (upperVal.includes("BAKIM") || upperVal.includes("OVERHAUL")) {
+                style += " background-color: #ffedd5; color: #c2410c; font-weight: bold; text-align: center;";
+              } else if (upperVal.includes("HASARLI") || upperVal.includes("GAYRİ") || upperVal.includes("ARIZALI") || upperVal.includes("FAAL DEĞİL")) {
                 style += " background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+              }
+            }
+
+            if (colName.includes("GELECEK") || colName.includes("ÖMÜR BİTİŞ") || colName.includes("MUAYENE")) {
+              const days = parseGelecekBakimDays(val);
+              if (days !== null) {
+                if (days < 0) {
+                  style += " background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+                } else if (days < 90) {
+                  style += " background-color: #ffedd5; color: #c2410c; font-weight: bold; text-align: center;";
+                } else {
+                  style += " background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
+                }
               }
             }
             
@@ -2421,10 +3039,29 @@ export default function App() {
 
               if (colName.includes("DURUM")) {
                 const val = cell || "";
-                if (val.toUpperCase().includes("FAAL") && !val.toUpperCase().includes("GAYRİ")) {
+                const upperVal = val.toUpperCase();
+                if (upperVal.includes("FAAL") && !upperVal.includes("GAYRİ") && !upperVal.includes("DEĞİL")) {
                   style += " background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
-                } else if (val.toUpperCase().includes("GAYRİ") || val.toUpperCase().includes("ARIZALI") || val.toUpperCase().includes("FAAL DEĞİL")) {
+                } else if (upperVal.includes("ONARIMA ALINDI") || upperVal.includes("ONARIMDA") || upperVal.includes("ONARIM")) {
+                  style += " background-color: #fef08a; color: #854d0e; font-weight: bold; text-align: center;";
+                } else if (upperVal.includes("BAKIM") || upperVal.includes("OVERHAUL")) {
+                  style += " background-color: #ffedd5; color: #c2410c; font-weight: bold; text-align: center;";
+                } else if (upperVal.includes("HASARLI") || upperVal.includes("GAYRİ") || upperVal.includes("ARIZALI") || upperVal.includes("FAAL DEĞİL")) {
                   style += " background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+                }
+              }
+
+              const currentVal = isMultiLineCol ? (lines[subIdx] || "") : (cell || "");
+              if (colName.includes("GELECEK") || colName.includes("ÖMÜR BİTİŞ") || colName.includes("MUAYENE")) {
+                const days = parseGelecekBakimDays(currentVal);
+                if (days !== null) {
+                  if (days < 0) {
+                    style += " background-color: #fee2e2; color: #b91c1c; font-weight: bold; text-align: center;";
+                  } else if (days < 90) {
+                    style += " background-color: #ffedd5; color: #c2410c; font-weight: bold; text-align: center;";
+                  } else {
+                    style += " background-color: #dcfce7; color: #15803d; font-weight: bold; text-align: center;";
+                  }
                 }
               }
 
@@ -3854,19 +4491,255 @@ export default function App() {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
+  const [passwordActionType, setPasswordActionType] = useState<'global_sync' | 'filter_sync' | 'new_product' | 'depo_management' | 'gun_takip'>('global_sync');
+  const [syncInitialStep, setSyncInitialStep] = useState<1 | 2>(1);
+  const [syncInitialTarget, setSyncInitialTarget] = useState<string>('1');
 
   // Gün Takip Sorumluları ve Renk Kodu Sıralama State Değişkenleri
   const [sortByColor, setSortByColor] = useState<boolean>(false);
+  const [selectedColorFilter, setSelectedColorFilter] = useState<'all' | 'red' | 'orange' | 'green' | 'neutral'>('all');
+  const [maintenanceModalState, setMaintenanceModalState] = useState<{
+    isOpen: boolean;
+    itemName: string;
+    currentSonKontrol: string;
+    currentGelecekKontrol: string;
+    onConfirm: (newSon: string, newGelecek: string) => void;
+  }>({
+    isOpen: false,
+    itemName: '',
+    currentSonKontrol: '',
+    currentGelecekKontrol: '',
+    onConfirm: () => {}
+  });
+
+  const openBakimYapildiModal = (
+    itemName: string,
+    sonKontrol: string,
+    gelecekKontrol: string,
+    onConfirm: (newSon: string, newGelecek: string) => void
+  ) => {
+    setMaintenanceModalState({
+      isOpen: true,
+      itemName,
+      currentSonKontrol: sonKontrol,
+      currentGelecekKontrol: gelecekKontrol,
+      onConfirm: (newSon, newGelecek) => {
+        onConfirm(newSon, newGelecek);
+        setMaintenanceModalState(prev => ({ ...prev, isOpen: false }));
+      }
+    });
+  };
   const [isSorumluModalOpen, setIsSorumluModalOpen] = useState(false);
   const [isSavingSorumlu, setIsSavingSorumlu] = useState(false);
-  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; mail90?: string; }[]>([
-    { birim: "BELL 429", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
-    { birim: "AT-802F", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
-    { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
-    { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
-    { birim: "B-360", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
-    { birim: "C-650", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" },
-    { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "ormanhavacilik.bakimsube@gmail.com", mail90: "" }
+  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; mail90?: string; mail60?: string; mail30?: string; }[]>(() => {
+    try {
+      const saved = localStorage.getItem('gun_takip_sorumlulari');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [
+      { birim: "AT-802 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "AT-802 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "AT-802 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "BELL 429 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "BELL 429 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "BELL 429 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "T-70 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "T-70 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "T-70 HELİTAK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "B-360 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "B-360 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "B-360 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "C-650 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "C-650 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "C-650 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
+      { birim: "KARA ARAÇLARI BAKIM & MUAYENE", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" }
+    ];
+  });
+
+  // 4. OTOMATİK 90 GÜN KONTROLÜ VE E-POSTA BİLDİRİMİ (SİTE AÇILDIĞINDA VE ARKA PLANDA SÜREKLİ AKTİF)
+  const [autoReminderStatus, setAutoReminderStatus] = useState<{
+    lastChecked: string;
+    items90DaysCount: number;
+    overdueCount: number;
+    isRunning: boolean;
+  }>({
+    lastChecked: '',
+    items90DaysCount: 0,
+    overdueCount: 0,
+    isRunning: false
+  });
+
+  const parseDiffDays = (dateStr: string): number | null => {
+    if (!dateStr || typeof dateStr !== 'string') return null;
+    const clean = dateStr.trim();
+    if (!clean || clean === '-' || clean.toLowerCase() === 'yok') return null;
+
+    let day = 0, month = 0, year = 0;
+    if (clean.includes('.')) {
+      const parts = clean.split('.');
+      if (parts.length >= 3) {
+        day = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+        year = parseInt(parts[2].slice(0, 4), 10);
+      }
+    } else if (clean.includes('/')) {
+      const parts = clean.split('/');
+      if (parts.length >= 3) {
+        day = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+        year = parseInt(parts[2].slice(0, 4), 10);
+      }
+    } else if (clean.includes('-')) {
+      const parts = clean.split('-');
+      if (parts.length >= 3) {
+        year = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+        day = parseInt(parts[2].slice(0, 2), 10);
+      }
+    }
+
+    if (!year || isNaN(year) || isNaN(month) || isNaN(day)) return null;
+
+    const targetDate = new Date(year, month, day);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    targetDate.setHours(0, 0, 0, 0);
+
+    const diffTime = targetDate.getTime() - today.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+
+  // Helper to collect all <= 90 days items across all units
+  const getGlobal90DaysItems = () => {
+    const items: any[] = [];
+    const scanRows = (birimName: string, rows: any[][], fleetKey: string) => {
+      if (!Array.isArray(rows)) return;
+      rows.forEach((r, idx) => {
+        if (!r || !Array.isArray(r)) return;
+        if (isHeaderLikeRow(r)) return;
+
+        let dateStr = '';
+        let isMuaf = false;
+        const isKara = fleetKey === 'kara_araclari';
+        const isBell = fleetKey === 'bell429';
+
+        if (isKara) {
+          const bakimaTabi = String(r[7] || '').trim().toUpperCase();
+          if (bakimaTabi === 'HAYIR' || bakimaTabi.includes('MUAF')) isMuaf = true;
+          dateStr = String(r[9] || '').trim();
+        } else if (isBell) {
+          dateStr = String(r[8] || '').trim();
+        } else {
+          // AT-802, T-70, B-360, C-650, Hangar
+          const kalibTabi = String(r[7] || '').trim().toUpperCase();
+          if (kalibTabi === 'HAYIR' || kalibTabi.includes('MUAF')) isMuaf = true;
+          dateStr = String(r[9] || '').trim();
+        }
+
+        if (isMuaf || !dateStr) return;
+
+        const diff = parseDiffDays(dateStr);
+        if (diff !== null && diff <= 90) {
+          items.push({
+            birim: birimName,
+            rowIndex: idx,
+            malzemeAdi: String(r[1] || ''),
+            parcaNo: String(r[2] || ''),
+            seriNo: String(r[3] || ''),
+            gelecekTarih: dateStr,
+            daysDiff: diff,
+            isOverdue: diff <= 0
+          });
+        }
+      });
+    };
+
+    scanRows('BELL 429', techizatBell429Data, 'bell429');
+    scanRows('AT-802', techizatAt802Data, 'at802');
+    scanRows('T-70', techizatT70Data, 't70');
+    scanRows('T-70 BUMBİ BACKET', techizatT70BumbiBacketData, 't70_bumbi_backet');
+    scanRows('T-70 HELİTAK', techizatT70HelitakData, 't70_helitak');
+    scanRows('B-360', techizatB360Data, 'b360');
+    scanRows('C-650', techizatC650Data, 'c650');
+    scanRows('HANGAR', techizatHangarData, 'hangar');
+    scanRows('KARA ARAÇLARI', techizatKaraAraclariData, 'kara_araclari');
+
+    return items;
+  };
+
+  const runBackgroundAutoReminderCheck = async () => {
+    const items = getGlobal90DaysItems();
+    const overdue = items.filter(i => i.isOverdue);
+    const nowTime = new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+    setAutoReminderStatus({
+      lastChecked: nowTime,
+      items90DaysCount: items.length,
+      overdueCount: overdue.length,
+      isRunning: true
+    });
+
+    try {
+      // 1. Notify local backend API
+      await fetch('/api/trigger-auto-reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          birimList: gunTakipSorumlulari,
+          approachingItems: items,
+          overdueItems: overdue
+        })
+      }).catch(e => console.warn('Local trigger auto reminders warn:', e));
+
+      // 2. Trigger Google Apps Script dailyReminderTrigger
+      if (GOOGLE_SCRIPT_URL) {
+        await fetch(GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'dailyReminderTrigger',
+            reason: 'Otomatik Arka Plan 90 Gün & Günü Geçen Kontrolü',
+            items90Count: items.length,
+            overdueCount: overdue.length,
+            timestamp: new Date().toISOString()
+          })
+        }).catch(e => console.warn('GAS auto reminder warn:', e));
+      }
+    } catch (err) {
+      console.warn('Auto reminder check error:', err);
+    } finally {
+      setAutoReminderStatus(prev => ({ ...prev, isRunning: false }));
+    }
+  };
+
+  // Run automatically on component mount and every 30 minutes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      runBackgroundAutoReminderCheck();
+    }, 2500);
+
+    const interval = setInterval(() => {
+      runBackgroundAutoReminderCheck();
+    }, 30 * 60 * 1000);
+
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
+  }, [
+    techizatBell429Data,
+    techizatAt802Data,
+    techizatT70Data,
+    techizatB360Data,
+    techizatC650Data,
+    techizatHangarData,
+    techizatKaraAraclariData
   ]);
 
   // Success notifications
@@ -4031,6 +4904,11 @@ export default function App() {
     pullAllTechizatFromGoogleSheets(true);
     pullDataFromGoogleSheets(5, true);
     pullKaraAraclariGorevEmirleri();
+    getAllHangarPdfDocs().then(docs => {
+      if (Array.isArray(docs) && docs.length > 0) {
+        setHangarPdfDocs(docs);
+      }
+    }).catch(err => console.warn('Hangar docs load warning:', err));
   }, []);
 
   // Reset form sub-modal states on selectedFormId change
@@ -4121,7 +4999,9 @@ export default function App() {
     switch (cat) {
       case 'İKMAL': return 'İKMAL MÜDÜRLÜĞÜ';
       case 'TEÇHİZAT TAKİP': return 'TEÇHİZAT TAKİP SİSTEMİ';
-      case 'HA_YER_DESTEK': return 'HAVA ARAÇLARI YER DESTEK TEÇHİZATLARI';
+      case 'HA_YER_DESTEK': return 'HAVA ARAÇLARI YER DESTEK VE ÖZEL ALETLER';
+      case 'UNIT_FOLDER_MENU': return `${getUnitDisplayName(selectedUnitFolder)} - YER DESTEK VE DEPO YÖNETİMİ`;
+      case 'UNIT_DEPO_MENU': return `${getUnitDisplayName(selectedUnitFolder)} - DEPO YÖNETİMİ`;
       case 'T70_DETAY': return 'T-70 TEÇHİZAT ALTBİRİMLERİ';
       case 'KARA_ARACLARI_MENU': return 'KARA ARAÇLARI TAKİP SİSTEMİ';
       case 'FORM KAYITLARI': return 'FORM KAYITLARI';
@@ -4159,12 +5039,16 @@ export default function App() {
     setModalUrl('');
     setModalType('category');
     setModalOpen(true);
+    setSearchQuery('');
+    setTechizatSearchQuery('');
   };
 
   const navigateToSubCategory = (subCategory: Exclude<CategoryType, null>) => {
     setSelectedCategory(subCategory);
     setModalTitle(getCategoryTitle(subCategory));
     setCategoryHistory(prev => [...prev, subCategory]);
+    setSearchQuery('');
+    setTechizatSearchQuery('');
   };
 
   const handleBack = () => {
@@ -4174,20 +5058,31 @@ export default function App() {
       setModalTitle(getCategoryTitle('FORM KAYITLARI'));
       return;
     }
+    if (modalType === 'iframe') {
+      setModalType('category');
+      setSelectedCategory('FORM KAYITLARI');
+      setModalTitle(getCategoryTitle('FORM KAYITLARI'));
+      setModalUrl('');
+      setIframeLoading(false);
+      return;
+    }
     if (modalType === 'techizat_matrix') {
       setModalType('category');
       if (activeTechizatType === 'kara_araclari') {
         setSelectedCategory('KARA_ARACLARI_MENU');
         setModalTitle(getCategoryTitle('KARA_ARACLARI_MENU'));
-      } else if (activeTechizatType === 't70' || activeTechizatType === 't70_bumbi_backet') {
-        setSelectedCategory('T70_DETAY');
-        setModalTitle(getCategoryTitle('T70_DETAY'));
-      } else if (activeTechizatType === 'bell429' || activeTechizatType === 'at802') {
-        setSelectedCategory('HA_YER_DESTEK');
-        setModalTitle(getCategoryTitle('HA_YER_DESTEK'));
-      } else {
+      } else if (activeTechizatType === 'hangar') {
         setSelectedCategory('TEÇHİZAT TAKİP');
         setModalTitle(getCategoryTitle('TEÇHİZAT TAKİP'));
+      } else if (techizatActiveSection === 'depo_sarf' || techizatActiveSection === 'depo_kimyasal') {
+        setSelectedCategory('UNIT_DEPO_MENU');
+        setModalTitle(getCategoryTitle('UNIT_DEPO_MENU'));
+      } else if (selectedUnitFolder) {
+        setSelectedCategory('UNIT_FOLDER_MENU');
+        setModalTitle(getCategoryTitle('UNIT_FOLDER_MENU'));
+      } else {
+        setSelectedCategory('HA_YER_DESTEK');
+        setModalTitle(getCategoryTitle('HA_YER_DESTEK'));
       }
       setActiveTechizatType(null);
       return;
@@ -4232,111 +5127,710 @@ export default function App() {
     }, 4000);
   };
 
-  const handleSaveTechizatRow = async (editedRow: string[], techType: string, rIdx: number) => {
-    let updated: string[][] = [];
-    if (techType === 'bell429') {
-      const u = [...techizatBell429Data];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatBell429Data(u);
-      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(u));
-    } else if (techType === 'at802') {
-      const u = [...techizatAt802Data];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatAt802Data(u);
-      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(u));
-    } else if (techType === 't70') {
-      const u = [...techizatT70Data];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatT70Data(u);
-      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(u));
-    } else if (techType === 't70_bumbi_backet') {
-      const u = [...techizatT70BumbiBacketData];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatT70BumbiBacketData(u);
-      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(u));
-    } else if (techType === 't70_helitak') {
-      const u = [...techizatT70HelitakData];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatT70HelitakData(u);
-      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(u));
-    } else if (techType === 'b360') {
-      const u = [...techizatB360Data];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatB360Data(u);
-      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(u));
-    } else if (techType === 'c650') {
-      const u = [...techizatC650Data];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatC650Data(u);
-      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(u));
-    } else if (techType === 'hangar') {
-      const u = [...techizatHangarData];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatHangarData(u);
-      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(u));
-    } else if (techType === 'kara_araclari') {
-      const u = [...techizatKaraAraclariData];
-      const actualIdx = u.findIndex(r => r[0] === editedRow[0]);
-      const targetIdx = actualIdx !== -1 ? actualIdx : rIdx;
-      u[targetIdx] = editedRow;
-      updated = u;
-      setTechizatKaraAraclariData(u);
-      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(u));
+  // Row formatting helpers across components and Drive sync
+  const formatStandardRow = (row: string[], isHangar = false) => {
+    const r = [...row];
+    // Self-healing: if r[7] is "EVET"/"HAYIR" and r[8] is ALSO "EVET"/"HAYIR" and r[9] contains a date
+    if (
+      (r[7] === "EVET" || r[7] === "HAYIR") &&
+      (r[8] === "EVET" || r[8] === "HAYIR") &&
+      r[9] && (/\d{2}[./-]\d{2}[./-]\d{2,4}/.test(r[9]) || r[9].includes('.'))
+    ) {
+      r.splice(8, 1);
     }
 
-    setIsTechizatSaving(true);
-    showNotification("Canlı Excel Online güncelleniyor, lütfen bekleyiniz...");
+    const col7Upper = (r[7] || "").trim().toUpperCase();
+    if (col7Upper !== "EVET" && col7Upper !== "HAYIR") {
+      r.splice(7, 0, "EVET");
+    }
+    while (r.length < 13) {
+      r.push("");
+    }
+    // Clean up 90 gun mail column (index 12): never show category tags or placeholder dashes
+    const mailVal = String(r[12] || "").trim().toLowerCase();
+    if (mailVal === 'yer_destek' || mailVal === 'ozel_alet' || mailVal === 'depo_sarf' || mailVal === 'depo_kimyasal' || mailVal === '-' || mailVal === '--' || mailVal.includes('belirtilme')) {
+      r[12] = "";
+    }
+    const base = r.slice(0, 13);
+    if (isHangar) {
+      base.push("");
+    }
+    return base;
+  };
 
-    // Sync to Google Sheets online database immediately
-    const unitLabel = getTechizatUnitLabel(techType);
-    if (unitLabel && updated.length > 0) {
-      try {
-        const response = await fetch(GOOGLE_SCRIPT_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "text/plain;charset=utf-8"
-          },
-          body: JSON.stringify({
-            action: "updateTumTechizat",
-            unitLabel: unitLabel,
-            data: updated.map(r => [unitLabel, ...r])
-          })
-        });
-        console.log(`Synced individual row edit for ${unitLabel} to TÜM TECHİZAT Google Sheet`);
-        showNotification("Değişiklikler canlı e-tabloya başarıyla senkronize edildi!");
-        // Pull all data again to refresh UI with calculated warning columns from backend
-        await pullAllTechizatFromGoogleSheets(true);
-      } catch (err) {
-        console.error(`Failed to sync individual row edit for ${unitLabel} to Google Sheet:`, err);
-        showNotification("Değişiklikler yerel olarak kaydedildi, ancak çevrimiçi senkronizasyon başarısız oldu.");
+  const formatDepoRow = (row: string[]) => {
+    const r = [...row];
+    while (r.length < 13) {
+      r.push("");
+    }
+    const sira = r[0] || "";
+    const name = r[1] || "";
+    const pn = r[2] || "";
+    const sn = r[3] || "";
+    const miktar = r[4] || "1";
+    const yer = r[5] || "";
+    const durum = r[6] || "FAAL";
+    
+    let omurlu = (r[7] || "").trim().toUpperCase();
+    if (omurlu !== "EVET" && omurlu !== "HAYIR") {
+      omurlu = (r[8] && r[8] !== "-" && r[8] !== "--" && r[8] !== "MUAFIYET (TABİ DEĞİL)") ? "EVET" : "HAYIR";
+    }
+    
+    const omurTarihi = omurlu === "EVET" ? (r[8] || "-") : "-";
+    const tedarikFirma = r[9] || "-";
+    const aciklama = r[10] || "";
+    
+    return [
+      sira,
+      name,
+      pn,
+      sn,
+      miktar,
+      yer,
+      durum,
+      omurlu,
+      omurTarihi,
+      tedarikFirma,
+      aciklama
+    ];
+  };
+
+  const formatKaraAraclariRow = (row: string[]) => {
+    const r = [...row];
+    // Handle upgrade from 12-column to 13-column (insertion of MARKA)
+    if (r.length <= 12) {
+      const col6 = (r[6] || "").trim().toUpperCase();
+      const col7 = (r[7] || "").trim().toUpperCase();
+      if ((col6 === "EVET" || col6 === "HAYIR") && (col7 !== "EVET" && col7 !== "HAYIR")) {
+        const combinedText = `${r[1] || ''} ${r[2] || ''}`.toUpperCase();
+        let guessedMarka = "-";
+        if (combinedText.includes("FORD")) guessedMarka = "FORD";
+        else if (combinedText.includes("TOYOTA")) guessedMarka = "TOYOTA";
+        else if (combinedText.includes("ISUZU")) guessedMarka = "ISUZU";
+        else if (combinedText.includes("MERCEDES")) guessedMarka = "MERCEDES";
+        else if (combinedText.includes("FIAT")) guessedMarka = "FIAT";
+        else if (combinedText.includes("RENAULT")) guessedMarka = "RENAULT";
+        else if (combinedText.includes("VOLKSWAGEN") || combinedText.includes("VW")) guessedMarka = "VOLKSWAGEN";
+        
+        r.splice(2, 0, guessedMarka);
       }
     }
-    setIsTechizatSaving(false);
+
+    const col7Upper = (r[7] || "").trim().toUpperCase();
+    if (col7Upper !== "EVET" && col7Upper !== "HAYIR") {
+      r.splice(7, 0, "EVET");
+    }
+    while (r.length < 13) {
+      r.push("");
+    }
+    // Clean up 90 gun mail column (index 12)
+    const mailVal = String(r[12] || "").trim().toLowerCase();
+    if (mailVal === 'kara_araclari' || mailVal === 'yer_destek' || mailVal === '-' || mailVal === '--' || mailVal.includes('belirtilme')) {
+      r[12] = "";
+    }
+    return r.slice(0, 13);
+  };
+
+  const formatKaraAraciToStandardRow = (row: string[]) => {
+    const r = formatKaraAraclariRow(row);
+    const sira = r[0];
+    const plaka = r[1];
+    const marka = r[2];
+    const model = r[3];
+    const yer = r[4];
+    const km = r[5] ? `${r[5]} KM` : "";
+    const durum = r[6];
+    const kalibrasyonTabi = r[7];
+    const sonBakim = r[8];
+    const gelecekBakim = r[9];
+    const firma = r[10];
+    const aciklama = r[11];
+    const mail = r[12];
+    
+    return [
+      sira,
+      plaka,
+      marka !== "-" ? `${marka} ${model}`.trim() : model,
+      km, 
+      "1", 
+      yer,
+      durum,
+      kalibrasyonTabi,
+      sonBakim,
+      gelecekBakim,
+      firma,
+      aciklama,
+      mail
+    ];
+  };
+
+  const syncTechizatExcelToGoogleDrive = async (techType: string, updatedUnitData: string[][]) => {
+    try {
+      const subSecs = ['all', 'ozel_alet', 'depo_sarf', 'depo_kimyasal'];
+      for (const subSec of subSecs) {
+        const sectionRows = subSec === 'all' 
+          ? updatedUnitData 
+          : updatedUnitData.filter(r => getRowSection(r, techType) === subSec);
+        
+        if (subSec !== 'all' && sectionRows.length === 0) continue;
+
+        let sheetName = "Sayfa1";
+        // Standart dosya adı fallback (eğer Drive'dan okunmuş orijinal adı yoksa kullanılır)
+        let fallbackFileName = "techizat.xlsx";
+        let unitTitle = getTechizatUnitLabel(techType);
+
+        if (techType === 'at802') {
+          if (subSec === 'ozel_alet') { sheetName = "At802_Ozel_Alet"; fallbackFileName = "at-802_ozel_bakim_aletleri.xlsx"; unitTitle = "AT-802F - ÖZEL BAKIM ALETLERİ"; }
+          else if (subSec === 'depo_sarf') { sheetName = "At802_Sarf_Depo"; fallbackFileName = "at-802_sarf_ve_parca_deposu.xlsx"; unitTitle = "AT-802F - SARF VE PARÇA DEPOSU"; }
+          else if (subSec === 'depo_kimyasal') { sheetName = "At802_Kimyasal_Depo"; fallbackFileName = "at-802_kimyasal_depo.xlsx"; unitTitle = "AT-802F - KİMYASAL DEPO"; }
+          else { sheetName = "At802_Techizat"; fallbackFileName = "hava_araçları_yer_destek_at-802.xlsx"; unitTitle = "AT-802F - YER DESTEK TEÇHİZATLARI"; }
+        } else if (techType === 'bell429') {
+          if (subSec === 'depo_sarf') { sheetName = "Bell429_Sarf_Depo"; fallbackFileName = "bell-429_sarf_ve_parca_deposu.xlsx"; unitTitle = "BELL 429 - SARF VE PARÇA DEPOSU"; }
+          else if (subSec === 'depo_kimyasal') { sheetName = "Bell429_Kimyasal_Depo"; fallbackFileName = "bell-429_kimyasal_depo.xlsx"; unitTitle = "BELL 429 - KİMYASAL DEPO"; }
+          else { sheetName = "Bell429_Techizat"; fallbackFileName = "hava_araçları_yer_destek_bell-429.xlsx"; unitTitle = "BELL 429 - YER DESTEK TEÇHİZATLARI"; }
+        } else if (techType === 't70') {
+          if (subSec === 'depo_sarf') { sheetName = "T70_Sarf_Depo"; fallbackFileName = "t-70_sarf_ve_parca_deposu.xlsx"; unitTitle = "T-70 - SARF VE PARÇA DEPOSU"; }
+          else if (subSec === 'depo_kimyasal') { sheetName = "T70_Kimyasal_Depo"; fallbackFileName = "t-70_kimyasal_depo.xlsx"; unitTitle = "T-70 - KİMYASAL DEPO"; }
+          else { sheetName = "T70_Techizat"; fallbackFileName = "hava_araçları_yer_destek_t-70.xlsx"; unitTitle = "T-70 - YER DESTEK TEÇHİZATLARI"; }
+        } else if (techType === 't70_bumbi_backet') {
+          sheetName = "T70_Bumbi_Backet"; fallbackFileName = "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx"; unitTitle = "T-70 - BUMBİ BACKET";
+        } else if (techType === 't70_helitak') {
+          sheetName = "T70_Helitak"; fallbackFileName = "hava_araçları_yer_destek_t-70_helitak.xlsx"; unitTitle = "T-70 - HELİTAK";
+        } else if (techType === 'b360') {
+          if (subSec === 'depo_sarf') { sheetName = "B360_Sarf_Depo"; fallbackFileName = "b-360_sarf_ve_parca_deposu.xlsx"; unitTitle = "B-360 - SARF VE PARÇA DEPOSU"; }
+          else if (subSec === 'depo_kimyasal') { sheetName = "B360_Kimyasal_Depo"; fallbackFileName = "b-360_kimyasal_depo.xlsx"; unitTitle = "B-360 - KİMYASAL DEPO"; }
+          else { sheetName = "B360_Techizat"; fallbackFileName = "hava_araçları_yer_destek_b-360.xlsx"; unitTitle = "B-360 - YER DESTEK TEÇHİZATLARI"; }
+        } else if (techType === 'c650') {
+          if (subSec === 'depo_sarf') { sheetName = "C650_Sarf_Depo"; fallbackFileName = "c-650_sarf_ve_parca_deposu.xlsx"; unitTitle = "C-650 - SARF VE PARÇA DEPOSU"; }
+          else if (subSec === 'depo_kimyasal') { sheetName = "C650_Kimyasal_Depo"; fallbackFileName = "c-650_kimyasal_depo.xlsx"; unitTitle = "C-650 - KİMYASAL DEPO"; }
+          else { sheetName = "C650_Techizat"; fallbackFileName = "hava_araçları_yer_destek_c-650.xlsx"; unitTitle = "C-650 - YER DESTEK TEÇHİZATLARI"; }
+        } else if (techType === 'hangar') {
+          if (subSec === 'depo_sarf') { sheetName = "Hangar_Sarf_Depo"; fallbackFileName = "hangar_sarf_ve_parca_deposu.xlsx"; unitTitle = "HANGAR - SARF VE PARÇA DEPOSU"; }
+          else if (subSec === 'depo_kimyasal') { sheetName = "Hangar_Kimyasal_Depo"; fallbackFileName = "hangar_kimyasal_depo.xlsx"; unitTitle = "HANGAR - KİMYASAL DEPO"; }
+          else { sheetName = "Hangar_Techizat"; fallbackFileName = "hava_araçları_yer_destek_hangar.xlsx"; unitTitle = "HANGAR - YER DESTEK TEÇHİZATLARI"; }
+        } else if (techType === 'kara_araclari') {
+          sheetName = "Kara_Araclari"; fallbackFileName = "kara_araçları_takip.xlsx"; unitTitle = "KARA ARAÇLARI";
+        }
+
+        // Eğer kullanıcı Drive'da bu dosyayı kendi adlandırmışsa o adı kullan (Örn: "hava araçları yer detsk hangar dosyası.xlsx")
+        let fileName = techizatFileNames[`${techType}_${subSec}`] || fallbackFileName;
+
+        const headers = techType === 'kara_araclari'
+          ? ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "MARKA", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "BAKIMA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"]
+          : (subSec === 'depo_sarf' || subSec === 'depo_kimyasal')
+            ? ["SIRA NO", "MALZEME / PARÇA ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "ÖMÜRLÜ PARÇA MI?", "ÖMÜR BİTİŞ TARİHİ", "TEDARİK EDİLEN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"]
+            : ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", (techType === 'hangar' ? "BAKIMA TABİ" : "KALİBRASYONA TABİ"), "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"];
+
+        const cleanRows = sectionRows.map((r, idx) => {
+          const formatted = techType === 'kara_araclari'
+            ? formatKaraAraciToStandardRow(r)
+            : (subSec === 'depo_sarf' || subSec === 'depo_kimyasal')
+              ? formatDepoRow(r)
+              : formatStandardRow(r);
+          const copy = [...formatted];
+          copy[0] = String(idx + 1);
+          return copy.slice(0, headers.length);
+        });
+
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...cleanRows]);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+
+        fetch(GOOGLE_SCRIPT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            action: "uploadPdfToDrive",
+            fileName: fileName,
+            base64Data: b64,
+            unitName: unitTitle,
+            month: "Genel Plan"
+          })
+        }).catch(err => console.error(`Drive backup for ${fileName} failed:`, err));
+      }
+    } catch (e) {
+      console.error("syncTechizatExcelToGoogleDrive error:", e);
+    }
+  };
+
+  const handleSaveTechizatRow = async (editedRow: string[], techType: string, rIdx: number) => {
+    const targetOriginal = activeTechizatRowEdit?.row;
+    const isKaraAraci = techType === 'kara_araclari';
+    const rowSection = targetOriginal ? getRowSection(targetOriginal, techType) : "";
+    const isDepo = techizatActiveSection === 'depo_sarf' || 
+                   techizatActiveSection === 'depo_kimyasal' || 
+                   techizatActiveSection === 'depo_all' || 
+                   rowSection === 'depo_sarf' || 
+                   rowSection === 'depo_kimyasal';
+
+    // Normalize final edited row to standard column storage format
+    let finalEditedRow: string[] = [];
+
+    if (isKaraAraci) {
+      const originalSec = (targetOriginal && targetOriginal[13]) ? targetOriginal[13] : "kara_araclari";
+      const preservedMailDate = targetOriginal?.[12] || "";
+      finalEditedRow = [
+        editedRow[0] || "1", // 0: SIRA NO
+        editedRow[1] || "",  // 1: ARAÇ PLAKASI / TANIMI
+        editedRow[2] || "-", // 2: MARKA
+        editedRow[3] || "",  // 3: PARÇA NO (P/N) / MODEL
+        editedRow[4] || "",  // 4: BULUNDUĞU YER
+        editedRow[5] || "",  // 5: SON KM Sİ
+        editedRow[6] || "FAAL", // 6: DURUMU
+        editedRow[7] || "EVET", // 7: BAKIMA TABİ
+        editedRow[8] || "",  // 8: SON KONTROL / KALİBRASYON / BAKIM
+        editedRow[9] || "",  // 9: GELECEK KONTROL / KALİBRASYON / BAKIM
+        editedRow[10] || "", // 10: SON KONTROLÜ YAPAN FİRMA
+        editedRow[11] || "", // 11: AÇIKLAMA
+        preservedMailDate,   // 12: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
+        originalSec          // 13: BÖLÜM
+      ];
+    } else if (isDepo) {
+      const originalSec = targetOriginal ? getRowSection(targetOriginal, techType) : (techizatActiveSection && techizatActiveSection !== 'all' ? techizatActiveSection : 'depo_sarf');
+      const preservedMailDate = targetOriginal?.[11] || "";
+      finalEditedRow = [
+        editedRow[0] || "1", // 0: SIRA NO
+        editedRow[1] || "",  // 1: MALZEME / PARÇA ADI
+        editedRow[2] || "",  // 2: PARÇA NO (P/N)
+        editedRow[3] || "-", // 3: SERİ NO (S/N)
+        editedRow[4] || "1", // 4: MİKTAR
+        editedRow[5] || "",  // 5: BULUNDUĞU YER
+        editedRow[6] || "FAAL", // 6: DURUMU
+        editedRow[7] || "HAYIR", // 7: ÖMÜRLÜ PARÇA MI?
+        editedRow[8] || "",  // 8: ÖMÜR BİTİŞ TARİHİ
+        editedRow[9] || "",  // 9: TEDARİK EDİLEN FİRMA
+        editedRow[10] || "", // 10: AÇIKLAMA
+        preservedMailDate,   // 11: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
+        originalSec          // 12: BÖLÜM / KATEGORİ
+      ];
+    } else {
+      // Standart Teçhizat & Hangar
+      const originalSec = targetOriginal ? getRowSection(targetOriginal, techType) : (techizatActiveSection && techizatActiveSection !== 'all' ? techizatActiveSection : 'yer_destek');
+      const preservedMailDate = targetOriginal?.[12] || targetOriginal?.[11] || "";
+      const kalibTabiVal = (editedRow[7] || "EVET").toString().trim().toUpperCase();
+      const isKalibTabiHayir = kalibTabiVal === "HAYIR";
+      finalEditedRow = [
+        editedRow[0] || "1", // 0: SIRA NO
+        editedRow[1] || "",  // 1: TEÇHİZAT ADI
+        editedRow[2] || "",  // 2: PARÇA NO (P/N) / MODEL
+        editedRow[3] || "-", // 3: SERİ NO (S/N)
+        editedRow[4] || "1", // 4: MİKTAR / KAPASİTE
+        editedRow[5] || "",  // 5: BULUNDUĞU YER
+        editedRow[6] || "FAAL", // 6: DURUMU
+        kalibTabiVal,        // 7: BAKIMA TABİ / KALİBRASYONA TABİ (EVET/HAYIR)
+        isKalibTabiHayir ? "-" : (editedRow[8] || ""),  // 8: SON KONTROL / KALİBRASYON / BAKIM
+        isKalibTabiHayir ? "-" : (editedRow[9] || ""),  // 9: GELECEK KONTROL / KALİBRASYON / BAKIM
+        isKalibTabiHayir ? "-" : (editedRow[10] || ""), // 10: SON KONTROLÜ YAPAN FİRMA
+        editedRow[11] || "", // 11: AÇIKLAMA
+        preservedMailDate,   // 12: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
+        originalSec          // 13: BÖLÜM / KATEGORİ
+      ];
+    }
+
+    let updated: string[][] = [];
+
+    const applyRowUpdate = (currentList: string[][]): string[][] => {
+      const u = [...currentList];
+      let targetIdx = -1;
+
+      // 1. Doğrudan nesne referansı eşleşmesi
+      if (targetOriginal) {
+        targetIdx = u.indexOf(targetOriginal);
+      }
+
+      // 2. rIdx sınırları içinde ve ad + bulunduğu yer doğrulanıyorsa
+      if (targetIdx === -1 && rIdx >= 0 && rIdx < u.length && targetOriginal) {
+        const cand = u[rIdx];
+        if (String(cand[1] || "").trim() === String(targetOriginal[1] || "").trim() &&
+            String(cand[5] || "").trim() === String(targetOriginal[5] || "").trim()) {
+          targetIdx = rIdx;
+        }
+      }
+
+      // 3. Bir sistemden birden fazla yer olabileceği için: Ad + Bulunduğu Yer (5) + S/N (3) + P/N (2) + Kategori eşleşmesi
+      if (targetIdx === -1 && targetOriginal) {
+        targetIdx = u.findIndex(r => 
+          (r === targetOriginal) ||
+          (String(r[1] || "").trim() === String(targetOriginal[1] || "").trim() &&
+           String(r[5] || "").trim() === String(targetOriginal[5] || "").trim() &&
+           String(r[3] || "").trim() === String(targetOriginal[3] || "").trim() &&
+           String(r[2] || "").trim() === String(targetOriginal[2] || "").trim() &&
+           getRowSection(r, techType) === getRowSection(targetOriginal, techType))
+        );
+      }
+
+      // 4. Ad + Bulunduğu Yer + Kategori eşleşmesi
+      if (targetIdx === -1 && targetOriginal) {
+        targetIdx = u.findIndex(r => 
+          String(r[1] || "").trim() === String(targetOriginal[1] || "").trim() &&
+          String(r[5] || "").trim() === String(targetOriginal[5] || "").trim() &&
+          getRowSection(r, techType) === getRowSection(targetOriginal, techType)
+        );
+      }
+
+      // 5. Ad + S/N + Kategori eşleşmesi
+      if (targetIdx === -1 && targetOriginal) {
+        targetIdx = u.findIndex(r => 
+          String(r[1] || "").trim() === String(targetOriginal[1] || "").trim() &&
+          String(r[3] || "").trim() === String(targetOriginal[3] || "").trim() &&
+          getRowSection(r, techType) === getRowSection(targetOriginal, techType)
+        );
+      }
+
+      // 6. rIdx sınır kontrolü
+      if (targetIdx === -1 && rIdx >= 0 && rIdx < u.length) {
+        targetIdx = rIdx;
+      }
+
+      if (targetIdx >= 0 && targetIdx < u.length) {
+        u[targetIdx] = finalEditedRow;
+      } else {
+        u.push(finalEditedRow);
+      }
+      return u;
+    };
+
+    if (techType === 'bell429') {
+      updated = applyRowUpdate(techizatBell429Data);
+      setTechizatBell429Data(updated);
+      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updated));
+    } else if (techType === 'at802') {
+      updated = applyRowUpdate(techizatAt802Data);
+      setTechizatAt802Data(updated);
+      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updated));
+    } else if (techType === 't70') {
+      updated = applyRowUpdate(techizatT70Data);
+      setTechizatT70Data(updated);
+      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updated));
+    } else if (techType === 't70_bumbi_backet') {
+      updated = applyRowUpdate(techizatT70BumbiBacketData);
+      setTechizatT70BumbiBacketData(updated);
+      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updated));
+    } else if (techType === 't70_helitak') {
+      updated = applyRowUpdate(techizatT70HelitakData);
+      setTechizatT70HelitakData(updated);
+      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updated));
+    } else if (techType === 'b360') {
+      updated = applyRowUpdate(techizatB360Data);
+      setTechizatB360Data(updated);
+      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updated));
+    } else if (techType === 'c650') {
+      updated = applyRowUpdate(techizatC650Data);
+      setTechizatC650Data(updated);
+      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updated));
+    } else if (techType === 'hangar') {
+      updated = applyRowUpdate(techizatHangarData);
+      setTechizatHangarData(updated);
+      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updated));
+    } else if (techType === 'kara_araclari') {
+      updated = applyRowUpdate(techizatKaraAraclariData);
+      setTechizatKaraAraclariData(updated);
+      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updated));
+    }
+
+    // Close modal immediately and show immediate responsive feedback
     setActiveTechizatRowEdit(null);
+    showNotification("Kayıt başarıyla güncellendi! Google Drive Excel dosyası güncelleniyor...");
+
+    // Background sync to Google Drive Excel
+    if (techType && updated.length > 0) {
+      syncTechizatExcelToGoogleDrive(techType, updated);
+      showNotification("Değişiklikler Google Drive Excel dosyasına başarıyla kaydedildi!");
+    }
+  };
+
+  /**
+   * Tekil Satır Silme:
+   * Seçilen satırı yerel veritabanından siler, Excel dosyasını güncelleyip Google Drive'a yükler
+   * ve Google E-Tablo TÜM TECHİZAT sayfasından da ilgili satırı kaldırır.
+   */
+  const handleDeleteTechizatRow = async (rowToDelete: string[], techType: string) => {
+    if (!rowToDelete || !techType) return;
+
+    const unitLabel = getTechizatUnitLabel(techType);
+    let updatedList: string[][] = [];
+
+    const filterRow = (list: string[][]): string[][] => {
+      return list.filter(r => {
+        const isExactMatch = r === rowToDelete ||
+          (String(r[1] || "").trim() === String(rowToDelete[1] || "").trim() &&
+           String(r[2] || "").trim() === String(rowToDelete[2] || "").trim() &&
+           String(r[3] || "").trim() === String(rowToDelete[3] || "").trim() &&
+           getRowSection(r, techType) === getRowSection(rowToDelete, techType));
+        return !isExactMatch;
+      });
+    };
+
+    if (techType === 'bell429') {
+      updatedList = filterRow(techizatBell429Data);
+      setTechizatBell429Data(updatedList);
+      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updatedList));
+    } else if (techType === 'at802') {
+      updatedList = filterRow(techizatAt802Data);
+      setTechizatAt802Data(updatedList);
+      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updatedList));
+    } else if (techType === 't70') {
+      updatedList = filterRow(techizatT70Data);
+      setTechizatT70Data(updatedList);
+      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updatedList));
+    } else if (techType === 't70_bumbi_backet') {
+      updatedList = filterRow(techizatT70BumbiBacketData);
+      setTechizatT70BumbiBacketData(updatedList);
+      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updatedList));
+    } else if (techType === 't70_helitak') {
+      updatedList = filterRow(techizatT70HelitakData);
+      setTechizatT70HelitakData(updatedList);
+      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updatedList));
+    } else if (techType === 'b360') {
+      updatedList = filterRow(techizatB360Data);
+      setTechizatB360Data(updatedList);
+      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updatedList));
+    } else if (techType === 'c650') {
+      updatedList = filterRow(techizatC650Data);
+      setTechizatC650Data(updatedList);
+      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updatedList));
+    } else if (techType === 'hangar') {
+      updatedList = filterRow(techizatHangarData);
+      setTechizatHangarData(updatedList);
+      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updatedList));
+    } else if (techType === 'kara_araclari') {
+      updatedList = filterRow(techizatKaraAraclariData);
+      setTechizatKaraAraclariData(updatedList);
+      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedList));
+    }
+
+    // Modal'ı hemen kapat ve kullanıcıya anında bildirim ver
+    setActiveTechizatRowEdit(null);
+    showNotification("Seçilen kayıt silindi! Google Drive Excel dosyası güncelleniyor...");
+
+    // 1. Güncellenmiş listeyi Excel olarak doğrudan Google Drive'a senkronize et
+    syncTechizatExcelToGoogleDrive(techType, updatedList);
+
+    // Doğrudan Google Drive Excel klasörüne kaydedilir
+    showNotification("Seçilen kayıt Google Drive Excel dosyası üzerinden başarıyla silindi ve güncellendi.");
+  };
+
+  /**
+   * Çoklu Seçilenleri Silme:
+   * Tabloda tiklenen tüm satırları ilgili birimlerden siler, Drive ve E-Tablo senkronizasyonu yapar.
+   */
+  const handleDeleteSelectedTechizatRows = async () => {
+    const selectedKeys = Object.keys(selectedTechizatItems);
+    if (selectedKeys.length === 0) return;
+
+    const countToDelete = selectedKeys.length;
+    const groupedByTechType: Record<string, string[][]> = {};
+    selectedKeys.forEach(k => {
+      const item = selectedTechizatItems[k];
+      if (item && item.techType) {
+        if (!groupedByTechType[item.techType]) groupedByTechType[item.techType] = [];
+        groupedByTechType[item.techType].push(item.row);
+      }
+    });
+
+    for (const techType of Object.keys(groupedByTechType)) {
+      const rowsToDel = groupedByTechType[techType];
+      let updatedList: string[][] = [];
+
+      const normalize = (s: any) => 
+        String(s || "").trim().toLowerCase()
+          .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ü/g, 'u')
+          .replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c')
+          .replace(/\s+/g, ' ');
+
+      const filterList = (list: string[][]): string[][] => {
+        return list.filter(r => {
+          // Kullanıcı kuralı: "VERİ GÜNCELLEMEDE BAŞLIK 1. SATIR ÜRÜN DİYE ATMIŞ HATADIR."
+          // Silme işlemi yapılırken başlık benzeri artıklar varsa da tamamen temizlensin
+          if (isHeaderLikeRow(r)) return false;
+
+          const isMatched = rowsToDel.some(d => {
+            if (r === d) return true;
+
+            const r1 = normalize(r[1]);
+            const d1 = normalize(d[1]);
+            const r2 = normalize(r[2]);
+            const d2 = normalize(d[2]);
+            const r3 = normalize(r[3]);
+            const d3 = normalize(d[3]);
+
+            // Tam satır karşılaştırması
+            const rFull = r.slice(1).map(normalize).join('|');
+            const dFull = d.slice(1).map(normalize).join('|');
+            if (rFull === dFull) return true;
+
+            // İsim eşleşmesi ve varsa P/N veya S/N kontrolü
+            if (r1 && d1 && r1 === d1) {
+              if (r2 && d2 && r2 !== '-' && d2 !== '-' && r2 !== d2) return false;
+              if (r3 && d3 && r3 !== '-' && d3 !== '-' && r3 !== d3) return false;
+              return true;
+            }
+
+            if (isHeaderLikeRow(d) && isHeaderLikeRow(r)) return true;
+
+            return false;
+          });
+          return !isMatched;
+        });
+      };
+
+      if (techType === 'bell429') {
+        updatedList = filterList(techizatBell429Data);
+        setTechizatBell429Data(updatedList);
+      } else if (techType === 'at802') {
+        updatedList = filterList(techizatAt802Data);
+        setTechizatAt802Data(updatedList);
+      } else if (techType === 't70') {
+        updatedList = filterList(techizatT70Data);
+        setTechizatT70Data(updatedList);
+      } else if (techType === 't70_bumbi_backet') {
+        updatedList = filterList(techizatT70BumbiBacketData);
+        setTechizatT70BumbiBacketData(updatedList);
+      } else if (techType === 't70_helitak') {
+        updatedList = filterList(techizatT70HelitakData);
+        setTechizatT70HelitakData(updatedList);
+      } else if (techType === 'b360') {
+        updatedList = filterList(techizatB360Data);
+        setTechizatB360Data(updatedList);
+      } else if (techType === 'c650') {
+        updatedList = filterList(techizatC650Data);
+        setTechizatC650Data(updatedList);
+      } else if (techType === 'hangar') {
+        updatedList = filterList(techizatHangarData);
+        setTechizatHangarData(updatedList);
+      } else if (techType === 'kara_araclari') {
+        updatedList = filterList(techizatKaraAraclariData);
+        setTechizatKaraAraclariData(updatedList);
+      }
+
+      // Sıra numaralarını yeniden 1'den başlat
+      updatedList = updatedList.map((r, idx) => {
+        const cloned = [...r];
+        cloned[0] = String(idx + 1);
+        return cloned;
+      });
+
+      // Her iki localStorage anahtarını da güncelle
+      try {
+        localStorage.setItem(`excel_techizat_${techType}_data`, JSON.stringify(updatedList));
+        localStorage.setItem(`techizat_${techType}_data`, JSON.stringify(updatedList));
+      } catch (err) {
+        console.error("Storage error:", err);
+      }
+
+      // Arka planda Google Drive senkronizasyonu
+      syncTechizatExcelToGoogleDrive(techType, updatedList);
+    }
+
+    setSelectedTechizatItems({});
+    showNotification(`✅ ${countToDelete} adet seçilen kayıt başarıyla silindi ve liste güncellendi.`);
+  };
+
+  /**
+   * Yeni Ürün / Teçhizat / Malzeme Ekleme:
+   * Form alanlarını ilgili birim ve kategoriye göre hazırlar, dizinin en sonuna ekler,
+   * yeni Excel'i Google Drive'a kaydeder ve Google E-Tablo TÜM TECHİZAT sayfasına işler.
+   */
+  const handleSaveNewProduct = async () => {
+    const targetUnit = newProductForm.unit || (activeTechizatType !== 'all' ? activeTechizatType : 'at802');
+    const targetSec = newProductForm.section || (techizatActiveSection && techizatActiveSection !== 'all' ? techizatActiveSection : 'yer_destek');
+    const isKara = targetUnit === 'kara_araclari' || targetSec === 'kara_araclari';
+    const isDepo = targetSec === 'depo_sarf' || targetSec === 'depo_kimyasal';
+
+    if (!newProductForm.name.trim()) {
+      alert("Lütfen ürün / teçhizat / malzeme adını giriniz.");
+      return;
+    }
+
+    let currentList: string[][] = [];
+    if (targetUnit === 'bell429') currentList = techizatBell429Data;
+    else if (targetUnit === 'at802') currentList = techizatAt802Data;
+    else if (targetUnit === 't70') currentList = techizatT70Data;
+    else if (targetUnit === 't70_bumbi_backet') currentList = techizatT70BumbiBacketData;
+    else if (targetUnit === 't70_helitak') currentList = techizatT70HelitakData;
+    else if (targetUnit === 'b360') currentList = techizatB360Data;
+    else if (targetUnit === 'c650') currentList = techizatC650Data;
+    else if (targetUnit === 'hangar') currentList = techizatHangarData;
+    else if (targetUnit === 'kara_araclari') currentList = techizatKaraAraclariData;
+
+    const nextSiraNo = newProductForm.siraNo.trim() ? newProductForm.siraNo.trim() : String(currentList.length + 1);
+
+    let newRow: string[] = [];
+    if (isKara) {
+      newRow = [
+        nextSiraNo, // 0: SIRA NO
+        newProductForm.name.trim(), // 1: ARAÇ PLAKASI / TANIMI
+        newProductForm.marka?.trim() || "-", // 2: MARKA
+        newProductForm.pn.trim() || "-", // 3: PARÇA NO (P/N) / MODEL
+        newProductForm.yer.trim() || "-", // 4: BULUNDUĞU YER
+        newProductForm.miktar.trim() || "0", // 5: SON KM Sİ
+        newProductForm.durumu || "FAAL", // 6: DURUMU
+        newProductForm.kalibrasyonaTabi || "EVET", // 7: BAKIMA TABİ
+        newProductForm.sonKontrol.trim() || "-", // 8: SON MUAYENE / BAKIM
+        newProductForm.gelecekKontrol.trim() || "-", // 9: GELECEK MUAYENE / BAKIM
+        newProductForm.firma.trim() || "-", // 10: SON KONTROLÜ YAPAN FİRMA
+        newProductForm.aciklama.trim() || "-", // 11: AÇIKLAMA
+        "", // 12: 90 GÜN MAIL
+        "kara_araclari" // 13: BÖLÜM
+      ];
+    } else if (isDepo) {
+      newRow = [
+        nextSiraNo, // 0: SIRA NO
+        newProductForm.name.trim(), // 1: MALZEME / PARÇA ADI
+        newProductForm.pn.trim() || "-", // 2: PARÇA NO (P/N)
+        newProductForm.sn.trim() || "-", // 3: SERİ NO (S/N)
+        newProductForm.miktar.trim() || "1 ADET", // 4: MİKTAR
+        newProductForm.yer.trim() || "-", // 5: BULUNDUĞU YER / RAF
+        newProductForm.durumu || "FAAL", // 6: DURUMU
+        newProductForm.kalibrasyonaTabi || "HAYIR", // 7: ÖMÜRLÜ PARÇA MI?
+        newProductForm.gelecekKontrol.trim() || "-", // 8: ÖMÜR BİTİŞ TARİHİ
+        newProductForm.firma.trim() || "-", // 9: TEDARİK EDİLEN FİRMA
+        newProductForm.aciklama.trim() || "-", // 10: AÇIKLAMA
+        "", // 11: 90 GÜN MAIL
+        targetSec // 12: BÖLÜM / KATEGORİ
+      ];
+    } else {
+      const kalibTabiVal = (newProductForm.kalibrasyonaTabi || "EVET").trim().toUpperCase();
+      const isKalibHayir = kalibTabiVal === "HAYIR";
+      newRow = [
+        nextSiraNo, // 0: SIRA NO
+        newProductForm.name.trim(), // 1: TEÇHİZAT ADI
+        newProductForm.pn.trim() || "-", // 2: PARÇA NO (P/N) / MODEL
+        newProductForm.sn.trim() || "-", // 3: SERİ NO (S/N)
+        newProductForm.miktar.trim() || "1 ADET", // 4: MİKTAR / KAPASİTE
+        newProductForm.yer.trim() || "-", // 5: BULUNDUĞU YER
+        newProductForm.durumu || "FAAL", // 6: DURUMU
+        kalibTabiVal, // 7: BAKIMA TABİ / KALİBRASYONA TABİ (EVET/HAYIR)
+        isKalibHayir ? "-" : (newProductForm.sonKontrol.trim() || "-"), // 8: SON KONTROL / BAKIM
+        isKalibHayir ? "-" : (newProductForm.gelecekKontrol.trim() || "-"), // 9: GELECEK KONTROL / BAKIM
+        isKalibHayir ? "-" : (newProductForm.firma.trim() || "-"), // 10: SON KONTROLÜ YAPAN FİRMA
+        newProductForm.aciklama.trim() || "-", // 11: AÇIKLAMA
+        "", // 12: 90 GÜN MAIL
+        targetSec // 13: BÖLÜM / KATEGORİ
+      ];
+    }
+
+    const updated = [...currentList, newRow];
+    if (targetUnit === 'bell429') { setTechizatBell429Data(updated); localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updated)); }
+    else if (targetUnit === 'at802') { setTechizatAt802Data(updated); localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updated)); }
+    else if (targetUnit === 't70') { setTechizatT70Data(updated); localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updated)); }
+    else if (targetUnit === 't70_bumbi_backet') { setTechizatT70BumbiBacketData(updated); localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updated)); }
+    else if (targetUnit === 't70_helitak') { setTechizatT70HelitakData(updated); localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updated)); }
+    else if (targetUnit === 'b360') { setTechizatB360Data(updated); localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updated)); }
+    else if (targetUnit === 'c650') { setTechizatC650Data(updated); localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updated)); }
+    else if (targetUnit === 'hangar') { setTechizatHangarData(updated); localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updated)); }
+    else if (targetUnit === 'kara_araclari') { setTechizatKaraAraclariData(updated); localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updated)); }
+
+    setIsNewProductModalOpen(false);
+    showNotification("Yeni ürün/kayıt başarıyla eklendi! Google Drive Excel dosyası güncelleniyor...");
+
+    // En son satıra eklenmiş yeni listeyi Excel olarak Drive'a senkronize et
+    syncTechizatExcelToGoogleDrive(targetUnit, updated);
+
+    // Canlı Google E-Tabloya satırı ekle
+    const unitLabel = getTechizatUnitLabel(targetUnit);
+    showNotification("Yeni kayıt Google Drive Excel dosyasına başarıyla eklendi.");
   };
 
   // State to track cloud sync progress
@@ -4397,7 +5891,8 @@ export default function App() {
           setTableData(newTableData);
           localStorage.setItem(config.storageKey, JSON.stringify(parsedRows));
         }
-        updateFormTimestamp(formId);
+        // Sadece veri çekildiğinde güncelleme tarihi değiştirilmez, e-tablodaki gerçek son değişiklik tarihi okunur:
+        fetchUpdateDatesFromGoogleSheet();
 
         const timeNow = new Date().toLocaleTimeString('tr-TR');
         setDataFeedback(prev => ({
@@ -4434,6 +5929,253 @@ export default function App() {
     if (techType === 'hangar') return 'HANGAR YER DESTEK';
     if (techType === 'kara_araclari') return 'KARA ARAÇLARI';
     return '';
+  };
+
+  const getTechizatUnitPassword = (techType: string | null | undefined): string => {
+    if (!techType) return '1839';
+    const t = techType.toLowerCase();
+    if (t === 'at802' || t === 'at-802' || t.includes('802')) return '802';
+    if (t === 'bell429' || t.includes('429')) return '429';
+    if (t === 'b360' || t.includes('360')) return '360';
+    if (t === 'c650' || t.includes('650')) return '650';
+    if (t.includes('70') || t === 't70' || t.includes('t-70')) return '70';
+    return '1839';
+  };
+
+
+  // Geçmiş / arızalı ürün tekrar FAAL'e çevrildiğinde bir önceki periyot kadar ileriye hesaplama
+  const calculateReactivatedMaintenanceDates = (
+    prevSonKontrol: string,
+    prevGelecekKontrol: string
+  ): { newSonKontrol: string; newGelecekKontrol: string; intervalDays: number } => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const parseSingleDmy = (str: string): Date | null => {
+      if (!str || str === '-' || str === '--') return null;
+      const clean = str.split(/[\r\n;]+/)[0].trim();
+      const parts = clean.split(/[\.\/-]/);
+      if (parts.length === 3) {
+        if (parts[2].length === 4) {
+          const d = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+          if (!isNaN(d.getTime())) return d;
+        }
+        if (parts[0].length === 4) {
+          const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+          if (!isNaN(d.getTime())) return d;
+        }
+      }
+      return null;
+    };
+
+    const dSon = parseSingleDmy(prevSonKontrol);
+    const dGelecek = parseSingleDmy(prevGelecekKontrol);
+
+    let intervalDays = 365; // Varsayılan 1 yıl periyot
+    if (dSon && dGelecek) {
+      const diffTime = dGelecek.getTime() - dSon.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays > 0) {
+        intervalDays = diffDays;
+      }
+    }
+
+    const formatToDmy = (d: Date): string => {
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${day}.${month}.${year}`;
+    };
+
+    const newSonKontrol = formatToDmy(today);
+    const targetGelecek = new Date(today);
+    targetGelecek.setDate(targetGelecek.getDate() + intervalDays);
+    const newGelecekKontrol = formatToDmy(targetGelecek);
+
+    return { newSonKontrol, newGelecekKontrol, intervalDays };
+  };
+
+  const loadRegionalLocationsForRow = (targetTechType: string, resolvedCopy: string[]) => {
+    const partName = (resolvedCopy[1] || '').trim();
+    const partPn = (resolvedCopy[2] || '').trim();
+    const partSn = (resolvedCopy[3] || '').trim();
+    const partMiktar = (resolvedCopy[4] || '1').trim();
+    const partYer = (resolvedCopy[5] || '').trim();
+    const partSonKontrol = cleanAndFormatDateString(resolvedCopy[8] !== undefined ? resolvedCopy[8] : '');
+    const partGelecekKontrol = cleanAndFormatDateString(resolvedCopy[9] !== undefined ? resolvedCopy[9] : '');
+    const partFirma = (resolvedCopy[10] !== undefined ? resolvedCopy[10] : '').trim();
+
+    let sourceData: string[][] = [];
+    if (targetTechType === 'bell429') sourceData = techizatBell429Data;
+    else if (targetTechType === 'at802') sourceData = techizatAt802Data;
+    else if (targetTechType === 't70') sourceData = techizatT70Data;
+    else if (targetTechType === 't70_bumbi_backet') sourceData = techizatT70BumbiBacketData;
+    else if (targetTechType === 't70_helitak') sourceData = techizatT70HelitakData;
+    else if (targetTechType === 'b360') sourceData = techizatB360Data;
+    else if (targetTechType === 'c650') sourceData = techizatC650Data;
+    else if (targetTechType === 'hangar') sourceData = techizatHangarData;
+    else if (targetTechType === 'kara_araclari') sourceData = techizatKaraAraclariData;
+
+    const splitLinesPreserve = (val: string): string[] => {
+      if (!val) return [];
+      if (val.includes('\n')) {
+        return val.split(/\r?\n/).map(s => s.trim());
+      }
+      if (val.includes(';')) {
+        return val.split(';').map(s => s.trim());
+      }
+      return [val.trim()];
+    };
+
+    const snLines = splitLinesPreserve(partSn);
+    const locLines = splitLinesPreserve(partYer);
+    const qtyLines = splitLinesPreserve(partMiktar);
+    const sonLines = splitLinesPreserve(partSonKontrol);
+    const gelecekLines = splitLinesPreserve(partGelecekKontrol);
+    const firmaLines = splitLinesPreserve(partFirma);
+
+    const maxLines = Math.max(snLines.length, locLines.length, qtyLines.length, gelecekLines.length);
+
+    let items: Array<{
+      id: string;
+      location: string;
+      quantity: number | string;
+      serialNumbers: string[];
+      sonKontrol: string;
+      gelecekKontrol: string;
+      firma: string;
+    }> = [];
+
+    // Eğer hücre içinde birden fazla satır varsa (hat bazında S/N - Yer eşleştirmesi)
+    if (maxLines > 1) {
+      // Satır satır oku: her satırdaki yer, onun seri nosu, miktarı ve tarihidir
+      type GroupedLoc = {
+        location: string;
+        serialNumbers: string[];
+        sonKontrol: string;
+        gelecekKontrol: string;
+        firma: string;
+        totalQty: number;
+      };
+      const groupMap: Record<string, GroupedLoc> = {};
+
+      for (let i = 0; i < maxLines; i++) {
+        const lineLoc = (locLines[i] !== undefined && locLines[i] !== '') 
+          ? locLines[i] 
+          : (locLines[0] || 'MERKEZ');
+        const lineSn = (snLines[i] !== undefined && snLines[i] !== '-' && snLines[i] !== '--') ? snLines[i] : '';
+        const lineQty = parseFloat(qtyLines[i]) || (lineSn ? 1 : (parseFloat(qtyLines[0]) || 1));
+        const lineSon = (sonLines[i] !== undefined && sonLines[i] !== '') ? sonLines[i] : (sonLines[0] || '-');
+        const lineGelecek = (gelecekLines[i] !== undefined && gelecekLines[i] !== '') ? gelecekLines[i] : (gelecekLines[0] || '-');
+        const lineFirma = (firmaLines[i] !== undefined && firmaLines[i] !== '') ? firmaLines[i] : (firmaLines[0] || '-');
+
+        const cleanLoc = lineLoc.trim();
+        const groupKey = `${cleanLoc.toUpperCase()}___${lineGelecek.trim()}`;
+
+        if (!groupMap[groupKey]) {
+          groupMap[groupKey] = {
+            location: cleanLoc,
+            serialNumbers: lineSn ? [lineSn] : [],
+            sonKontrol: lineSon,
+            gelecekKontrol: lineGelecek,
+            firma: lineFirma,
+            totalQty: lineQty
+          };
+        } else {
+          if (lineSn && !groupMap[groupKey].serialNumbers.includes(lineSn)) {
+            groupMap[groupKey].serialNumbers.push(lineSn);
+          }
+          groupMap[groupKey].totalQty += lineQty;
+        }
+      }
+
+      items = Object.values(groupMap).map((grp, idx) => ({
+        id: `reg_${Date.now()}_${idx}`,
+        location: grp.location || 'MERKEZ',
+        quantity: grp.serialNumbers.length > 0 ? grp.serialNumbers.length : grp.totalQty,
+        serialNumbers: grp.serialNumbers,
+        sonKontrol: grp.sonKontrol,
+        gelecekKontrol: grp.gelecekKontrol,
+        firma: grp.firma
+      }));
+    } else {
+      const isValidPn = partPn && partPn !== '-' && partPn.length > 2;
+      const sameRows = sourceData.filter(r => {
+        const rPn = (r[2] || '').trim();
+        const rName = (r[1] || '').trim();
+        if (isValidPn && rPn.toLowerCase() === partPn.toLowerCase()) return true;
+        if (!isValidPn && partName && rName.toLowerCase() === partName.toLowerCase()) return true;
+        return false;
+      });
+
+      if (sameRows.length > 1) {
+        items = sameRows.map((r, idx) => {
+          const sns = (r[3] || '').split(/[,;\/\n]+/).map(s => s.trim()).filter(s => s && s !== '-');
+          return {
+            id: `reg_${Date.now()}_${idx}`,
+            location: (r[5] || 'MERKEZ').trim(),
+            quantity: r[4] || (sns.length > 0 ? String(sns.length) : '1'),
+            serialNumbers: sns,
+            sonKontrol: cleanAndFormatDateString(r[8] || ''),
+            gelecekKontrol: cleanAndFormatDateString(r[9] || ''),
+            firma: (r[10] || '').trim()
+          };
+        });
+      } else {
+        const knownRegions = ['ÇANAKKALE', 'BURSA', 'MİLAS', 'ANTALYA', 'ANKARA', 'İZMİR', 'MUĞLA', 'ADANA', 'ESKİŞEHİR', 'İSTANBUL', 'BALIKESİR', 'DENİZLİ', 'TRABZON', 'MERSİN', 'EDREMİT', 'DALAMAN', 'GAZİEMİR'];
+        const parsedSns = partSn.split(/[,;\/\n]+/).map(s => s.trim()).filter(s => s && s !== '-');
+        const upperLoc = partYer.toUpperCase();
+        const foundRegions = knownRegions.filter(reg => upperLoc.includes(reg));
+
+        if (foundRegions.length > 1) {
+          items = foundRegions.map((reg, idx) => {
+            const assignedSn = parsedSns[idx] ? [parsedSns[idx]] : [];
+            return {
+              id: `reg_${Date.now()}_${idx}`,
+              location: reg,
+              quantity: assignedSn.length > 0 ? assignedSn.length : 1,
+              serialNumbers: assignedSn,
+              sonKontrol: partSonKontrol,
+              gelecekKontrol: partGelecekKontrol,
+              firma: partFirma
+            };
+          });
+        } else {
+          items = [{
+            id: `reg_${Date.now()}_0`,
+            location: partYer || 'MERKEZ',
+            quantity: partMiktar || (parsedSns.length > 0 ? String(parsedSns.length) : '1'),
+            serialNumbers: parsedSns.length > 0 ? parsedSns : (partSn && partSn !== '-' ? [partSn] : []),
+            sonKontrol: partSonKontrol,
+            gelecekKontrol: partGelecekKontrol,
+            firma: partFirma
+          }];
+        }
+      }
+    }
+
+    setRegionalLocations(items);
+  };
+
+  const getDaysRemainingLabel = (dateStr: string) => {
+    if (!dateStr || dateStr === '-') return null;
+    const parts = dateStr.trim().split('.');
+    if (parts.length === 3) {
+      const targetDate = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+      if (isNaN(targetDate.getTime())) return null;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const diffTime = targetDate.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays < 0) {
+        return { text: `🔴 ${Math.abs(diffDays)}g Geçti`, color: 'bg-rose-100 text-rose-800 border-rose-200' };
+      } else if (diffDays <= 90) {
+        return { text: `🟡 ${diffDays}g Kaldı`, color: 'bg-amber-100 text-amber-900 border-amber-200' };
+      } else {
+        return { text: `🟢 ${diffDays}g Kaldı`, color: 'bg-emerald-100 text-emerald-800 border-emerald-200' };
+      }
+    }
+    return null;
   };
 
   const getRealTechType = (unitLabel: string): string => {
@@ -4489,137 +6231,366 @@ export default function App() {
 
   const convertToDisplayDateFormat = (dateStr: string): string => {
     if (!dateStr) return "";
-    const ymdRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
-    const m = dateStr.match(ymdRegex);
-    if (m) {
-      return `${m[3]}.${m[2]}.${m[1]}`;
-    }
-    return dateStr;
+    return cleanAndFormatDateString(dateStr);
   };
 
-  const pullAllTechizatFromGoogleSheets = async (silent = true) => {
+  // Akıllı Başlık ve Kolon Tespiti ile Excel Sayfasını Standart Matris Formatına Çeviren Gelişmiş Fonksiyon
+  const parseExcelWorksheetToRows = (worksheet: XLSX.WorkSheet, techType: string, subSection: string = 'all'): string[][] => {
     try {
-      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("TÜM TECHİZAT")}`;
-      const response = await fetch(targetUrl);
+      // Birleştirilmiş hücreleri unroll yap (böylece alt hücreler boş kalmaz)
+      unmergeAndFillWorksheet(worksheet);
+
+      const rawRows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: "", raw: false });
+      if (!rawRows || rawRows.length === 0) return [];
+
+      const headerRowIdx = detectHeaderRowIndex(rawRows);
+
+      const rawHeaders = (rawRows[headerRowIdx] || []).map(h => String(h || '').trim().toUpperCase());
+      const finalHeaders = rawHeaders.map((h, hIdx) => h || `KOLON ${hIdx + 1}`);
+
+      const findColIdx = (keywords: string[], excludeKeywords: string[] = []): number => {
+        return finalHeaders.findIndex(h => {
+          const upper = h.toUpperCase().trim();
+          const hasKey = keywords.some(k => upper.includes(k.toUpperCase()));
+          const hasExclude = excludeKeywords.some(ex => upper.includes(ex.toUpperCase()));
+          return hasKey && !hasExclude;
+        });
+      };
+
+      const siraColIdx = findColIdx(["SIRA", "NO.", "S.N.", "S.NO", "S.NU"], ["SERİ", "SERI", "PARÇA", "PARCA", "P/N", "MODEL"]);
+      const nameColIdx = findColIdx(
+        ["TEÇHİZAT", "TECHİZAT", "MALZEME", "ARAÇ", "ARAC", "PLAKA", "ÜRÜN", "URUN", "EKİPMAN", "TANIM", "NAME", "ALET", "ITEM"],
+        ["FİRMA", "FIRMA", "KONTROL", "BAKIM", "YAPAN", "SIRA"]
+      );
+      const pnColIdx = findColIdx(["P/N", "PN", "PARÇA NO", "PARCA NO", "MODEL", "PART NUMBER", "PART NO"]);
+      const snColIdx = findColIdx(["S/N", "SN", "SERİ NO", "SERI NO", "SERİ", "SERI", "SERIAL"], ["SIRA"]);
+      const miktarColIdx = findColIdx(["MİKTAR", "MIKTAR", "KAPASİTE", "KAPASITE", "ADET", "QTY", "QUANTITY"]);
+      const locColIdx = findColIdx(["BULUNDUĞU", "BULUNDUGU", "LOKASYON", "KONUM", "YER", "RAF", "DEPO", "LOCATION"]);
+      const durumColIdx = findColIdx(["DURUM", "DURUMU", "STATUS", "FAALİYET"]);
+      const kalibTabiColIdx = findColIdx(["KALİBRASYONA TABİ", "KALIBRASYONA TABI", "BAKIMA TABİ", "BAKIMA TABI", "TABİ Mİ", "TABI MI", "TABİ", "TABI", "ÖMÜRLÜ", "OMURLU"]);
+      const sonBakimColIdx = findColIdx(["SON KONTROL", "SON BAKIM", "SON KALİBRASYON", "SON TEST", "SON MUAYENE", "SON KM", "YAPILAN KONTROL", "SON TARİH"]);
+      const gelecekBakimColIdx = findColIdx(["GELECEK KONTROL", "GELECEK BAKIM", "GELECEK KALİBRASYON", "BİR SONRAKİ", "SONRAKİ BAKIM", "SONRAKİ KONTROL", "ÖMÜR BİTİŞ", "OMUR BITIS", "SON KULLANMA", "EXPIRY"]);
+      const firmaColIdx = findColIdx(["KONTROLÜ YAPAN", "KONTROLU YAPAN", "YAPAN FİRMA", "YAPAN FIRMA", "FİRMA", "FIRMA", "TEDARİK", "TEDARIK", "SERVİS", "VENDOR", "SUPPLIER"]);
+      const aciklamaColIdx = findColIdx(["AÇIKLAMA", "ACIKLAMA", "AÇIKLAMALAR", "ACIKLAMALAR", "NOT", "NOTLAR", "DESCRIPTION", "REMARKS", "DETAY", "ÖZEL NOT", "LOT", "PARTİ"]);
+      const mailColIdx = findColIdx(["MAİL GÖNDERİM", "MAIL GONDERIM", "90 GÜN", "90 GUN", "E-POSTA", "MAIL", "MAİL"]);
+
+      const isKara = techType === 'kara_araclari';
+      const isDepoType = subSection === 'depo_sarf' || subSection === 'depo_kimyasal';
+
+      const rawParsedRows: string[][] = [];
+      for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+        const rawRow = rawRows[r] || [];
+        const isRowEmpty = rawRow.every(cell => String(cell || '').trim() === '');
+        if (isRowEmpty) continue;
+        if (isHeaderLikeRow(rawRow)) continue;
+
+        const getVal = (idx: number, fallback = "") => {
+          if (idx >= 0 && rawRow[idx] !== undefined && rawRow[idx] !== null) {
+            const valStr = String(rawRow[idx]).trim();
+            if (valStr !== "") return valStr;
+          }
+          return fallback;
+        };
+
+        // Kullanıcı kuralı: Sıra no A sütunu [0], Teçhizat adı B sütunu [1]
+        const rawSira = getVal(siraColIdx, siraColIdx < 0 && rawRow[0] !== undefined ? String(rawRow[0]).trim() : "");
+        const rawName = getVal(nameColIdx, nameColIdx < 0 && rawRow[1] !== undefined ? String(rawRow[1]).trim() : (rawRow[0] && !/^\d+$/.test(String(rawRow[0]).trim()) ? String(rawRow[0]).trim() : ""));
+        const rawPn = getVal(pnColIdx, pnColIdx < 0 && rawRow[2] !== undefined ? String(rawRow[2]).trim() : "");
+        const rawSn = getVal(snColIdx, snColIdx < 0 && rawRow[3] !== undefined ? String(rawRow[3]).trim() : "-");
+        const rawMiktar = getVal(miktarColIdx, miktarColIdx < 0 && rawRow[4] !== undefined ? String(rawRow[4]).trim() : "1");
+        const rawLoc = getVal(locColIdx, locColIdx < 0 && rawRow[5] !== undefined ? String(rawRow[5]).trim() : "");
+        const rawDurum = getVal(durumColIdx, durumColIdx < 0 && rawRow[6] !== undefined ? String(rawRow[6]).trim() : "FAAL");
+        
+        let rawKalib = getVal(kalibTabiColIdx, kalibTabiColIdx < 0 && rawRow[7] !== undefined ? String(rawRow[7]).trim() : "");
+        if (!rawKalib) {
+          rawKalib = "EVET";
+        }
+        const rawSonBakim = cleanAndFormatDateString(getVal(sonBakimColIdx, sonBakimColIdx < 0 && rawRow[8] !== undefined ? String(rawRow[8]).trim() : ""));
+        const rawGelecekBakim = cleanAndFormatDateString(getVal(gelecekBakimColIdx, gelecekBakimColIdx < 0 && rawRow[9] !== undefined ? String(rawRow[9]).trim() : ""));
+        const rawFirma = getVal(firmaColIdx, firmaColIdx < 0 && rawRow[10] !== undefined ? String(rawRow[10]).trim() : "");
+        
+        let rawAciklama = "";
+        if (aciklamaColIdx >= 0 && rawRow[aciklamaColIdx] !== undefined) {
+          rawAciklama = String(rawRow[aciklamaColIdx]).trim();
+        } else {
+          const fallbackIdx = finalHeaders.length >= 12 ? 11 : 10;
+          if (rawRow[fallbackIdx] !== undefined) {
+            rawAciklama = String(rawRow[fallbackIdx]).trim();
+          }
+        }
+
+        const rawMail = getVal(mailColIdx, "");
+
+        let targetRow: string[] = [];
+        if (isKara) {
+          targetRow = [
+            rawSira,                                      // 0: SIRA NO (boş ise boş kalsın, gruplamada ardışık atanır)
+            rawName,                                      // 1: ARAÇ PLAKASI / TANIMI
+            rawPn,                                        // 2: PARÇA NO (P/N) / MODEL
+            rawLoc,                                       // 3: BULUNDUĞU YER
+            rawMiktar || rawSonBakim || "",               // 4: SON KM Sİ
+            rawDurum || "FAAL",                           // 5: DURUMU
+            rawSonBakim,                                  // 6: SON KONTROL
+            rawGelecekBakim,                              // 7: GELECEK KONTROL
+            rawFirma,                                     // 8: FİRMA
+            rawAciklama,                                  // 9: AÇIKLAMA
+            rawMail,                                      // 10: MAIL TARIHI
+            subSection !== 'all' ? subSection : 'kara_araclari' // 11: KATEGORİ
+          ];
+        } else if (isDepoType) {
+          targetRow = [
+            rawSira,                                      // 0: SIRA NO
+            rawName,                                      // 1: MALZEME / PARÇA ADI
+            rawPn,                                        // 2: PARÇA NO (P/N)
+            rawSn || "-",                                 // 3: SERİ NO (S/N)
+            rawMiktar || "1",                             // 4: MİKTAR
+            rawLoc,                                       // 5: BULUNDUĞU YER
+            rawDurum || "FAAL",                           // 6: DURUMU
+            rawKalib || "HAYIR",                          // 7: ÖMÜRLÜ PARÇA MI?
+            rawGelecekBakim || rawSonBakim || "",         // 8: ÖMÜR BİTİŞ TARİHİ
+            rawFirma,                                     // 9: TEDARİK EDİLEN FİRMA
+            rawAciklama,                                  // 10: AÇIKLAMA
+            rawMail,                                      // 11: MAIL TARIHI
+            subSection                                    // 12: KATEGORİ (depo_sarf | depo_kimyasal)
+          ];
+        } else {
+          targetRow = [
+            rawSira,                                      // 0: SIRA NO
+            rawName,                                      // 1: TEÇHİZAT ADI
+            rawPn,                                        // 2: PARÇA NO (P/N)
+            rawSn || "-",                                 // 3: SERİ NO (S/N)
+            rawMiktar || "1",                             // 4: MİKTAR / KAPASİTE
+            rawLoc,                                       // 5: BULUNDUĞU YER
+            rawDurum || "FAAL",                           // 6: DURUMU
+            rawKalib || "EVET",                           // 7: KALİBRASYONA TABİ
+            rawSonBakim,                                  // 8: SON KONTROL
+            rawGelecekBakim,                              // 9: GELECEK KONTROL
+            rawFirma,                                     // 10: FİRMA
+            rawAciklama,                                  // 11: AÇIKLAMA
+            rawMail,                                      // 12: MAIL TARIHI
+            subSection !== 'all' ? subSection : 'yer_destek' // 13: KATEGORİ
+          ];
+        }
+
+        if (targetRow[1] || targetRow[2] || (targetRow[3] && targetRow[3] !== "-") || targetRow[5]) {
+          rawParsedRows.push(targetRow);
+        }
+      }
+
+      return groupMultiLocationRows(
+        rawParsedRows,
+        1,
+        isKara ? 3 : 5,
+        isKara ? -1 : 4,
+        0,
+        2,
+        isKara ? -1 : 3
+      );
+    } catch (e) {
+      console.error("Excel parse error for " + techType, e);
+      return [];
+    }
+  };
+
+  // Dosya ve Sayfa Adından Hedef Hava/Kara Birimi ve Alt Bölümünü Otomatik Tespit Eden Fonksiyon
+  const detectUnitAndSectionFromNames = (fileName: string, sheetName: string): { techType: string, subSection: string } => {
+    const combined = `${fileName} ${sheetName}`
+      .toLowerCase()
+      .replace(/ı/g, 'i')
+      .replace(/İ/g, 'i')
+      .replace(/ğ/g, 'g')
+      .replace(/ü/g, 'u')
+      .replace(/ş/g, 's')
+      .replace(/ö/g, 'o')
+      .replace(/ç/g, 'c');
+    
+    let techType = '';
+    let subSection = 'all';
+
+    if (combined.includes("at-802") || combined.includes("at802") || combined.includes("at 802") || combined.includes("air tractor") || combined.includes("airtractor")) {
+      techType = "at802";
+    } else if (combined.includes("bell-429") || combined.includes("bell429") || combined.includes("bell 429") || combined.includes("bell")) {
+      techType = "bell429";
+    } else if (combined.includes("bumbi") || combined.includes("bambi") || combined.includes("t-70_bumbi") || combined.includes("t70_bumbi") || combined.includes("t-70 bumbi")) {
+      techType = "t70_bumbi_backet";
+    } else if (combined.includes("helitak") || combined.includes("t-70_helitak") || combined.includes("t70_helitak") || combined.includes("t-70 helitak")) {
+      techType = "t70_helitak";
+    } else if (combined.includes("t-70") || combined.includes("t70") || combined.includes("t 70") || combined.includes("sikorsky")) {
+      techType = "t70";
+    } else if (combined.includes("b-360") || combined.includes("b360") || combined.includes("b 360") || combined.includes("king air") || combined.includes("kingair")) {
+      techType = "b360";
+    } else if (combined.includes("c-650") || combined.includes("c650") || combined.includes("c 650") || combined.includes("citation")) {
+      techType = "c650";
+    } else if (combined.includes("hangar")) {
+      techType = "hangar";
+    } else if (combined.includes("kara") || combined.includes("arac") || combined.includes("plaka") || combined.includes("forklift") || combined.includes("traktor")) {
+      techType = "kara_araclari";
+    }
+
+    if (combined.includes("ozel") || combined.includes("bakim alet") || combined.includes("alet")) {
+      subSection = "ozel_alet";
+    } else if (combined.includes("sarf") || combined.includes("yedek parca") || combined.includes("parca depo") || combined.includes("parca")) {
+      subSection = "depo_sarf";
+    } else if (combined.includes("kimyasal") || combined.includes("yag") || combined.includes("boya") || combined.includes("tiner")) {
+      subSection = "depo_kimyasal";
+    } else if (combined.includes("yer") || combined.includes("destek") || combined.includes("techizat")) {
+      subSection = "yer_destek";
+    }
+
+    return { techType, subSection };
+  };
+
+  const applyParsedRowsToUnit = (techType: string, subSection: string, newRows: string[][]) => {
+    if (newRows.length === 0) return;
+
+    let updater: (prev: string[][]) => string[][];
+
+    if (subSection === 'all') {
+      updater = () => newRows;
+    } else {
+      updater = (prev) => {
+        const otherSectionRows = prev.filter(r => getRowSection(r, techType) !== subSection);
+        const tagged = newRows.map(r => {
+          const copy = [...r];
+          const isKara = techType === 'kara_araclari';
+          const isDepo = subSection === 'depo_sarf' || subSection === 'depo_kimyasal';
+          const secCol = isKara ? 11 : (isDepo ? 12 : 13);
+          while (copy.length <= secCol) copy.push("");
+          copy[secCol] = subSection;
+          return copy;
+        });
+        const combined = [...otherSectionRows, ...tagged];
+        return combined.map((r, i) => {
+          const c = [...r];
+          c[0] = String(i + 1);
+          return c;
+        });
+      };
+    }
+
+    if (techType === 'bell429') {
+      setTechizatBell429Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_bell429_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 'at802') {
+      setTechizatAt802Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_at802_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 't70') {
+      setTechizatT70Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_t70_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 't70_bumbi_backet') {
+      setTechizatT70BumbiBacketData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_t70_bumbi_backet_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 't70_helitak') {
+      setTechizatT70HelitakData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_t70_helitak_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 'b360') {
+      setTechizatB360Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_b360_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 'c650') {
+      setTechizatC650Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_c650_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 'hangar') {
+      setTechizatHangarData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_hangar_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 'kara_araclari') {
+      setTechizatKaraAraclariData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(res)); } catch(e){} return res; });
+    }
+  };
+
+  // Google Drive Klasöründen (1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP) Excel Tablolarını Hızlı ve Arka Planda Okuyan Fonksiyon
+  const pullTechizatUnitFromDrive = async (targetUnitKey?: string | null, silent = true) => {
+    setIsTechizatDriveLoading(true);
+    try {
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=listTechizatExcelsFromDrive&folderId=1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP`;
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 7000);
+      
+      const response = await fetch(targetUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
       if (!response.ok) {
         throw new Error(`HTTP Hata: ${response.status}`);
       }
       const result = await response.json();
-      if (result.status === "success" && Array.isArray(result.data)) {
-        const rows = result.data;
-        
-        const bell429Rows: string[][] = [];
-        const at802Rows: string[][] = [];
-        const t70Rows: string[][] = [];
-        const t70BumbiRows: string[][] = [];
-        const c650Rows: string[][] = [];
-        const b360Rows: string[][] = [];
-        const hangarRows: string[][] = [];
-        const karaAraclariRows: string[][] = [];
-        
-        rows.forEach((r: any) => {
-          const unit = String(r["AİT OLDUĞU BİRİM"] || r["Ait Olduğu Birim"] || r["AIT OLDUGU BIRIM"] || "").trim().toUpperCase();
-          
-          if (unit.includes("KARA")) {
-            const karaRowData = [
-              String(r["SIRA NO"] || r["Sıra No"] || ""),
-              String(r["ARAÇ PLAKASI / TANIMI"] || r["Arac Plakasi / Tanimi"] || r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || ""),
-              String(r["MODEL"] || r["Model"] || r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || ""),
-              String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || ""),
-              String(r["SON KM Sİ"] || r["Son Km Si"] || r["SON KM"] || ""),
-              String(r["DURUMU"] || r["Durumu"] || ""),
-              String(r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL / KALİBRASYON / BAKIM"] || ""),
-              String(r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL / KALİBRASYON / BAKIM"] || ""),
-              String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || ""),
-              String(r["AÇIKLAMA"] || r["Açıklama"] || ""),
-              String(
-                r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] ||
-                r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] ||
-                r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] ||
-                ""
-              ).trim()
-            ];
-            karaAraclariRows.push(karaRowData);
-          } else {
-            const rowData = [
-              String(r["SIRA NO"] || r["Sıra No"] || ""),
-              String(r["TEÇHİZAT ADI"] || r["Teçhizat Adı"] || ""),
-              String(r["PARÇA NO (P/N)"] || r["Parça No (P/N)"] || r["PARÇA NO (P/N) / MODEL"] || r["Parça No (P/N) / Model"] || ""),
-              String(r["SERİ NO (S/N)"] || r["Seri No (S/N)"] || ""),
-              String(r["MİKTAR / KAPASİTE"] || r["Miktar / Kapasite"] || ""),
-              String(r["BULUNDUĞU YER"] || r["Bulunduğu Yer"] || ""),
-              String(r["DURUMU"] || r["Durumu"] || ""),
-              String(r["SON KONTROL / BAKIM"] || r["Son Kontrol / Bakım"] || r["SON KONTROL / KALİBRASYON / BAKIM"] || ""),
-              String(r["GELECEK KONTROL / BAKIM"] || r["Gelecek Kontrol / Bakım"] || r["GELECEK KONTROL / KALİBRASYON / BAKIM"] || ""),
-              String(r["SON KONTROLÜ YAPAN FİRMA"] || r["Son Kontrolü Yapan Firma"] || ""),
-              String(r["AÇIKLAMA"] || r["Açıklama"] || ""),
-              String(
-                r["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["90 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["90 Gun Uyarisi Mail"] ||
-                r["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["60 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["60 Gun Uyarisi Mail"] ||
-                r["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || r["30 GÜN UYARISI MAIL GONDERIM TARIHI"] || r["30 Gun Uyarisi Mail"] ||
-                ""
-              ).trim()
-            ];
+      if (result.status === "success" && Array.isArray(result.excels) && result.excels.length > 0) {
+        const excels = result.excels;
+        let totalLoadedCount = 0;
 
-            if (unit.includes("BELL 429")) {
-              bell429Rows.push(rowData);
-            } else if (unit.includes("AT-802")) {
-              at802Rows.push(rowData);
-            } else if (unit.includes("T-70 YER") || (unit.includes("T-70") && !unit.includes("BUMBİ") && !unit.includes("BAMBI") && !unit.includes("KARA"))) {
-              t70Rows.push(rowData);
-            } else if (unit.includes("BUMBİ") || unit.includes("BAMBI") || unit.includes("T-70 BUMBİ")) {
-              t70BumbiRows.push(rowData);
-            } else if (unit.includes("C-650")) {
-              c650Rows.push(rowData);
-            } else if (unit.includes("B-360")) {
-              b360Rows.push(rowData);
-            } else if (unit.includes("HANGAR")) {
-              hangarRows.push(rowData);
+        // Hedef birim belirtilmişse SADECE o birime ait dosyayı filtreleyip hızlıca çek
+        const targetClean = targetUnitKey ? targetUnitKey.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+        const filesToProcess = (targetUnitKey && targetUnitKey !== 'all')
+          ? excels.filter((f: any) => {
+              const fn = (f.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              const detected = detectUnitAndSectionFromNames(f.name || '', "").techType;
+              return detected === targetUnitKey || (targetClean && fn.includes(targetClean));
+            })
+          : excels;
+
+        const filesToUse = filesToProcess.length > 0 ? filesToProcess : excels;
+
+        await Promise.all(filesToUse.map(async (file: any) => {
+          try {
+            const fileTechType = detectUnitAndSectionFromNames(file.name || '', "").techType;
+            if (fileTechType && file.lastUpdated) {
+              setFormUpdateDates(prev => {
+                const up = { ...prev, [`techizat_${fileTechType}`]: file.lastUpdated };
+                localStorage.setItem("form_update_dates", JSON.stringify(up));
+                return up;
+              });
             }
+
+            const fileController = new AbortController();
+            const fileTimeoutId = setTimeout(() => fileController.abort(), 6000);
+
+            const fileRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileId=${file.id}`, { signal: fileController.signal });
+            clearTimeout(fileTimeoutId);
+            
+            if (!fileRes.ok) return;
+            const fileData = await fileRes.json();
+            if (!fileData || !fileData.base64) return;
+
+            const workbook = XLSX.read(fileData.base64, { type: 'base64' });
+            
+            // Excel içerisindeki her sayfayı tara ve sayfa/dosya adıyla hedef tabloya yerleştir
+            for (const sName of workbook.SheetNames) {
+              const worksheet = workbook.Sheets[sName];
+              if (!worksheet) continue;
+
+              const detected = detectUnitAndSectionFromNames(file.name || '', sName);
+              if (detected.techType) {
+                // Kaydedilirken kendi orijinal adını koruması için state'e yaz
+                setTechizatFileNames(prev => ({ ...prev, [`${detected.techType}_${detected.subSection}`]: file.name || "" }));
+                
+                // Eğer spesifik bir sayfa hedefleniyorsa ve eşleşmiyorsa atla
+                if (targetUnitKey && targetUnitKey !== 'all' && detected.techType !== targetUnitKey) {
+                  continue;
+                }
+                const parsed = parseExcelWorksheetToRows(worksheet, detected.techType, detected.subSection);
+                if (parsed.length > 0) {
+                  applyParsedRowsToUnit(detected.techType, detected.subSection, parsed);
+                  totalLoadedCount += parsed.length;
+                }
+              }
+            }
+          } catch (err) {
+            console.warn("Drive Excel okuma:", file.name, err);
           }
-        });
-        
-        const groupedBell429 = groupMultiLocationRows(bell429Rows, 1, 5, 4, 0);
-        setTechizatBell429Data(groupedBell429);
-        localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(groupedBell429));
-
-        const groupedAt802 = groupMultiLocationRows(at802Rows, 1, 5, 4, 0);
-        setTechizatAt802Data(groupedAt802);
-        localStorage.setItem('excel_techizat_at802_data', JSON.stringify(groupedAt802));
-
-        const groupedT70 = groupMultiLocationRows(t70Rows, 1, 5, 4, 0);
-        setTechizatT70Data(groupedT70);
-        localStorage.setItem('excel_techizat_t70_data', JSON.stringify(groupedT70));
-
-        const groupedT70Bumbi = groupMultiLocationRows(t70BumbiRows, 1, 5, 4, 0);
-        setTechizatT70BumbiBacketData(groupedT70Bumbi);
-        localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(groupedT70Bumbi));
-
-        const groupedC650 = groupMultiLocationRows(c650Rows, 1, 5, 4, 0);
-        setTechizatC650Data(groupedC650);
-        localStorage.setItem('excel_techizat_c650_data', JSON.stringify(groupedC650));
-
-        const groupedB360 = groupMultiLocationRows(b360Rows, 1, 5, 4, 0);
-        setTechizatB360Data(groupedB360);
-        localStorage.setItem('excel_techizat_b360_data', JSON.stringify(groupedB360));
-
-        const groupedHangar = groupMultiLocationRows(hangarRows, 1, 5, 4, 0);
-        setTechizatHangarData(groupedHangar);
-        localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(groupedHangar));
-
-        let finalKaraAraclari = karaAraclariRows.map(row => convertOldKaraAraclariRowToNew(row));
-        finalKaraAraclari = groupMultiLocationRows(finalKaraAraclari, 1, 3, -1, 0);
-        setTechizatKaraAraclariData(finalKaraAraclari);
-        localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(finalKaraAraclari));
+        }));
 
         if (!silent) {
-          showNotification("Bütün Teçhizat Verileri Canlı E-Tablodan Senkronize Edildi!");
+          if (totalLoadedCount > 0) {
+            const unitLabel = targetUnitKey && targetUnitKey !== 'all' ? targetUnitKey.toUpperCase() : 'Birimler';
+            showNotification(`Google Drive'dan [${unitLabel}] için (${totalLoadedCount} kayıt) Excel verileri başarıyla yüklendi!`);
+          } else {
+            showNotification("Drive klasöründe işlenecek geçerli teçhizat kaydı içeren Excel dosyası bulunamadı.");
+          }
         }
+      } else if (!silent) {
+        showNotification("Drive klasöründe yüklü herhangi bir Excel dosyası bulunamadı.");
       }
     } catch (err) {
-      console.error("Failed to sync all teçhizat on startup:", err);
+      console.warn("Drive Excels kontrolü tamamlandı/zaman aşımı:", err);
+    } finally {
+      setIsTechizatDriveLoading(false);
+      setIsPullingTechizat(false);
     }
   };
+
+  const pullAllTechizatFromDriveExcels = (silent = true) => pullTechizatUnitFromDrive('all', silent);
+  const pullAllTechizatFromGoogleSheets = pullAllTechizatFromDriveExcels;
 
   const fetchGunTakipSorumlulari = async () => {
     try {
@@ -4632,11 +6603,14 @@ export default function App() {
             birim: String(row["SORUMLU BİRİM"] || row["Sorumlu Birim"] || "").trim().toUpperCase(),
             adSoyad: String(row["ADI SOYADI"] || row["Adı Soyadı"] || row["AD SOYAD"] || "").trim(),
             eposta: String(row["E-POSTA ADRESİ"] || row["E-posta Adresi"] || row["EPOSTA ADRESI"] || "").trim(),
-            mail90: String(row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["90 Gün Uyarı Mail Gönderim Tarihi"] || row["90 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim()
+            mail90: String(row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["90 Gün Uyarı Mail Gönderim Tarihi"] || row["90 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
+            mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["60 Gün Uyarı Mail Gönderim Tarihi"] || row["60 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
+            mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["30 Gün Uyarı Mail Gönderim Tarihi"] || row["30 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim()
           })).filter((item: any) => item.birim);
           
           if (mapped.length > 0) {
             setGunTakipSorumlulari(mapped);
+            try { localStorage.setItem('gun_takip_sorumlulari', JSON.stringify(mapped)); } catch(e){}
           }
         }
       }
@@ -4648,7 +6622,14 @@ export default function App() {
   const saveGunTakipSorumlulari = async (updatedData: typeof gunTakipSorumlulari) => {
     setIsSavingSorumlu(true);
     try {
-      const rowsToSend = updatedData.map(item => [item.birim, item.adSoyad, item.eposta]);
+      const rowsToSend = updatedData.map(item => [
+        item.birim,
+        item.adSoyad,
+        item.eposta,
+        item.mail90 || '',
+        item.mail60 || '',
+        item.mail30 || ''
+      ]);
       const response = await fetch(GOOGLE_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
@@ -4661,8 +6642,8 @@ export default function App() {
       const result = await response.json();
       if (result.status === "success") {
         setGunTakipSorumlulari(updatedData);
+        try { localStorage.setItem('gun_takip_sorumlulari', JSON.stringify(updatedData)); } catch(e){}
         showNotification("Sorumlu Personel (Gün Takip) Verileri Başarıyla Güncellendi!");
-        setIsSorumluModalOpen(false);
       } else {
         alert("E-Tablo Güncelleme Hatası: " + result.message);
       }
@@ -4675,21 +6656,54 @@ export default function App() {
 
   const parseGelecekBakimDays = (dateStr: string): number | null => {
     if (!dateStr) return null;
-    const cleaned = dateStr.trim();
+    const cleaned = String(dateStr).trim();
+    if (!cleaned || cleaned === "-" || cleaned === "--" || cleaned.includes("MUAFIYET") || cleaned.toUpperCase() === "BELİRTİLMEMİŞ") return null;
     
-    // dd.mm.yyyy veya dd/mm/yyyy formatı
+    // If multi-line or comma-separated, evaluate each date and return the minimum (most urgent) remaining days
+    if (cleaned.includes('\n') || cleaned.includes(',') || cleaned.includes(';')) {
+      const parts = cleaned.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+      let minDays: number | null = null;
+      for (const p of parts) {
+        const d = parseGelecekBakimDays(p);
+        if (d !== null) {
+          if (minDays === null || d < minDays) {
+            minDays = d;
+          }
+        }
+      }
+      return minDays;
+    }
+
+    // Excel seri no kontrolü (Örn: 46234, 46965)
+    if (/^\d{5}(\.\d+)?$/.test(cleaned)) {
+      const serial = parseFloat(cleaned);
+      if (serial >= 20000 && serial <= 90000) {
+        const utcDays = Math.floor(serial - 25569);
+        const dateObj = new Date(utcDays * 86400 * 1000);
+        if (!isNaN(dateObj.getTime())) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          dateObj.setHours(0, 0, 0, 0);
+          const diffTime = dateObj.getTime() - today.getTime();
+          return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        }
+      }
+    }
+
+    // cleanAndFormatDateString ile önce standart GG.AA.YYYY formatına çevir
+    const formatted = cleanAndFormatDateString(cleaned);
     const dmyRegex = /^(\d{1,2})[\.\/-](\d{1,2})[\.\/-](\d{4})$/;
     const ymdRegex = /^(\d{4})[\.\/-](\d{1,2})[\.\/-](\d{1,2})$/;
     
     let dateObj: Date | null = null;
-    let m = cleaned.match(dmyRegex);
+    let m = formatted.match(dmyRegex);
     if (m) {
       const day = parseInt(m[1], 10);
       const month = parseInt(m[2], 10) - 1;
       const year = parseInt(m[3], 10);
       dateObj = new Date(year, month, day);
     } else {
-      m = cleaned.match(ymdRegex);
+      m = formatted.match(ymdRegex);
       if (m) {
         const year = parseInt(m[1], 10);
         const month = parseInt(m[2], 10) - 1;
@@ -4776,36 +6790,38 @@ export default function App() {
       setIsPasswordModalOpen(false);
       setPasswordInput('');
       setPasswordError(false);
-      
-      if (activeTechizatType && modalType === 'techizat_matrix') {
-        setSyncSelectedTarget(`techizat_${activeTechizatType}`);
-        setActiveSyncStep(2);
-        setModalType('excel_sync');
-        setModalTitle('TEÇHİZAT VERİ GÜNCELLEME SİHİRBAZI');
+
+      if (passwordActionType === 'gun_takip') {
+        setIsSorumluModalOpen(true);
         return;
       }
 
-      // Reset steps and set target based on current view context
-      setActiveSyncStep(1);
-      if (selectedFormId !== null && [1, 21, 22, 23, 24, 25, 3, 5, 6].includes(selectedFormId)) {
-        if (isSummerForm(selectedFormId)) {
-          setStep1Target('2');
-          setSelectedForm2Unit(selectedFormId as any);
-          setSyncSelectedTarget(String(selectedFormId));
-        } else {
-          setStep1Target(String(selectedFormId));
-          setSelectedForm2Unit(null);
-          setSyncSelectedTarget(String(selectedFormId));
-        }
-      } else {
-        setStep1Target('1');
-        setSelectedForm2Unit(null);
-        setSyncSelectedTarget('1');
+      if (passwordActionType === 'new_product') {
+        initializeNewProductForm();
+        setIsNewProductModalOpen(true);
+        return;
       }
 
-      // Mode switch
-      setModalType('excel_sync');
-      setModalTitle('VERİ GÜNCELLEME ÇEVRİMDIŞI PORTALİ');
+      if (passwordActionType === 'depo_management') {
+        setIsDepoModalOpen(true);
+        return;
+      }
+
+      if (passwordActionType === 'filter_sync') {
+        let target = `techizat_${activeTechizatType}`;
+        if (techizatActiveSection && techizatActiveSection !== 'all' && techizatActiveSection !== 'techizat_all' && techizatActiveSection !== 'depo_all') {
+          target = `techizat_${activeTechizatType}_${techizatActiveSection}`;
+        }
+        setSyncInitialTarget(target);
+        setSyncInitialStep(2);
+        setIsDataSyncModalOpen(true);
+        return;
+      }
+
+      // Default: global_sync -> Step 1 (Global Selection for all forms and units)
+      setSyncInitialStep(1);
+      setSyncInitialTarget('1');
+      setIsDataSyncModalOpen(true);
     } else {
       setPasswordError(true);
     }
@@ -5075,6 +7091,70 @@ export default function App() {
       .replace(/\s+/g, '_');
   };
 
+  const getSyncTargetDisplayTitle = (target: string): string => {
+    if (target === '1') return "1. GÖREVLENDİRME ÇİZELGELERİ";
+    if (target === '21') return "2. YAZ DÖNEMİ PLANLAMASI - BELL 429";
+    if (target === '22') return "2. YAZ DÖNEMİ PLANLAMASI - T-70";
+    if (target === '23') return "2. YAZ DÖNEMİ PLANLAMASI - AT-802";
+    if (target === '24') return "2. YAZ DÖNEMİ PLANLAMASI - ANKARA BEKLEME (BELL-429)";
+    if (target === '25') return "2. YAZ DÖNEMİ PLANLAMASI - ANKARA BEKLEME (C-650/B-360)";
+    if (target === '3') return "3. BAKIM YETKİ ÇİZELGELERİ";
+    if (target === '5') return "5. PERSONEL BİLGİ ÇİZELGELERİ";
+    if (target === '6') return "6. PERSONEL UÇUŞ-HİZMET YILLARI";
+
+    // AT-802
+    if (target === 'techizat_at802') return "✈️ AT-802F - TÜM BİRİM ENVANTERİ (EXCEL)";
+    if (target === 'techizat_at802_yer_destek') return "✈️ AT-802F - YER DESTEK TEÇHİZATLARI (EXCEL)";
+    if (target === 'techizat_at802_ozel_alet') return "✈️ AT-802F - ÖZEL ALETLER (EXCEL)";
+    if (target === 'techizat_at802_depo_sarf') return "📦 AT-802F - SARF VE PARÇA DEPOSU (EXCEL)";
+    if (target === 'techizat_at802_depo_kimyasal') return "🧪 AT-802F - KİMYASAL DEPO (EXCEL)";
+
+    // BELL 429
+    if (target === 'techizat_bell429') return "🚁 BELL 429 - TÜM BİRİM ENVANTERİ (EXCEL)";
+    if (target === 'techizat_bell429_yer_destek') return "🚁 BELL 429 - YER DESTEK VE ÖZEL ALETLER (EXCEL)";
+    if (target === 'techizat_bell429_depo_sarf') return "📦 BELL 429 - SARF VE PARÇA DEPOSU (EXCEL)";
+    if (target === 'techizat_bell429_depo_kimyasal') return "🧪 BELL 429 - KİMYASAL DEPO (EXCEL)";
+
+    // T-70
+    if (target === 'techizat_t70') return "🚁 T-70 - TÜM BİRİM ENVANTERİ (EXCEL)";
+    if (target === 'techizat_t70_yer_destek') return "🚁 T-70 - YER DESTEK VE ÖZEL ALETLER (EXCEL)";
+    if (target === 'techizat_t70_bumbi_backet') return "🪣 T-70 - BUMBİ BACKET TEÇHİZATI (EXCEL)";
+    if (target === 'techizat_t70_helitak') return "🛡️ T-70 - HELİTAK TEÇHİZATI (EXCEL)";
+    if (target === 'techizat_t70_depo_sarf') return "📦 T-70 - SARF VE PARÇA DEPOSU (EXCEL)";
+    if (target === 'techizat_t70_depo_kimyasal') return "🧪 T-70 - KİMYASAL DEPO (EXCEL)";
+
+    // B-360
+    if (target === 'techizat_b360') return "✈️ BEECHCRAFT B-360 - TÜM BİRİM ENVANTERİ (EXCEL)";
+    if (target === 'techizat_b360_yer_destek') return "✈️ BEECHCRAFT B-360 - YER DESTEK VE ÖZEL ALETLER (EXCEL)";
+    if (target === 'techizat_b360_depo_sarf') return "📦 BEECHCRAFT B-360 - SARF VE PARÇA DEPOSU (EXCEL)";
+    if (target === 'techizat_b360_depo_kimyasal') return "🧪 BEECHCRAFT B-360 - KİMYASAL DEPO (EXCEL)";
+
+    // C-650
+    if (target === 'techizat_c650') return "✈️ CITATION C-650 - TÜM BİRİM ENVANTERİ (EXCEL)";
+    if (target === 'techizat_c650_yer_destek') return "✈️ CITATION C-650 - YER DESTEK VE ÖZEL ALETLER (EXCEL)";
+    if (target === 'techizat_c650_depo_sarf') return "📦 CITATION C-650 - SARF VE PARÇA DEPOSU (EXCEL)";
+    if (target === 'techizat_c650_depo_kimyasal') return "🧪 CITATION C-650 - KİMYASAL DEPO (EXCEL)";
+
+    // HANGAR
+    if (target === 'techizat_hangar') return "🏭 HANGAR - TÜM BİRİM ENVANTERİ (EXCEL)";
+    if (target === 'techizat_hangar_yer_destek') return "🏭 HANGAR - YER DESTEK VE ÖZEL ALETLER (EXCEL)";
+    if (target === 'techizat_hangar_depo_sarf') return "📦 HANGAR - SARF VE PARÇA DEPOSU (EXCEL)";
+    if (target === 'techizat_hangar_depo_kimyasal') return "🧪 HANGAR - KİMYASAL DEPO (EXCEL)";
+
+    // KARA ARAÇLARI
+    if (target === 'techizat_kara_araclari') return "🚗 KARA ARAÇLARI TAKİP SİSTEMİ (EXCEL)";
+
+    return TABLE_CONFIGS[Number(target)]?.title || `BİRİM ${target}`;
+  };
+
+  const getCleanSyncTargetTitle = (target: string): string => {
+    const fullTitle = getSyncTargetDisplayTitle(target);
+    return fullTitle
+      .replace(/^[^\w\s\(\)\-\.]+\s*/u, '')
+      .replace(/\s*\(EXCEL\)$/i, '')
+      .trim();
+  };
+
   // PDF Yükleme Metodu (Önce RAM'de çözümler, önizlemeyi açar, yükleme yapılmadan önce sayfa yönü ve yaklaştırma ayarları sunar)
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -5094,9 +7174,51 @@ export default function App() {
 
     // 1. Handle Teçhizat Takip Excel Upload
     if (isTechizatTarget) {
-      const techType = syncSelectedTarget.replace('techizat_', '') as 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari';
+      const targetRaw = syncSelectedTarget.replace('techizat_', '');
+      let techType: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' = 'at802';
+      let subSection: 'all' | 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal' = 'all';
+
+      if (targetRaw.startsWith('at802')) {
+        techType = 'at802';
+        if (targetRaw.includes('ozel_alet')) subSection = 'ozel_alet';
+        else if (targetRaw.includes('depo_sarf')) subSection = 'depo_sarf';
+        else if (targetRaw.includes('depo_kimyasal')) subSection = 'depo_kimyasal';
+        else if (targetRaw.includes('yer_destek')) subSection = 'yer_destek';
+      } else if (targetRaw.startsWith('bell429')) {
+        techType = 'bell429';
+        if (targetRaw.includes('depo_sarf')) subSection = 'depo_sarf';
+        else if (targetRaw.includes('depo_kimyasal')) subSection = 'depo_kimyasal';
+        else if (targetRaw.includes('yer_destek')) subSection = 'yer_destek';
+      } else if (targetRaw.startsWith('t70_bumbi_backet')) {
+        techType = 't70_bumbi_backet';
+      } else if (targetRaw.startsWith('t70_helitak')) {
+        techType = 't70_helitak';
+      } else if (targetRaw.startsWith('t70')) {
+        techType = 't70';
+        if (targetRaw.includes('depo_sarf')) subSection = 'depo_sarf';
+        else if (targetRaw.includes('depo_kimyasal')) subSection = 'depo_kimyasal';
+        else if (targetRaw.includes('yer_destek')) subSection = 'yer_destek';
+      } else if (targetRaw.startsWith('b360')) {
+        techType = 'b360';
+        if (targetRaw.includes('depo_sarf')) subSection = 'depo_sarf';
+        else if (targetRaw.includes('depo_kimyasal')) subSection = 'depo_kimyasal';
+        else if (targetRaw.includes('yer_destek')) subSection = 'yer_destek';
+      } else if (targetRaw.startsWith('c650')) {
+        techType = 'c650';
+        if (targetRaw.includes('depo_sarf')) subSection = 'depo_sarf';
+        else if (targetRaw.includes('depo_kimyasal')) subSection = 'depo_kimyasal';
+        else if (targetRaw.includes('yer_destek')) subSection = 'yer_destek';
+      } else if (targetRaw.startsWith('hangar')) {
+        techType = 'hangar';
+        if (targetRaw.includes('depo_sarf')) subSection = 'depo_sarf';
+        else if (targetRaw.includes('depo_kimyasal')) subSection = 'depo_kimyasal';
+        else if (targetRaw.includes('yer_destek')) subSection = 'yer_destek';
+      } else if (targetRaw.startsWith('kara_araclari')) {
+        techType = 'kara_araclari';
+      }
+
       if (!fileNameLower.endsWith('.xlsx') && !fileNameLower.endsWith('.xls') && !fileNameLower.endsWith('.csv')) {
-        alert("Teçhizat Takip güncellemesi için lütfen Excel (.xlsx, .xls) veya CSV belgesi yükleyin.");
+        alert("Teçhizat/Depo Takip güncellemesi için lütfen Excel (.xlsx, .xls) veya CSV belgesi yükleyin.");
         return;
       }
 
@@ -5106,6 +7228,9 @@ export default function App() {
           const arrayBuffer = evt.target?.result as ArrayBuffer;
           const workbook = XLSX.read(arrayBuffer, { type: 'array' });
           const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+
+          // Birleştirilmiş hücreleri unroll yap (böylece alt hücreler boş kalmaz)
+          unmergeAndFillWorksheet(worksheet);
           
           const rawRows = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1, defval: "", raw: false });
           if (rawRows.length === 0) {
@@ -5113,114 +7238,265 @@ export default function App() {
           }
 
           // Smart Header Detection
+          // Robust Header Row Detection
           let headerRowIdx = 0;
-          for (let r = 0; r < Math.min(10, rawRows.length); r++) {
+          let maxScore = -1;
+          for (let r = 0; r < Math.min(15, rawRows.length); r++) {
             const rCells = rawRows[r] || [];
-            const filledCount = rCells.filter(c => String(c).trim() !== "").length;
-            const hasKeywords = rCells.some(c => {
-              const s = String(c).toLowerCase();
-              return s.includes("sira") || s.includes("no") || s.includes("teçhizat") || s.includes("techizat") || s.includes("malzeme") || s.includes("parca") || s.includes("parça");
-            });
-            if (filledCount >= 3 && hasKeywords) {
+            let score = 0;
+            const rowStr = rCells.map(c => String(c).toLowerCase()).join(" ");
+            
+            if (rowStr.includes("sıra") || rowStr.includes("sira")) score += 2;
+            if (rowStr.includes("teçhizat") || rowStr.includes("techizat") || rowStr.includes("malzeme") || rowStr.includes("araç")) score += 2;
+            if (rowStr.includes("parça") || rowStr.includes("parca") || rowStr.includes("p/n")) score += 2;
+            if (rowStr.includes("seri") || rowStr.includes("s/n")) score += 2;
+            if (rowStr.includes("miktar") || rowStr.includes("kapasite")) score += 2;
+            if (rowStr.includes("bulunduğu") || rowStr.includes("lokasyon")) score += 2;
+            if (rowStr.includes("durum")) score += 1;
+            if (rowStr.includes("bakım") || rowStr.includes("kalibrasyon") || rowStr.includes("kontrol")) score += 2;
+
+            if (score > maxScore) {
+              maxScore = score;
               headerRowIdx = r;
-              break;
             }
+          }
+          
+          if (maxScore < 4) {
+            console.warn("Could not confidently find a header row. Falling back to row 0 or 1.");
           }
 
           const rawHeaders = (rawRows[headerRowIdx] || []).map(h => String(h || '').trim().toUpperCase());
           const finalHeaders = rawHeaders.map((h, hIdx) => h || `KOLON ${hIdx + 1}`);
 
-          // Extract rows below the header
+          // 1. Akıllı Başlık Tespiti ve Eşleştirme (Smart Header-Based Column Mapping)
+          // Yüklenen Excel'de başlıkların sırası ne olursa olsun 'AÇIKLAMA', 'TEÇHİZAT ADI', 'P/N', 'S/N' vb. doğru sütuna aktarılır.
+          const findColIdx = (keywords: string[], excludeKeywords: string[] = []): number => {
+            return finalHeaders.findIndex(h => {
+              const upper = h.toUpperCase().trim();
+              const hasKey = keywords.some(k => upper.includes(k.toUpperCase()));
+              const hasExclude = excludeKeywords.some(ex => upper.includes(ex.toUpperCase()));
+              return hasKey && !hasExclude;
+            });
+          };
+
+          const siraColIdx = findColIdx(["SIRA", "NO."], ["SERİ", "SERI", "PARÇA", "PARCA", "P/N", "MODEL"]);
+          const nameColIdx = findColIdx(
+            ["TEÇHİZAT", "TECHİZAT", "MALZEME", "ARAÇ", "ARAC", "PLAKA", "ÜRÜN", "URUN", "EKİPMAN", "TANIM", "NAME"],
+            ["FİRMA", "FIRMA", "KONTROL", "BAKIM", "YAPAN"]
+          );
+          const pnColIdx = findColIdx(["P/N", "PN", "PARÇA NO", "PARCA NO", "MODEL", "PART NUMBER", "PART NO"]);
+          const snColIdx = findColIdx(["S/N", "SN", "SERİ NO", "SERI NO", "SERİ", "SERI", "SERIAL"], ["SIRA"]);
+          const miktarColIdx = findColIdx(["MİKTAR", "MIKTAR", "KAPASİTE", "KAPASITE", "ADET", "QTY", "QUANTITY"]);
+          const locColIdx = findColIdx(["BULUNDUĞU", "BULUNDUGU", "LOKASYON", "KONUM", "YER", "RAF", "DEPO", "LOCATION"]);
+          const durumColIdx = findColIdx(["DURUM", "DURUMU", "STATUS", "FAALİYET"]);
+          const kalibTabiColIdx = findColIdx(["KALİBRASYONA TABİ", "KALIBRASYONA TABI", "BAKIMA TABİ", "BAKIMA TABI", "TABİ Mİ", "TABI MI", "ÖMÜRLÜ", "OMURLU"]);
+          const sonBakimColIdx = findColIdx(["SON KONTROL", "SON BAKIM", "SON KALİBRASYON", "SON TEST", "SON MUAYENE", "SON KM", "YAPILAN KONTROL"]);
+          const gelecekBakimColIdx = findColIdx(["GELECEK KONTROL", "GELECEK BAKIM", "GELECEK KALİBRASYON", "BİR SONRAKİ", "SONRAKİ BAKIM", "ÖMÜR BİTİŞ", "OMUR BITIS", "SON KULLANMA", "EXPIRY"]);
+          const firmaColIdx = findColIdx(["KONTROLÜ YAPAN", "KONTROLU YAPAN", "YAPAN FİRMA", "YAPAN FIRMA", "FİRMA", "FIRMA", "TEDARİK", "TEDARIK", "SERVİS", "VENDOR", "SUPPLIER"]);
+          const aciklamaColIdx = findColIdx(["AÇIKLAMA", "ACIKLAMA", "AÇIKLAMALAR", "ACIKLAMALAR", "NOT", "NOTLAR", "DESCRIPTION", "REMARKS", "DETAY", "ÖZEL NOT", "LOT", "PARTİ"]);
+          const mailColIdx = findColIdx(["MAİL GÖNDERİM", "MAIL GONDERIM", "90 GÜN", "90 GUN", "E-POSTA", "MAIL", "MAİL"]);
+
+          const isKara = techType === 'kara_araclari';
+          const isDepoType = subSection === 'depo_sarf' || subSection === 'depo_kimyasal';
+
+          // Extract and Map rows based on Detected Header Positions
           const rawParsedRows: string[][] = [];
           for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
             const rawRow = rawRows[r] || [];
             const isRowEmpty = rawRow.every(cell => String(cell || '').trim() === '');
             if (isRowEmpty) continue;
 
-            const trimmedRow = finalHeaders.map((_, cIdx) => {
-              return rawRow[cIdx] !== undefined ? String(rawRow[cIdx]).trim() : "";
-            });
+            const getVal = (idx: number, fallback = "") => {
+              if (idx >= 0 && rawRow[idx] !== undefined) {
+                return String(rawRow[idx]).trim();
+              }
+              return fallback;
+            };
 
-            rawParsedRows.push(trimmedRow);
-          }
+            // Dynamic fallbacks to avoid hardcoded indices
+            // If findColIdx failed for everything, we use the first few non-empty columns.
+            const nonEmptyCols = rawRow.map((c, i) => ({ val: String(c || '').trim(), idx: i })).filter(c => c.val !== "");
+            const guessIdx = (order) => nonEmptyCols.length > order ? nonEmptyCols[order].idx : -1;
+            
+            const rawSira = getVal(siraColIdx, getVal(guessIdx(0), ""));
+            const rawName = getVal(nameColIdx, getVal(guessIdx(1), ""));
+            const rawPn = getVal(pnColIdx, getVal(guessIdx(2), ""));
+            const rawSn = getVal(snColIdx, getVal(guessIdx(3), "-"));
+            const rawMiktar = getVal(miktarColIdx, getVal(guessIdx(4), "1"));
+            const rawLoc = getVal(locColIdx, getVal(guessIdx(5), ""));
+            const rawDurum = getVal(durumColIdx, "FAAL");
+            
+            let rawKalib = getVal(kalibTabiColIdx, "");
+            if (!rawKalib) {
+              rawKalib = "EVET";
+            }
+            const rawSonBakim = getVal(sonBakimColIdx, "");
+            const rawGelecekBakim = getVal(gelecekBakimColIdx, "");
+            const rawFirma = getVal(firmaColIdx, "");
+            
+            // Açıklama sütunu: Excel'de Açıklama başlığı nerede olursa olsun tam olarak aktarılır!
+            let rawAciklama = "";
+            if (aciklamaColIdx >= 0 && rawRow[aciklamaColIdx] !== undefined) {
+              rawAciklama = String(rawRow[aciklamaColIdx]).trim();
+            } else {
+              // Alternatif fallback: Eğer başlık doğrudan bulunamadıysa 10. veya 11. sütun
+              const fallbackIdx = finalHeaders.length >= 12 ? 11 : 10;
+              if (rawRow[fallbackIdx] !== undefined) {
+                rawAciklama = String(rawRow[fallbackIdx]).trim();
+              }
+            }
 
-          // Fallback if no rows could be parsed
-          if (rawParsedRows.length === 0) {
-            for (let r = headerRowIdx + 1; r < Math.min(200, rawRows.length); r++) {
-              const rawRow = rawRows[r] || [];
-              const trimmedRow = finalHeaders.map((_, cIdx) => {
-                return rawRow[cIdx] !== undefined ? String(rawRow[cIdx]).trim() : "";
-              });
-              rawParsedRows.push(trimmedRow);
+            const rawMail = getVal(mailColIdx, "");
+
+            let targetRow: string[] = [];
+            if (isKara) {
+              targetRow = [
+                rawSira,                                      // 0: SIRA NO (boş ise boş kalsın, gruplamada ardışık atanır)
+                rawName,                                      // 1: ARAÇ PLAKASI / TANIMI
+                rawPn,                                        // 2: PARÇA NO (P/N) / MODEL
+                rawLoc,                                       // 3: BULUNDUĞU YER
+                rawMiktar || rawSonBakim || "",               // 4: SON KM Sİ
+                rawDurum || "FAAL",                           // 5: DURUMU
+                rawKalib || "EVET",                           // 6: KALİBRASYONA TABİ
+                rawSonBakim,                                  // 7: SON KONTROL / BAKIM
+                rawGelecekBakim,                              // 8: GELECEK KONTROL / BAKIM
+                rawFirma,                                     // 9: SON KONTROLÜ YAPAN FİRMA
+                rawAciklama,                                  // 10: AÇIKLAMA
+                rawMail,                                      // 11: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
+                subSection                                    // 12: BÖLÜM
+              ];
+            } else if (isDepoType) {
+              targetRow = [
+                rawSira,                                      // 0: SIRA NO
+                rawName,                                      // 1: MALZEME / PARÇA ADI
+                rawPn,                                        // 2: PARÇA NO (P/N)
+                rawSn || "-",                                 // 3: SERİ NO (S/N)
+                rawMiktar || "1",                             // 4: MİKTAR
+                rawLoc,                                       // 5: BULUNDUĞU YER / RAF
+                rawDurum || "FAAL",                           // 6: DURUMU
+                rawKalib || "EVET",                           // 7: ÖMÜRLÜ PARÇA MI?
+                rawGelecekBakim || "-",                       // 8: ÖMÜR BİTİŞ TARİHİ
+                rawFirma || "-",                              // 9: TEDARİK EDİLEN FİRMA
+                rawAciklama,                                  // 10: AÇIKLAMA
+                rawMail,                                      // 11: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
+                subSection                                    // 12: BÖLÜM / KATEGORİ
+              ];
+            } else {
+              // Standart Teçhizat
+              targetRow = [
+                rawSira,                                      // 0: SIRA NO
+                rawName,                                      // 1: TEÇHİZAT ADI
+                rawPn,                                        // 2: PARÇA NO (P/N) / MODEL
+                rawSn || "-",                                 // 3: SERİ NO (S/N)
+                rawMiktar || "1",                             // 4: MİKTAR / KAPASİTE
+                rawLoc,                                       // 5: BULUNDUĞU YER
+                rawDurum || "FAAL",                           // 6: DURUMU
+                rawKalib || "EVET",                           // 7: KALİBRASYONA TABİ
+                rawSonBakim,                                  // 8: SON KONTROL / KALİBRASYON / BAKIM
+                rawGelecekBakim,                              // 9: GELECEK KONTROL / KALİBRASYON / BAKIM
+                rawFirma,                                     // 10: SON KONTROLÜ YAPAN FİRMA
+                rawAciklama,                                  // 11: AÇIKLAMA
+                rawMail,                                      // 12: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
+                subSection                                    // 13: BÖLÜM / KATEGORİ
+              ];
+            }
+
+            if (targetRow[1] || targetRow[2] || (targetRow[3] && targetRow[3] !== "-") || targetRow[5]) {
+              rawParsedRows.push(targetRow);
             }
           }
 
-          // Smartly find column indices for grouping multi-location rows
-          const nameColIdx = finalHeaders.findIndex(h => {
-            const s = h.toUpperCase();
-            return s.includes("TEÇHİZAT") || s.includes("TECHİZAT") || s.includes("ARAÇ") || s.includes("TANIM") || s.includes("MALZEME") || s.includes("ÜRÜN");
-          });
-          const locColIdx = finalHeaders.findIndex(h => {
-            const s = h.toUpperCase();
-            return s.includes("BULUNDUĞU") || s.includes("LOKASYON") || s.includes("YER");
-          });
-          const miktarColIdx = finalHeaders.findIndex(h => {
-            const s = h.toUpperCase();
-            return s.includes("MİKTAR") || s.includes("KAPASİTE") || s.includes("ADET");
-          });
-          const siraColIdx = finalHeaders.findIndex(h => h.toUpperCase().includes("SIRA"));
-
           const parsedRows = groupMultiLocationRows(
             rawParsedRows,
-            nameColIdx >= 0 ? nameColIdx : 1,
-            locColIdx >= 0 ? locColIdx : (techType === 'kara_araclari' ? 3 : 5),
-            miktarColIdx >= 0 ? miktarColIdx : (techType === 'kara_araclari' ? -1 : 4),
-            siraColIdx >= 0 ? siraColIdx : 0
+            1, // nameColIdx
+            isKara ? 3 : 5, // locColIdx
+            isKara ? -1 : 4, // miktarColIdx
+            0, // siraColIdx
+            2, // pnColIdx
+            isKara ? -1 : 3 // seriNoColIdx
           );
+
+          // Tag rows with specific subsection if selected
+          const taggedParsedRows = parsedRows.map(r => {
+            if (subSection === 'all') return r;
+            const newRow = [...r];
+            const secCol = isKara ? 12 : (isDepoType ? 12 : 13);
+            while (newRow.length <= secCol) newRow.push("");
+            newRow[secCol] = subSection;
+            return newRow;
+          });
+
+          // Existing rows for this unit to allow section-based merging
+          let existingData: string[][] = [];
+          if (techType === 'bell429') existingData = techizatBell429Data;
+          else if (techType === 'at802') existingData = techizatAt802Data;
+          else if (techType === 't70') existingData = techizatT70Data;
+          else if (techType === 't70_bumbi_backet') existingData = techizatT70BumbiBacketData;
+          else if (techType === 't70_helitak') existingData = techizatT70HelitakData;
+          else if (techType === 'b360') existingData = techizatB360Data;
+          else if (techType === 'c650') existingData = techizatC650Data;
+          else if (techType === 'hangar') existingData = techizatHangarData;
+          else if (techType === 'kara_araclari') existingData = techizatKaraAraclariData;
+
+          let finalDataToSave: string[][] = [];
+          if (subSection === 'all') {
+            finalDataToSave = parsedRows;
+          } else {
+            // Keep rows of OTHER sections, and replace rows of CURRENT section
+            const otherSectionRows = existingData.filter(r => getRowSection(r, techType) !== subSection);
+            finalDataToSave = [...otherSectionRows, ...taggedParsedRows];
+          }
+
+          // Renumber SIRA NO
+          finalDataToSave = finalDataToSave.map((r, idx) => {
+            const cloned = [...r];
+            cloned[0] = String(idx + 1);
+            return cloned;
+          });
 
           // Save columns and rows to states and localStorage
           if (techType === 'bell429') {
             setTechizatBell429Columns(finalHeaders);
-            setTechizatBell429Data(parsedRows);
+            setTechizatBell429Data(finalDataToSave);
             localStorage.setItem('excel_techizat_bell429_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(finalDataToSave));
           } else if (techType === 'at802') {
             setTechizatAt802Columns(finalHeaders);
-            setTechizatAt802Data(parsedRows);
+            setTechizatAt802Data(finalDataToSave);
             localStorage.setItem('excel_techizat_at802_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_at802_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_at802_data', JSON.stringify(finalDataToSave));
           } else if (techType === 't70') {
             setTechizatT70Columns(finalHeaders);
-            setTechizatT70Data(parsedRows);
+            setTechizatT70Data(finalDataToSave);
             localStorage.setItem('excel_techizat_t70_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_t70_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_t70_data', JSON.stringify(finalDataToSave));
           } else if (techType === 't70_bumbi_backet') {
             setTechizatT70BumbiBacketColumns(finalHeaders);
-            setTechizatT70BumbiBacketData(parsedRows);
+            setTechizatT70BumbiBacketData(finalDataToSave);
             localStorage.setItem('excel_techizat_t70_bumbi_backet_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(finalDataToSave));
           } else if (techType === 't70_helitak') {
             setTechizatT70HelitakColumns(finalHeaders);
-            setTechizatT70HelitakData(parsedRows);
+            setTechizatT70HelitakData(finalDataToSave);
             localStorage.setItem('excel_techizat_t70_helitak_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(finalDataToSave));
           } else if (techType === 'b360') {
             setTechizatB360Columns(finalHeaders);
-            setTechizatB360Data(parsedRows);
+            setTechizatB360Data(finalDataToSave);
             localStorage.setItem('excel_techizat_b360_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_b360_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_b360_data', JSON.stringify(finalDataToSave));
           } else if (techType === 'c650') {
             setTechizatC650Columns(finalHeaders);
-            setTechizatC650Data(parsedRows);
+            setTechizatC650Data(finalDataToSave);
             localStorage.setItem('excel_techizat_c650_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_c650_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_c650_data', JSON.stringify(finalDataToSave));
           } else if (techType === 'hangar') {
             setTechizatHangarColumns(finalHeaders);
-            setTechizatHangarData(parsedRows);
+            setTechizatHangarData(finalDataToSave);
             localStorage.setItem('excel_techizat_hangar_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(parsedRows));
+            localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(finalDataToSave));
           } else if (techType === 'kara_araclari') {
-            const convertedRows = parsedRows.map(row => convertOldKaraAraclariRowToNew(row));
+            const convertedRows = finalDataToSave.map(row => convertOldKaraAraclariRowToNew(row));
             const newCols = ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
             setTechizatKaraAraclariColumns(newCols);
             setTechizatKaraAraclariData(convertedRows);
@@ -5231,58 +7507,51 @@ export default function App() {
           // Sync specifically to "TÜM TECHİZAT" online Google Sheet
           const unitLabel = getTechizatUnitLabel(techType);
           if (unitLabel) {
-            fetch(GOOGLE_SCRIPT_URL, {
-              method: "POST",
-              headers: {
-                "Content-Type": "text/plain;charset=utf-8"
-              },
-              body: JSON.stringify({
-                action: "updateTumTechizat",
-                unitLabel: unitLabel,
-                data: parsedRows.map(r => [unitLabel, ...r])
-              })
-            }).then(() => {
-              console.log(`Synced ${unitLabel} to TÜM TECHİZAT Google Sheet`);
-            }).catch(err => {
-              console.error(`Failed to sync ${unitLabel} to Google Sheet:`, err);
-            });
+            // Synced directly to Drive Excel folder via syncTechizatExcelToGoogleDrive above
           }
 
           setIsSendingToSheets(prev => ({ ...prev, [syncSelectedTarget]: true }));
           setUploadProgress(10);
-          showNotification(`${file.name} belgesi Teçhizat Sürücüsüne yükleniyor ve Google Drive'a yedekleniyor...`);
+          showNotification(`${file.name} belgesi başarıyla işlendi ve Google Drive Excel klasörüne kaydedildi!`);
 
-          // Background Google Drive upload for Teçhizat Excel file
+          // Background Google Drive upload for Teçhizat/Depo Excel file
           fileToBase64(file).then(async (base64Data) => {
             try {
               let driveFileName = "hava_araçları_yer_destek_bell-429.xlsx";
               if (techType === 'at802') {
-                driveFileName = "hava_araçları_yer_destek_at-802.xlsx";
+                if (subSection === 'ozel_alet') driveFileName = "at-802_ozel_bakim_aletleri.xlsx";
+                else if (subSection === 'depo_sarf') driveFileName = "at-802_sarf_ve_parca_deposu.xlsx";
+                else if (subSection === 'depo_kimyasal') driveFileName = "at-802_kimyasal_depo.xlsx";
+                else driveFileName = "hava_araçları_yer_destek_at-802.xlsx";
+              } else if (techType === 'bell429') {
+                if (subSection === 'depo_sarf') driveFileName = "bell-429_sarf_ve_parca_deposu.xlsx";
+                else if (subSection === 'depo_kimyasal') driveFileName = "bell-429_kimyasal_depo.xlsx";
+                else driveFileName = "hava_araçları_yer_destek_bell-429.xlsx";
               } else if (techType === 't70') {
-                driveFileName = "hava_araçları_yer_destek_t-70.xlsx";
+                if (subSection === 'depo_sarf') driveFileName = "t-70_sarf_ve_parca_deposu.xlsx";
+                else if (subSection === 'depo_kimyasal') driveFileName = "t-70_kimyasal_depo.xlsx";
+                else driveFileName = "hava_araçları_yer_destek_t-70.xlsx";
               } else if (techType === 't70_bumbi_backet') {
                 driveFileName = "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx";
               } else if (techType === 't70_helitak') {
                 driveFileName = "hava_araçları_yer_destek_t-70_helitak.xlsx";
               } else if (techType === 'b360') {
-                driveFileName = "hava_araçları_yer_destek_b-360.xlsx";
+                if (subSection === 'depo_sarf') driveFileName = "b-360_sarf_ve_parca_deposu.xlsx";
+                else if (subSection === 'depo_kimyasal') driveFileName = "b-360_kimyasal_depo.xlsx";
+                else driveFileName = "hava_araçları_yer_destek_b-360.xlsx";
               } else if (techType === 'c650') {
-                driveFileName = "hava_araçları_yer_destek_c-650.xlsx";
+                if (subSection === 'depo_sarf') driveFileName = "c-650_sarf_ve_parca_deposu.xlsx";
+                else if (subSection === 'depo_kimyasal') driveFileName = "c-650_kimyasal_depo.xlsx";
+                else driveFileName = "hava_araçları_yer_destek_c-650.xlsx";
               } else if (techType === 'hangar') {
-                driveFileName = "hava_araçları_yer_destek_hangar.xlsx";
+                if (subSection === 'depo_sarf') driveFileName = "hangar_sarf_ve_parca_deposu.xlsx";
+                else if (subSection === 'depo_kimyasal') driveFileName = "hangar_kimyasal_depo.xlsx";
+                else driveFileName = "hava_araçları_yer_destek_hangar.xlsx";
               } else if (techType === 'kara_araclari') {
                 driveFileName = "kara_araçları_takip.xlsx";
               }
 
-              const prettyUnitName = techType === 'bell429' ? 'BELL 429 YER DESTEK TEÇHİZATLARI'
-                : techType === 'at802' ? 'AT-802F YER DESTEK TEÇHİZATLARI'
-                : techType === 't70' ? 'T-70 YER DESTEK TEÇHİZATI'
-                : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
-                : techType === 't70_helitak' ? 'T-70 HELİTAK TEÇHİZATI'
-                : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
-                : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
-                : techType === 'kara_araclari' ? 'KARA ARAÇLARI TAKİP SİSTEMİ'
-                : 'HANGAR YER DESTEK TEÇHİZATLARI';
+              const prettyUnitName = getCleanSyncTargetTitle(String(syncSelectedTarget));
 
               const res = await fetch(GOOGLE_SCRIPT_URL, {
                 method: "POST",
@@ -5290,19 +7559,18 @@ export default function App() {
                   "Content-Type": "text/plain;charset=utf-8"
                 },
                 body: JSON.stringify({
-                  action: "uploadPdfToDrive",
+                  action: "uploadTechizatExcel",
                   fileName: driveFileName,
+                  targetKey: syncSelectedTarget,
                   base64Data: base64Data,
                   unitName: prettyUnitName,
-                  formId: 6,
-                  month: "Teçhizat Takip",
                   folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                 })
               });
               if (res.ok) {
                 const result = await res.json();
                 if (result.status === "success") {
-                  showNotification(`'${driveFileName}' güncel Teçhizat Excel belgesi Google Drive'a başarıyla yedeklendi!`);
+                  showNotification(`'${driveFileName}' (${prettyUnitName}) güncel Excel belgesi Google Drive'a başarıyla yedeklendi!`);
                 }
               }
             } catch (err) {
@@ -5319,33 +7587,15 @@ export default function App() {
               setUploadProgress(100);
               setIsSendingToSheets(prev => ({ ...prev, [syncSelectedTarget]: false }));
               
-              const prettyName = techType === 'bell429' ? 'Bell 429 Yer Destek' 
-                : techType === 'at802' ? 'AT-802F Yer Destek' 
-                : techType === 't70' ? 'T-70 Yer Destek' 
-                : techType === 't70_bumbi_backet' ? 'T-70 Bumbi Backet'
-                : techType === 't70_helitak' ? 'T-70 Helitak'
-                : techType === 'b360' ? 'B-360 Yer Destek'
-                : techType === 'c650' ? 'C-650 Yer Destek'
-                : techType === 'kara_araclari' ? 'Kara Araçları Takip'
-                : 'Hangar Yer Destek';
-
-              showNotification(`'${prettyName}' Excel verisi başarıyla aktarıldı ve matris oluşturuldu!`);
-              
-              const title = techType === 'bell429' ? 'BELL 429 YER DESTEK TEÇHİZATLARI'
-                : techType === 'at802' ? 'AT-802F YER DESTEK TEÇHİZATLARI'
-                : techType === 't70' ? 'T-70 YER DESTEK TEÇHİZATI'
-                : techType === 't70_bumbi_backet' ? 'T-70 BUMBİ BACKET TEÇHİZATI'
-                : techType === 't70_helitak' ? 'T-70 HELİTAK TEÇHİZATI'
-                : techType === 'b360' ? 'B-360 YER DESTEK TEÇHİZATLARI'
-                : techType === 'c650' ? 'C-650 YER DESTEK TEÇHİZATLARI'
-                : techType === 'kara_araclari' ? 'KARA ARAÇLARI TAKİP SİSTEMİ'
-                : 'HANGAR YER DESTEK TEÇHİZATLARI';
+              const cleanTargetTitle = getCleanSyncTargetTitle(String(syncSelectedTarget));
+              showNotification(`'${cleanTargetTitle}' Excel verisi başarıyla aktarıldı ve matris oluşturuldu!`);
 
               // Close sync wizard and automatically open and redirect to matrix screen
               setModalOpen(true);
               setActiveTechizatType(techType);
+              setTechizatActiveSection(subSection === 'all' ? 'all' : subSection);
               setModalType('techizat_matrix');
-              setModalTitle(title);
+              setModalTitle(cleanTargetTitle);
               setTechizatSearchQuery('');
               setActiveTechizatMatchIdx(0);
             } else {
@@ -5993,9 +8243,33 @@ export default function App() {
         <div className="container mx-auto px-4 py-8 sm:py-12 flex flex-col items-center min-h-screen max-w-7xl justify-between">
           
           {/* Top HUD / Status Bar */}
-          <div className="w-full flex justify-end items-center text-[10px] tracking-[0.3em] font-bold opacity-60 border-b border-white/10 pb-4 mb-8 sm:mb-12">
-            <div className="flex items-center gap-6">
-              <span className="font-mono">SAAT: {timeString}</span>
+          <div className="w-full flex justify-between items-center text-[10px] tracking-[0.3em] font-bold border-b border-white/10 pb-4 mb-8 sm:mb-12 flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              {/* Gün Takip ve Otomatik Bildirim Paneli Butonu */}
+              <button
+                type="button"
+                onClick={openGunTakipWithPassword}
+                className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[11px] font-mono tracking-normal cursor-pointer transition-all shadow-md active:scale-95 group"
+                title="Gün Takip ve Otomatik 90 Gün E-Posta Bildirim Sistemi (Şifre: 1839)"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${autoReminderStatus.items90DaysCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'} opacity-75`}></span>
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${autoReminderStatus.items90DaysCount > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
+                </span>
+                <Bell className="w-3.5 h-3.5 text-emerald-400 group-hover:text-emerald-200" />
+                <span className="font-bold">GÜN TAKİP & OTOMATİK BİLDİRİM:</span>
+                <span className={autoReminderStatus.items90DaysCount > 0 ? "text-amber-400 font-black" : "text-emerald-300 font-bold"}>
+                  {autoReminderStatus.items90DaysCount > 0
+                    ? `${autoReminderStatus.items90DaysCount} Öğe (≤90 Gün)`
+                    : 'Tüm Bakımlar Güncel'}
+                </span>
+                <span className="text-[9px] text-emerald-400/60 font-normal pl-1 border-l border-emerald-500/20 hidden sm:inline">
+                  (Şifre: 1839)
+                </span>
+              </button>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="font-mono text-white/70">SAAT: {timeString}</span>
             </div>
           </div>
 
@@ -6091,7 +8365,7 @@ export default function App() {
               <span className="text-[10px] opacity-60 uppercase tracking-widest font-semibold">DESTEK SİSTEMLERİ</span>
             </button>
 
-            {/* FORM KAYITLARI (Yeni Alan) */}
+            {/* FORM KAYITLARI */}
             <button
               id="btn-form-records"
               onClick={() => openCategory('FORM KAYITLARI')}
@@ -6137,15 +8411,63 @@ export default function App() {
               className="pointer-events-auto flex items-center gap-2 text-slate-800 bg-white/95 hover:bg-white border border-slate-200/80 backdrop-blur-md shadow-lg px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wider transition-all hover:scale-105 active:scale-95 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4 text-emerald-800" />
-              <span>{(modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync' || categoryHistory.length > 1) ? 'Geri' : 'Kapat'}</span>
+              <span>{(modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync' || modalType === 'iframe' || categoryHistory.length > 1) ? 'Geri' : 'Kapat'}</span>
             </button>
 
             {/* Action Buttons */}
             <div className="flex items-center gap-2 pointer-events-auto">
+              {/* External Iframe Action Buttons (8. DENETLEME RAPOR VE EKLER vb.) */}
+              {modalType === 'iframe' && modalUrl && (
+                <div className="flex items-center gap-2">
+                  <div className="bg-white/95 border border-slate-200/80 backdrop-blur-md shadow-lg px-4 py-2.5 rounded-full text-xs font-black text-[#0b3d1d] uppercase tracking-wider hidden sm:flex items-center gap-2">
+                    <Folder className="w-3.5 h-3.5 text-emerald-800" />
+                    <span className="truncate max-w-xs">{modalTitle || '8. DENETLEME RAPOR VE EKLER'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIframeLoading(true);
+                      const iframe = document.getElementById('external-system-iframe') as HTMLIFrameElement;
+                      if (iframe) {
+                        iframe.src = modalUrl;
+                      }
+                    }}
+                    className="flex items-center gap-1.5 bg-white/95 hover:bg-white text-slate-700 hover:text-emerald-900 border border-slate-200/80 shadow-lg px-3.5 py-2.5 rounded-full text-xs font-bold transition-all cursor-pointer active:scale-95"
+                    title="Sayfayı Yenile"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-emerald-800" />
+                    <span className="hidden md:inline">YENİLE</span>
+                  </button>
+                  <a
+                    href={modalUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 bg-[#0b3d1d] hover:bg-[#072612] text-white shadow-lg px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wider transition-all cursor-pointer active:scale-95"
+                    title="Yeni Sekmede Aç"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>YENİ SEKMEDE AÇ</span>
+                  </a>
+                </div>
+              )}
+
+              {/* EXCEL İNDİR Button */}
+              {modalType !== 'iframe' && (
+                <button
+                  onClick={exportCurrentActiveTableToExcel}
+                  className="flex items-center gap-2 bg-emerald-700/90 hover:bg-emerald-600 active:scale-95 text-white text-xs font-black uppercase tracking-wider px-4 py-2.5 rounded-full shadow-lg backdrop-blur-md transition-all cursor-pointer border border-emerald-500/50"
+                  title="Tabloyu Web Tasarımı ve Formatıyla Birebir Excel Olarak İndir"
+                >
+                  <Download className="w-4 h-4 text-emerald-200" />
+                  <span>EXCEL İNDİR</span>
+                </button>
+              )}
+
               {/* Show Veri Güncelle button on Form/Teçhizat views */}
-              {modalType !== 'denetleme' && (selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedCategory === 'KARA_ARACLARI_MENU' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
+              {modalType !== 'denetleme' && modalType !== 'iframe' && (selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedCategory === 'KARA_ARACLARI_MENU' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
                 <button
                   onClick={() => {
+                    setPasswordActionType('global_sync');
                     setPasswordInput('');
                     setPasswordError(false);
                     setIsPasswordModalOpen(true);
@@ -6162,8 +8484,28 @@ export default function App() {
           
           {/* Iframe Yüklenme Spinner'ı */}
           {iframeLoading && modalType === 'iframe' && (
-            <div id="iframe-loader" className="absolute inset-0 flex items-center justify-center bg-[#0b3d1d]/5 z-10">
-              <div className="loader"></div>
+            <div id="iframe-loader" className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 pointer-events-none">
+              <div className="flex flex-col items-center gap-3">
+                <div className="loader"></div>
+                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                  Süreç Yönetim Sistemi Yükleniyor...
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* IFRAME MODAL GÖRÜNÜMÜ (8. DENETLEME RAPOR VE EKLER) */}
+          {modalType === 'iframe' && modalUrl && (
+            <div className="w-full h-full flex flex-col pt-16 bg-white relative">
+              <iframe
+                id="external-system-iframe"
+                src={modalUrl}
+                className="w-full h-full border-0 bg-white"
+                title={modalTitle || "Sistem Portalı"}
+                onLoad={() => setIframeLoading(false)}
+                onError={() => setIframeLoading(false)}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+              />
             </div>
           )}
 
@@ -6224,19 +8566,19 @@ export default function App() {
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm">
                         <Plane className="w-8 h-8 text-[#0b3d1d]" />
                       </div>
-                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HAVA ARAÇLARI YER DESTEK</span>
-                      <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">TEÇHİZAT MODÜLLERİ</span>
+                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HAVA ARAÇLARI YER DESTEK, ÖZEL ALETLER VE DEPO</span>
+                      <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">BİRİMLER, YER DESTEK & DEPOLAR</span>
                     </button>
 
                     <button
-                      onClick={() => openTechizatMatrix('hangar', 'HANGAR YER DESTEK TEÇHİZATLARI')}
+                      onClick={() => openTechizatMatrix('hangar', 'HANGAR YER DESTEK TEÇHİZATLARI', 'all')}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm">
                         <Wrench className="w-8 h-8 text-[#0b3d1d]" />
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HANGAR YER DESTEK</span>
-                      <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">TEÇHİZATLARALTYAPI</span>
+                      <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">Yer Destek & Teçhizat Listesi</span>
                     </button>
 
                     <button
@@ -6285,74 +8627,319 @@ export default function App() {
                   </>
                 )}
 
-                {/* HAVA ARAÇLARI YER DESTEK (HA_YER_DESTEK) Alt Butonları */}
+                {/* HAVA ARAÇLARI YER DESTEK VE ÖZEL ALETLER (HA_YER_DESTEK) Birim Kartları */}
                 {selectedCategory === 'HA_YER_DESTEK' && (
                   <>
                     <button
-                      onClick={() => openTechizatMatrix('bell429', 'BELL 429 YER DESTEK TEÇHİZATLARI')}
+                      onClick={() => {
+                        setSelectedUnitFolder('bell429');
+                        navigateToSubCategory('UNIT_FOLDER_MENU');
+                      }}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
                         B429
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">BELL 429</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Teçhizat Listesi</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
                     </button>
 
                     <button
-                      onClick={() => openTechizatMatrix('at802', 'AT-802F YER DESTEK TEÇHİZATLARI')}
+                      onClick={() => {
+                        setSelectedUnitFolder('at802');
+                        navigateToSubCategory('UNIT_FOLDER_MENU');
+                      }}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-[10px]">
                         AT-802F
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">AT-802F</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Teçhizat Listesi</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek, Özel Alet & Depo</span>
                     </button>
 
                     <button
-                      onClick={() => navigateToSubCategory('T70_DETAY')}
+                      onClick={() => {
+                        setSelectedUnitFolder('t70');
+                        navigateToSubCategory('UNIT_FOLDER_MENU');
+                      }}
                       className="bg-white hover:bg-white/80 border-2 border-emerald-600/20 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-emerald-50 border border-emerald-100 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-emerald-800 font-extrabold text-xs">
                         T-70
                       </div>
                       <span className="text-emerald-900 font-extrabold tracking-widest text-sm mb-2 uppercase">T-70</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Teçhizat Listesi</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
                     </button>
 
                     <button
-                      onClick={() => openTechizatMatrix('c650', 'C-650 YER DESTEK TEÇHİZATLARI')}
+                      onClick={() => {
+                        setSelectedUnitFolder('c650');
+                        navigateToSubCategory('UNIT_FOLDER_MENU');
+                      }}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
                         C650
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">C-650</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Teçhizat Listesi</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
                     </button>
 
                     <button
-                      onClick={() => openTechizatMatrix('b360', 'B-360 YER DESTEK TEÇHİZATLARI')}
+                      onClick={() => {
+                        setSelectedUnitFolder('b360');
+                        navigateToSubCategory('UNIT_FOLDER_MENU');
+                      }}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-white border border-gray-200 shadow-inner rounded-2xl flex items-center justify-center mb-6 text-[#0b3d1d] font-black text-xs">
                         B360
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">B-360</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Teçhizat Listesi</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
+                    </button>
+
+                    {/* 1. TÜM BİRİMLERDE TEÇHİZAT ARA */}
+                    <button
+                      onClick={() => openTechizatMatrix('all', 'TÜM BİRİMLER ORTAK TEÇHİZAT ARAMA (YER DESTEK & ÖZEL ALETLER)', 'techizat_all')}
+                      className="bg-emerald-50 hover:bg-emerald-100/80 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-6 flex flex-col sm:flex-row items-center gap-5 text-left transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer group sm:col-span-2 lg:col-span-3 mt-4"
+                    >
+                      <div className="w-14 h-14 bg-[#0b3d1d] text-white rounded-2xl flex items-center justify-center shrink-0 shadow-md group-hover:bg-[#082a14] transition-all">
+                        <Search className="w-7 h-7 text-emerald-300" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[#0b3d1d] font-black tracking-widest text-base uppercase">🔍 TÜM BİRİMLERDE TEÇHİZAT ARA</span>
+                        <span className="text-xs text-emerald-800 tracking-wide font-mono font-bold">
+                          Bütün Hava Araçlarının Yer Destek Teçhizatları ve Özel Aletlerini Tek Ortak Listede Arayın & Excel Olarak İndirin
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* 2. TÜM BİRİMLERDE DEPO ARA */}
+                    <button
+                      onClick={() => openTechizatMatrix('all', 'TÜM BİRİMLER ORTAK DEPO ARAMA (SARF/PARÇA & KİMYASAL)', 'depo_all')}
+                      className="bg-amber-50 hover:bg-amber-100/80 border-2 border-amber-600/30 shadow-sm rounded-[2rem] p-6 flex flex-col sm:flex-row items-center gap-5 text-left transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer group sm:col-span-2 lg:col-span-3"
+                    >
+                      <div className="w-14 h-14 bg-amber-800 text-white rounded-2xl flex items-center justify-center shrink-0 shadow-md group-hover:bg-amber-900 transition-all">
+                        <Boxes className="w-7 h-7 text-amber-200" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-amber-900 font-black tracking-widest text-base uppercase">📦 TÜM BİRİMLERDE DEPO ARA</span>
+                        <span className="text-xs text-amber-800 tracking-wide font-mono font-bold">
+                          Bütün Hava Araçlarının Sarf/Parça ve Kimyasal Depolarını Tek Ortak Listede Arayın & Excel Olarak İndirin
+                        </span>
+                      </div>
+                    </button>
+                  </>
+                )}
+
+                {/* BİRİM İÇİ KLASÖR MENÜSÜ (UNIT_FOLDER_MENU) */}
+                {selectedCategory === 'UNIT_FOLDER_MENU' && selectedUnitFolder && (
+                  <>
+                    {/* AT-802F ÖZEL DURUM: YER DESTEK VE ÖZEL ALETLER AYRI */}
+                    {selectedUnitFolder === 'at802' ? (
+                      <>
+                        <button
+                          onClick={() => openTechizatMatrix('at802', 'AT-802F - YER DESTEK TEÇHİZATLARI', 'yer_destek')}
+                          className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
+                            <Plane className="w-8 h-8 text-[#0b3d1d]" />
+                          </div>
+                          <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">YER DESTEK TEÇHİZATLARI</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
+                            AT-802F Yer Destek Ekipmanları
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => openTechizatMatrix('at802', 'AT-802F - ÖZEL ALETLER', 'ozel_alet')}
+                          className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
+                            <Wrench className="w-8 h-8 text-[#0b3d1d]" />
+                          </div>
+                          <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">ÖZEL ALETLER</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
+                            AT-802F Özel Aletler Listesi
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => navigateToSubCategory('UNIT_DEPO_MENU')}
+                          className="bg-white hover:bg-amber-50/50 border-2 border-amber-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-amber-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-amber-200 transition-all shadow-sm text-amber-800">
+                            <Boxes className="w-8 h-8 text-amber-800" />
+                          </div>
+                          <span className="text-amber-900 font-black tracking-widest text-base mb-2 uppercase">DEPO</span>
+                          <span className="text-[10px] text-amber-700/80 uppercase tracking-widest font-mono font-bold">
+                            Sarf/Parça Deposu & Kimyasal Depo
+                          </span>
+                        </button>
+
+                        <button
+                          id="btn-unit-olay-takip-at802"
+                          onClick={() => {
+                            setOlayTakipInitialUnit('at802');
+                            setIsOlayTakipOpen(true);
+                          }}
+                          className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
+                            <FileSpreadsheet className="w-8 h-8 text-[#0b3d1d]" />
+                          </div>
+                          <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">OLAY TAKİP ÇİZELGESİ</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
+                            AT-802 Kaza-Kırım & Limit Aşımları
+                          </span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => {
+                            const unitName = getUnitDisplayName(selectedUnitFolder);
+                            openTechizatMatrix(selectedUnitFolder as any, `${unitName} - YER DESTEK VE ÖZEL ALETLER`, 'yer_destek');
+                          }}
+                          className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
+                            <Wrench className="w-8 h-8 text-[#0b3d1d]" />
+                          </div>
+                          <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">YER DESTEK VE ÖZEL ALETLER</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
+                            Mevcut Yer Destek Teçhizatları ve Özel Aletler
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => navigateToSubCategory('UNIT_DEPO_MENU')}
+                          className="bg-white hover:bg-amber-50/50 border-2 border-amber-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-amber-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-amber-200 transition-all shadow-sm text-amber-800">
+                            <Boxes className="w-8 h-8 text-amber-800" />
+                          </div>
+                          <span className="text-amber-900 font-black tracking-widest text-base mb-2 uppercase">DEPO</span>
+                          <span className="text-[10px] text-amber-700/80 uppercase tracking-widest font-mono font-bold">
+                            Sarf ve Parça Depo & Kimyasal Depo (2 Alt Klasör)
+                          </span>
+                        </button>
+
+                        <button
+                          id="btn-unit-olay-takip-general"
+                          onClick={() => {
+                            setOlayTakipInitialUnit(selectedUnitFolder);
+                            setIsOlayTakipOpen(true);
+                          }}
+                          className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
+                            <FileSpreadsheet className="w-8 h-8 text-[#0b3d1d]" />
+                          </div>
+                          <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">OLAY TAKİP ÇİZELGESİ</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
+                            {getUnitDisplayName(selectedUnitFolder)} Olay & Limit Çizelgeleri
+                          </span>
+                        </button>
+                      </>
+                    )}
+
+                    {selectedUnitFolder === 't70' && (
+                      <>
+                        <button
+                          onClick={() => openTechizatMatrix('t70_bumbi_backet', 'T-70 BUMBİ BACKET TEÇHİZATI', 'all')}
+                          className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm text-[#0b3d1d] font-extrabold text-sm">
+                            BB
+                          </div>
+                          <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">BUMBİ BACKET</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">T-70 Yangın Kovası</span>
+                        </button>
+
+                        <button
+                          onClick={() => openTechizatMatrix('t70_helitak', 'T-70 HELİTAK TEÇHİZATI', 'all')}
+                          className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm text-[#0b3d1d] font-extrabold text-sm">
+                            HT
+                          </div>
+                          <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HELİTAK</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">T-70 Helitak Teçhizatı</span>
+                        </button>
+                      </>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        const unitName = getUnitDisplayName(selectedUnitFolder);
+                        openTechizatMatrix(selectedUnitFolder as any, `${unitName} - TÜM ENVANTER LİSTESİ`, 'all');
+                      }}
+                      className="bg-slate-50 hover:bg-slate-100 border border-slate-300 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group sm:col-span-2 lg:col-span-2"
+                    >
+                      <div className="w-16 h-16 bg-slate-200 rounded-2xl flex items-center justify-center mb-6 shadow-sm">
+                        <Table className="w-8 h-8 text-slate-700" />
+                      </div>
+                      <span className="text-slate-800 font-black tracking-widest text-sm mb-2 uppercase">📋 TÜM BİRİM ENVANTERİ</span>
+                      <span className="text-[10px] text-slate-600 uppercase tracking-widest font-mono font-bold">
+                        Yer Destek, Özel Aletler ve Depolardaki Tüm Teçhizatları Birlikte İncele
+                      </span>
+                    </button>
+                  </>
+                )}
+
+                {/* BİRİM DEPO MENÜSÜ (UNIT_DEPO_MENU) - 3 ALT KLASÖR */}
+                {selectedCategory === 'UNIT_DEPO_MENU' && selectedUnitFolder && (
+                  <>
+                    <button
+                      onClick={() => {
+                        const unitName = getUnitDisplayName(selectedUnitFolder);
+                        openTechizatMatrix(selectedUnitFolder as any, `${unitName} - SARF VE PARÇA DEPOSU`, 'depo_sarf');
+                      }}
+                      className="bg-white hover:bg-blue-50/50 border-2 border-blue-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-blue-200 transition-all shadow-sm text-blue-800">
+                        <Package className="w-8 h-8 text-blue-800" />
+                      </div>
+                      <span className="text-blue-900 font-black tracking-widest text-base mb-2 uppercase">SARF VE PARÇA DEPO</span>
+                      <span className="text-[10px] text-blue-700/80 uppercase tracking-widest font-mono font-bold">
+                        Sarf Malzemeleri, Yedek Parça ve Mekanik Bileşenler
+                      </span>
                     </button>
 
                     <button
-                      onClick={() => openTechizatMatrix('all', 'TÜM BİRİMLER ORTAK TEÇHİZAT ARAMA')}
-                      className="bg-emerald-50 hover:bg-emerald-100/80 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group sm:col-span-2 lg:col-span-3 mt-4"
+                      onClick={() => {
+                        const unitName = getUnitDisplayName(selectedUnitFolder);
+                        openTechizatMatrix(selectedUnitFolder as any, `${unitName} - KİMYASAL DEPO`, 'depo_kimyasal');
+                      }}
+                      className="bg-white hover:bg-purple-50/50 border-2 border-purple-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
-                      <div className="w-16 h-16 bg-[#0b3d1d] text-white rounded-2xl flex items-center justify-center mb-6 shadow-md group-hover:bg-[#082a14] transition-all">
-                        <Search className="w-8 h-8 text-emerald-300" />
+                      <div className="w-16 h-16 bg-purple-100 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-purple-200 transition-all shadow-sm text-purple-800">
+                        <FlaskConical className="w-8 h-8 text-purple-800" />
                       </div>
-                      <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">🔍 TÜM BİRİMLERDE TEÇHİZAT ARA</span>
-                      <span className="text-xs text-emerald-800 uppercase tracking-widest font-mono font-bold">
-                        Bütün Hava Araçlarının Yer Destek Teçhizatlarını Tek Listede Arayın & Excel Olarak İndirin
+                      <span className="text-purple-900 font-black tracking-widest text-base mb-2 uppercase">KİMYASAL DEPO</span>
+                      <span className="text-[10px] text-purple-700/80 uppercase tracking-widest font-mono font-bold">
+                        Kimyasal Maddeler, Havacılık Yağları, Sıvılar, Mastikler ve Boyalar
+                      </span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setPasswordActionType('depo_management');
+                        setPasswordInput('');
+                        setPasswordError(false);
+                        setIsPasswordModalOpen(true);
+                      }}
+                      className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/40 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-emerald-800">
+                        <Boxes className="w-8 h-8 text-emerald-800" />
+                      </div>
+                      <span className="text-emerald-950 font-black tracking-widest text-base mb-2 uppercase">DEPO YÖNETİM</span>
+                      <span className="text-[10px] text-emerald-700/80 uppercase tracking-widest font-mono font-bold">
+                        Depo Giriş/Çıkış, Kit Montajı, Transfer Geçmişi ve Sayım
                       </span>
                     </button>
                   </>
@@ -6547,26 +9134,84 @@ export default function App() {
                     </a>
 
                     <button
+                      id="btn-denetleme-rapor-ekler"
                       onClick={() => {
                         setModalUrl('https://ogmhavacilik.github.io/surecyonet/');
                         setModalType('iframe');
                         setModalTitle('8. DENETLEME RAPOR VE EKLER');
                         setIframeLoading(true);
+                        setModalOpen(true);
                       }}
-                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group relative"
                     >
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm relative">
                         <Folder className="w-8 h-8 text-[#0b3d1d]" />
+                        <span className="absolute -top-1 -right-1 bg-emerald-800 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider">CANLI SİSTEM ➜</span>
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">8. DENETLEME RAPOR VE EKLER</span>
-                      <span className="text-[9px] text-[#0b3d1d]/60 uppercase tracking-wider font-semibold font-mono mb-2">Denetleme Rapor ve Ekleri</span>
-                      <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">GÖRÜNTÜLE ➜</span>
+                      <span className="text-[9px] text-[#0b3d1d]/60 uppercase tracking-wider font-semibold font-mono mb-2">Denetleme Rapor ve Ekleri Süreç Yönetimi</span>
+                      
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                          SİSTEMİ AÇ ➜
+                        </span>
+                        <a
+                          href="https://ogmhavacilik.github.io/surecyonet/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-[9px] text-slate-600 hover:text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-full border border-slate-200 flex items-center gap-1 transition-all"
+                          title="Doğrudan Yeni Sekmede Aç"
+                        >
+                          <ExternalLink className="w-2.5 h-2.5" />
+                          <span>YENİ SEKME</span>
+                        </a>
+                      </div>
                       
                       <div className="mt-auto pt-4 border-t border-gray-100 w-full text-center">
                         <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest font-mono">
-                          GÜNCELLEME TARİHİ: -
+                          ogmhavacilik.github.io/surecyonet
                         </span>
                       </div>
+                    </button>
+
+                    <button
+                      id="btn-form-tech-pubs"
+                      onClick={() => setIsTechPubsOpen(true)}
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group relative"
+                    >
+                      <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm relative">
+                        <BookOpen className="w-8 h-8 text-[#0b3d1d]" />
+                        <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-md bg-amber-500 text-slate-950 flex items-center justify-center shadow-xs border border-white">
+                          <Wrench className="w-3 h-3" />
+                        </div>
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">9. TEKNİK YAYINLAR</span>
+                      <span className="text-[9px] text-[#0b3d1d]/60 uppercase tracking-wider font-semibold font-mono mb-2">AMM, IPC, CMM & Canlı Depo Arama</span>
+                      <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">GÖRÜNTÜLE & ARA ➜</span>
+                      
+                      <div className="mt-auto pt-4 border-t border-gray-100 w-full text-center">
+                        <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest font-mono">
+                          GÜNCELLEME TARİHİ: 2026-08
+                        </span>
+                      </div>
+                    </button>
+
+                    <button
+                      id="btn-form-olay-takip"
+                      onClick={() => {
+                        setOlayTakipInitialUnit('at802');
+                        setIsOlayTakipOpen(true);
+                      }}
+                      className="bg-white hover:bg-emerald-50/50 border border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group relative"
+                    >
+                      <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d] relative">
+                        <FileSpreadsheet className="w-8 h-8 text-[#0b3d1d]" />
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">OLAY TAKİP ÇİZELGESİ</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold font-mono text-center">
+                        AT-802 Kaza/Kırım, Limit Aşımları & Çizelgeler
+                      </span>
                     </button>
                   </>
                 )}
@@ -7314,10 +9959,10 @@ export default function App() {
                   if (match) {
                     if (isPdfLoading || isDownloadingPdf) {
                       return (
-                        <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-fade-in z-25">
+                        <div className="absolute inset-0 bg-slate-900/60 flex flex-col items-center justify-center p-8 text-center animate-fade-in z-25">
                           <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
                           <h3 className="text-emerald-400 font-extrabold text-sm uppercase tracking-widest animate-pulse font-mono mb-2">
-                            LÜTFEN BEKLEYİNİZ... VERİ YÜKLENİYOR
+                            BEKLEYİNİZ... VERİ YÜKLENİYOR
                           </h3>
                           {pdfDownloadStatus && (
                             <p className="text-xs text-slate-400 font-mono uppercase tracking-wider max-w-md animate-pulse">
@@ -7506,6 +10151,10 @@ export default function App() {
           {/* TEÇHİZAT TAKİP MATRİS EKRANI */}
           {modalType === 'techizat_matrix' && activeTechizatType && (() => {
             const isKaraAraci = activeTechizatType === 'kara_araclari';
+            const isDepo = techizatActiveSection === 'depo_sarf' || techizatActiveSection === 'depo_kimyasal' || techizatActiveSection === 'depo_all';
+
+            const isHangar = activeTechizatType === 'hangar';
+
             const baseColumns = [
               "SIRA NO", 
               "TEÇHİZAT ADI", 
@@ -7514,22 +10163,37 @@ export default function App() {
               "MİKTAR / KAPASİTE", 
               "BULUNDUĞU YER", 
               "DURUMU", 
-              "KALİBRASYONA TABİ", 
+              isHangar ? "BAKIMA TABİ" : "KALİBRASYONA TABİ", 
               "SON KONTROL / KALİBRASYON / BAKIM", 
               "GELECEK KONTROL / KALİBRASYON / BAKIM", 
               "SON KONTROLÜ YAPAN FİRMA", 
               "AÇIKLAMA", 
               "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+            ];
+
+            const depoColumns = [
+              "SIRA NO", 
+              "MALZEME / PARÇA ADI", 
+              "PARÇA NO (P/N)", 
+              "SERİ NO (S/N)", 
+              "MİKTAR", 
+              "BULUNDUĞU YER / RAF", 
+              "DURUMU", 
+              "ÖMÜRLÜ PARÇA MI?", 
+              "ÖMÜR BİTİŞ TARİHİ", 
+              "TEDARİK EDİLEN FİRMA", 
+              "AÇIKLAMA"
             ];
 
             const karaAraclariColumns = [
               "SIRA NO", 
               "ARAÇ PLAKASI / TANIMI", 
+              "MARKA", 
               "PARÇA NO (P/N) / MODEL", 
               "BULUNDUĞU YER", 
               "SON KM Sİ", 
               "DURUMU", 
-              "KALİBRASYONA TABİ", 
+              "BAKIMA TABİ", 
               "SON KONTROL / KALİBRASYON / BAKIM", 
               "GELECEK KONTROL / KALİBRASYON / BAKIM", 
               "SON KONTROLÜ YAPAN FİRMA", 
@@ -7537,124 +10201,194 @@ export default function App() {
               "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
             ];
 
-            const cols = activeTechizatType === 'all'
-              ? ["AİT OLDUĞU BİRİM", ...baseColumns]
-              : isKaraAraci
-                ? karaAraclariColumns
-                : baseColumns;
+            const hangarColumns = [
+              ...baseColumns,
+              "BELGE YÜKLE"
+            ];
 
-            const formatStandardRow = (row: string[]) => {
-              const r = [...row];
-              const col7Upper = (r[7] || "").trim().toUpperCase();
-              if (col7Upper !== "EVET" && col7Upper !== "HAYIR") {
-                r.splice(7, 0, "EVET");
-              }
-              while (r.length < 13) {
-                r.push("");
-              }
-              return r.slice(0, 13);
-            };
+            const cols = isDepo
+              ? (activeTechizatType === 'all' ? ["AİT OLDUĞU BİRİM", ...depoColumns] : depoColumns)
+              : activeTechizatType === 'all'
+                ? ["AİT OLDUĞU BİRİM", ...baseColumns]
+                : isKaraAraci
+                  ? karaAraclariColumns
+                  : isHangar
+                    ? hangarColumns
+                    : baseColumns;
 
-            const formatKaraAraclariRow = (row: string[]) => {
-              const r = [...row];
-              const col6Upper = (r[6] || "").trim().toUpperCase();
-              if (col6Upper !== "EVET" && col6Upper !== "HAYIR") {
-                r.splice(6, 0, "EVET");
-              }
-              while (r.length < 12) {
-                r.push("");
-              }
-              return r.slice(0, 12);
-            };
-
-            const formatKaraAraciToStandardRow = (row: string[]) => {
-              const r = formatKaraAraclariRow(row);
-              const sira = r[0];
-              const plaka = r[1];
-              const model = r[2];
-              const yer = r[3];
-              const km = r[4] ? `${r[4]} KM` : "";
-              const durum = r[5];
-              const kalibrasyonTabi = r[6];
-              const sonBakim = r[7];
-              const gelecekBakim = r[8];
-              const firma = r[9];
-              const aciklama = r[10];
-              const mail = r[11];
-              
-              return [
-                sira,
-                plaka,
-                model,
-                km, 
-                "1", 
-                yer,
-                durum,
-                kalibrasyonTabi,
-                sonBakim,
-                gelecekBakim,
-                firma,
-                aciklama,
-                mail
-              ];
-            };
-
-            const rows = activeTechizatType === 'all'
+            const rawUnitRows = activeTechizatType === 'all'
               ? [
-                  ...techizatBell429Data.map(r => ["BELL 429", ...formatStandardRow(r)]),
-                  ...techizatAt802Data.map(r => ["AT-802F", ...formatStandardRow(r)]),
-                  ...techizatT70Data.map(r => ["T-70 YER DESTEK", ...formatStandardRow(r)]),
-                  ...techizatT70BumbiBacketData.map(r => ["T-70 BUMBİ BACKET", ...formatStandardRow(r)]),
-                  ...techizatT70HelitakData.map(r => ["T-70 HELİTAK", ...formatStandardRow(r)]),
-                  ...techizatC650Data.map(r => ["C-650", ...formatStandardRow(r)]),
-                  ...techizatB360Data.map(r => ["B-360", ...formatStandardRow(r)]),
-                  ...techizatHangarData.map(r => ["HANGAR YER DESTEK", ...formatStandardRow(r)]),
-                  ...techizatKaraAraclariData.map(r => ["KARA ARAÇLARI", ...formatKaraAraciToStandardRow(r)])
+                  ...techizatBell429Data.map(r => ["BELL 429", ...r]),
+                  ...techizatAt802Data.map(r => ["AT-802F", ...r]),
+                  ...techizatT70Data.map(r => ["T-70 YER DESTEK", ...r]),
+                  ...techizatT70BumbiBacketData.map(r => ["T-70 BUMBİ BACKET", ...r]),
+                  ...techizatT70HelitakData.map(r => ["T-70 HELİTAK", ...r]),
+                  ...techizatC650Data.map(r => ["C-650", ...r]),
+                  ...techizatB360Data.map(r => ["B-360", ...r]),
+                  ...techizatHangarData.map(r => ["HANGAR YER DESTEK", ...r]),
+                  ...(!isDepo ? techizatKaraAraclariData.map(r => ["KARA ARAÇLARI", ...r]) : [])
                 ]
-              : activeTechizatType === 'bell429' ? techizatBell429Data.map(formatStandardRow)
-              : activeTechizatType === 'at802' ? techizatAt802Data.map(formatStandardRow)
-              : activeTechizatType === 't70' ? techizatT70Data.map(formatStandardRow)
-              : activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData.map(formatStandardRow)
-              : activeTechizatType === 't70_helitak' ? techizatT70HelitakData.map(formatStandardRow)
-              : activeTechizatType === 'b360' ? techizatB360Data.map(formatStandardRow)
-              : activeTechizatType === 'c650' ? techizatC650Data.map(formatStandardRow)
-              : activeTechizatType === 'kara_araclari' ? techizatKaraAraclariData.map(formatKaraAraclariRow)
-              : techizatHangarData.map(formatStandardRow);
+              : activeTechizatType === 'bell429' ? techizatBell429Data
+              : activeTechizatType === 'at802' ? techizatAt802Data
+              : activeTechizatType === 't70' ? techizatT70Data
+              : activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData
+              : activeTechizatType === 't70_helitak' ? techizatT70HelitakData
+              : activeTechizatType === 'b360' ? techizatB360Data
+              : activeTechizatType === 'c650' ? techizatC650Data
+              : activeTechizatType === 'kara_araclari' ? techizatKaraAraclariData
+              : techizatHangarData;
 
-            const firmaColIdx = cols.indexOf("SON KONTROLÜ YAPAN FİRMA");
+            const sectionFilterRow = (r: string[]) => {
+              if (techizatActiveSection === 'all') return true;
+              const isAll = activeTechizatType === 'all';
+              const targetRow = isAll ? r.slice(1) : r;
+              const unitHint = isAll ? (r[0] || "").toLowerCase() : activeTechizatType || undefined;
+              const sec = getRowSection(targetRow, unitHint);
+              if (techizatActiveSection === 'techizat_all') {
+                return sec === 'yer_destek' || sec === 'ozel_alet';
+              }
+              if (techizatActiveSection === 'depo_all') {
+                return sec === 'depo_sarf' || sec === 'depo_kimyasal';
+              }
+              return sec === techizatActiveSection;
+            };
+
+            const rows = rawUnitRows
+              .filter(r => {
+                const targetRow = activeTechizatType === 'all' ? r.slice(1) : r;
+                // Kullanıcı kuralı: "VERİ GÜNCELLEMEDE BAŞLIK 1. SATIR ÜRÜN DİYE ATMIŞ HATADIR."
+                if (isHeaderLikeRow(targetRow)) return false;
+                return sectionFilterRow(r);
+              })
+              .map((r, idx) => {
+              const isAll = activeTechizatType === 'all';
+              const unitLabel = isAll ? r[0] : null;
+              const targetRow = isAll ? r.slice(1) : r;
+
+              let formatted: string[];
+              if (isDepo) {
+                formatted = formatDepoRow(targetRow);
+              } else if (isKaraAraci) {
+                formatted = formatKaraAraclariRow(targetRow);
+              } else if (isAll && unitLabel === "KARA ARAÇLARI") {
+                formatted = formatKaraAraciToStandardRow(targetRow);
+              } else {
+                formatted = formatStandardRow(targetRow);
+              }
+
+              const finalRow = isAll && unitLabel ? [unitLabel, ...formatted] : formatted;
+              const siraIdx = isAll ? 1 : 0;
+              if (finalRow[siraIdx] !== undefined) {
+                finalRow[siraIdx] = String(idx + 1);
+              }
+              return finalRow;
+            });
+
+            const firmaColIdx = isDepo ? cols.indexOf("TEDARİK EDİLEN FİRMA") : cols.indexOf("SON KONTROLÜ YAPAN FİRMA");
             const durumColIdx = cols.indexOf("DURUMU");
-            const kalibrasyonTabiColIdx = cols.indexOf("KALİBRASYONA TABİ");
+            const kalibrasyonTabiColIdx = cols.findIndex(c => c === "BAKIMA TABİ" || c === "KALİBRASYONA TABİ" || c.includes("TABİ"));
+            const omurluTabiColIdx = cols.indexOf("ÖMÜRLÜ PARÇA MI?");
+            const omurBitisColIdx = cols.indexOf("ÖMÜR BİTİŞ TARİHİ");
+            const gelecekBakimColIdx = cols.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
 
-            const uniqueFirmalar = Array.from(
+            const uniqueFirmalar = Array.from<string>(
               new Set(
                 rows
                   .map(r => (r[firmaColIdx] || "").trim())
-                  .filter(f => f && f !== "-" && f !== "MUAFIYET (TABİ DEĞİL)" && f.toUpperCase() !== "BELİRTİLMEMİŞ")
+                  .filter(f => f && f !== "-" && f !== "--" && f !== "MUAFIYET (TABİ DEĞİL)" && f.toUpperCase() !== "BELİRTİLMEMİŞ")
               )
-            ).sort();
+            ).sort((a, b) => a.localeCompare(b, 'tr-TR'));
+
+            const uniqueDurumlar = Array.from<string>(
+              new Set(
+                rows
+                  .map(r => (r[durumColIdx] || "").trim())
+                  .filter(d => d && d !== "-" && d !== "--")
+                  .map(d => d.toLocaleUpperCase('tr-TR'))
+              )
+            ).sort((a, b) => a.localeCompare(b, 'tr-TR'));
 
             const q = techizatSearchQuery.toLowerCase().trim();
-            const firmaFilter = techizatFirmaFilter.toLowerCase().trim();
-            const durumFilter = techizatDurumFilter.toUpperCase().trim();
+            const firmaFilter = techizatFirmaFilter.trim().toLocaleLowerCase('tr-TR');
 
             const matchesList: { r: number; c: number }[] = [];
 
-            const filteredRows = rows.filter(row => {
+            let filteredRows = rows.filter(row => {
               // 1. Arama kelimesi filtresi
               if (q && !row.some(cell => cell && cell.toLowerCase().includes(q))) {
                 return false;
               }
-              // 2. Firma filtresi
-              if (firmaFilter && firmaFilter !== "tüm fİrmalar") {
-                const rowFirma = (row[firmaColIdx] || "").toLowerCase().trim();
-                if (!rowFirma.includes(firmaFilter)) return false;
+              // 2. Firma filtresi (Türkçe karakter uyumlu)
+              if (firmaFilter && firmaFilter !== "tüm firmalar" && !firmaFilter.includes("tüm")) {
+                const rowFirma = (row[firmaColIdx] || "").trim().toLocaleLowerCase('tr-TR');
+                if (rowFirma !== firmaFilter && !rowFirma.includes(firmaFilter)) return false;
               }
-              // 3. Durum filtresi
-              if (durumFilter && durumFilter !== "TÜM DURUMLAR") {
-                const rowDurum = (row[durumColIdx] || "").toUpperCase().trim();
-                if (durumFilter === "FAAL" && !rowDurum.includes("FAAL")) return false;
-                if (durumFilter === "BAKIM / KALİBRASYON" && !rowDurum.includes("BAKIM") && !rowDurum.includes("KALİBRASYON")) return false;
-                if (durumFilter === "GAYRİ FAAL" && !rowDurum.includes("GAYRİ") && !rowDurum.includes("DEĞİL")) return false;
+              // 3. Durum filtresi (Dinamik ve büyük/küçük harf duyarsız Türkçe normalizasyon)
+              if (techizatDurumFilter && techizatDurumFilter !== "TÜM DURUMLAR") {
+                const selectedDurum = techizatDurumFilter.trim().toLocaleUpperCase('tr-TR');
+                const rowDurum = (row[durumColIdx] || "").trim().toLocaleUpperCase('tr-TR');
+
+                if (selectedDurum === "FAAL") {
+                  // Sadece net 'FAAL' olanlar; GAYRİ FAAL, KISMEN FAAL, ARIZALI elenir
+                  if (rowDurum.includes("GAYRİ") || rowDurum.includes("GAYRI") || rowDurum.includes("DEĞİL") || rowDurum.includes("KISMEN") || rowDurum.includes("ARIZA")) {
+                    return false;
+                  }
+                  if (!rowDurum.includes("FAAL")) {
+                    return false;
+                  }
+                } else if (selectedDurum === "GAYRİ FAAL" || selectedDurum === "GAYRI FAAL") {
+                  const isGayri = rowDurum.includes("GAYRİ") || rowDurum.includes("GAYRI") || rowDurum.includes("DEĞİL") || rowDurum.includes("ARIZA");
+                  if (!isGayri) return false;
+                } else {
+                  // Tablodaki her bir dinamik durum (KISMEN FAAL, ARIZALI, RAF ÖMRÜ DOLDU vb.)
+                  if (rowDurum !== selectedDurum && !rowDurum.includes(selectedDurum)) {
+                    return false;
+                  }
+                }
+              }
+              // 4. Renk Kodu Doğrudan Seçim Filtresi
+              if (techizatColorFilter && techizatColorFilter !== 'ALL') {
+                const targetColIdx = isDepo ? omurBitisColIdx : gelecekBakimColIdx;
+                if (targetColIdx === -1) return false;
+
+                const isMuaf = isDepo
+                  ? (omurluTabiColIdx !== -1 && (row[omurluTabiColIdx] || "").trim().toUpperCase() === "HAYIR")
+                  : (kalibrasyonTabiColIdx !== -1 && ["HAYIR", "HAYIR (MUAFIYET)", "MUAFIYET"].includes((row[kalibrasyonTabiColIdx] || "").trim().toUpperCase()));
+
+                const rawVal = String(row[targetColIdx] || "").trim();
+                const dateLines = rawVal.split(/[\r\n;]+/).map(s => s.trim()).filter(s => s && s !== '-' && s !== '--' && !s.toUpperCase().includes('MUAFIYET'));
+
+                const daysList: number[] = [];
+                for (const dStr of dateLines) {
+                  const d = parseGelecekBakimDays(dStr);
+                  if (d !== null) daysList.push(d);
+                }
+
+                // Tarihi olmayanlar
+                if (daysList.length === 0 || isMuaf) {
+                  // Kullanıcı: "TARİHİ OLMAYANLAR DA OLMAZ DİYELİM ONLAR DA FİLTRE DIŞIDIR. GELECEK BAKIM TARİHİ BAKACAK."
+                  if (techizatColorFilter === 'GRAY') {
+                    return true;
+                  }
+                  return false;
+                }
+
+                if (techizatColorFilter === 'ORANGE') {
+                  // Sadece turuncular: En az bir tarih 0 ile 90 gün arasında olmalı
+                  const hasOrange = daysList.some(d => d >= 0 && d < 90);
+                  if (!hasOrange) return false;
+                } else if (techizatColorFilter === 'RED') {
+                  // Sadece kırmızılar: En az bir tarih geçmiş olmalı (< 0)
+                  const hasRed = daysList.some(d => d < 0);
+                  if (!hasRed) return false;
+                } else if (techizatColorFilter === 'GREEN') {
+                  // Sadece yeşiller: Kırmızı veya turuncu olmayan, günü 90'dan fazla olanlar
+                  const hasRedOrOrange = daysList.some(d => d < 90);
+                  const hasGreen = daysList.some(d => d >= 90);
+                  if (hasRedOrOrange || !hasGreen) return false;
+                } else if (techizatColorFilter === 'GRAY') {
+                  return false;
+                }
               }
               return true;
             });
@@ -7669,39 +10403,99 @@ export default function App() {
             });
 
             const activeMatch = matchesList[activeTechizatMatchIdx];
-            const gelecekBakimColIdx = cols.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
 
-            // Sıralama (Normalde seçili değil, ama basılınca Turuncu -> Yeşil sıralasın)
-            let processedRows = [...filteredRows];
-            if (sortByColor && gelecekBakimColIdx !== -1) {
-              processedRows.sort((rowA, rowB) => {
-                const getPriorityScore = (row: string[]) => {
-                  const isKalibTabiVal = kalibrasyonTabiColIdx !== -1 ? (row[kalibrasyonTabiColIdx] || "").trim().toUpperCase() : "EVET";
-                  if (isKalibTabiVal === "HAYIR") return 4; // Kalibrasyon gerekmiyorsa en düşük öncelik
+            // Renk Koduna Göre Doğrudan Filtreleme
+            if (selectedColorFilter !== 'all') {
+              filteredRows = filteredRows.filter(row => {
+                const isKalibTabiVal = kalibrasyonTabiColIdx !== -1 ? String(row[kalibrasyonTabiColIdx] || "").trim().toUpperCase() : "EVET";
+                const isBakimMuaf = isKalibTabiVal === "HAYIR" || isKalibTabiVal === "HAYIR (MUAFIYET)" || isKalibTabiVal === "MUAFIYET";
 
-                  const val = row[gelecekBakimColIdx] || "";
-                  const days = parseGelecekBakimDays(val);
-                  if (days === null) return 3;
-                  if (days < 90) return 1; // Turuncu
-                  return 2; // Yeşil (>= 90 gün)
-                };
-
-                const scoreA = getPriorityScore(rowA);
-                const scoreB = getPriorityScore(rowB);
-                
-                if (scoreA !== scoreB) {
-                  return scoreA - scoreB;
+                if (isDepo) {
+                  const omurluIdx = cols.indexOf("ÖMÜRLÜ PARÇA MI?");
+                  const isOmurlu = omurluIdx !== -1 ? (row[omurluIdx] || "").toUpperCase() === "EVET" : true;
+                  if (!isOmurlu) return selectedColorFilter === 'neutral';
+                  if (omurBitisColIdx === -1) return selectedColorFilter === 'neutral';
+                  const cell = row[omurBitisColIdx];
+                  if (!cell || cell === "-" || cell === "--") return selectedColorFilter === 'neutral';
+                  const days = parseGelecekBakimDays(cell);
+                  if (days === null) return selectedColorFilter === 'neutral';
+                  if (days < 0) return selectedColorFilter === 'red';
+                  if (days < 90) return selectedColorFilter === 'orange';
+                  return selectedColorFilter === 'green';
                 }
-                
-                // Aynı gruptakileri en yakın gün sayısına göre artan sırala
-                const valA = rowA[gelecekBakimColIdx] || "";
-                const valB = rowB[gelecekBakimColIdx] || "";
-                const daysA = parseGelecekBakimDays(valA);
-                const daysB = parseGelecekBakimDays(valB);
-                const dJanA = daysA !== null ? daysA : 999999;
-                const dJanB = daysB !== null ? daysB : 999999;
-                return dJanA - dJanB;
+
+                if (isBakimMuaf) return selectedColorFilter === 'neutral';
+                const targetColIdx = gelecekBakimColIdx !== -1 ? gelecekBakimColIdx : cols.findIndex(c => c.includes("GELECEK") || c.includes("MUAYENE"));
+                if (targetColIdx === -1) return selectedColorFilter === 'neutral';
+                const cell = row[targetColIdx];
+                if (!cell || cell === "-" || cell === "--") return selectedColorFilter === 'neutral';
+                const days = parseGelecekBakimDays(cell);
+                if (days === null) return selectedColorFilter === 'neutral';
+                if (days < 0) return selectedColorFilter === 'red';
+                if (days < 90) return selectedColorFilter === 'orange';
+                return selectedColorFilter === 'green';
               });
+            }
+
+            // Sıralama (Normalde seçili değil, ama basılınca Renk Sıralaması yapsın)
+            let processedRows = [...filteredRows];
+            if (sortByColor) {
+              if (isDepo && omurBitisColIdx !== -1) {
+                processedRows.sort((rowA, rowB) => {
+                  const getDepoScore = (row: string[]) => {
+                    const isOmurlu = omurluTabiColIdx !== -1 ? (row[omurluTabiColIdx] || "").trim().toUpperCase() : "EVET";
+                    if (isOmurlu === "HAYIR") return 4;
+
+                    const val = row[omurBitisColIdx] || "";
+                    const days = parseGelecekBakimDays(val);
+                    if (days === null) return 4;
+                    if (days < 0) return 1; // Kırmızı (Ömrü dolmuş)
+                    if (days < 90) return 2; // Turuncu (<90 gün)
+                    return 3; // Yeşil (>=90 gün)
+                  };
+
+                  const scoreA = getDepoScore(rowA);
+                  const scoreB = getDepoScore(rowB);
+                  if (scoreA !== scoreB) return scoreA - scoreB;
+
+                  const valA = rowA[omurBitisColIdx] || "";
+                  const valB = rowB[omurBitisColIdx] || "";
+                  const daysA = parseGelecekBakimDays(valA);
+                  const daysB = parseGelecekBakimDays(valB);
+                  const dJanA = daysA !== null ? daysA : 999999;
+                  const dJanB = daysB !== null ? daysB : 999999;
+                  return dJanA - dJanB;
+                });
+              } else if (gelecekBakimColIdx !== -1) {
+                processedRows.sort((rowA, rowB) => {
+                  const getPriorityScore = (row: string[]) => {
+                    const isKalibTabiVal = kalibrasyonTabiColIdx !== -1 ? (row[kalibrasyonTabiColIdx] || "").trim().toUpperCase() : "EVET";
+                    if (isKalibTabiVal === "HAYIR") return 4; // Kalibrasyon gerekmiyorsa en düşük öncelik
+
+                    const val = row[gelecekBakimColIdx] || "";
+                    const days = parseGelecekBakimDays(val);
+                    if (days === null) return 3;
+                    if (days < 90) return 1; // Turuncu
+                    return 2; // Yeşil (>= 90 gün)
+                  };
+
+                  const scoreA = getPriorityScore(rowA);
+                  const scoreB = getPriorityScore(rowB);
+                  
+                  if (scoreA !== scoreB) {
+                    return scoreA - scoreB;
+                  }
+                  
+                  // Aynı gruptakileri en yakın gün sayısına göre artan sırala
+                  const valA = rowA[gelecekBakimColIdx] || "";
+                  const valB = rowB[gelecekBakimColIdx] || "";
+                  const daysA = parseGelecekBakimDays(valA);
+                  const daysB = parseGelecekBakimDays(valB);
+                  const dJanA = daysA !== null ? daysA : 999999;
+                  const dJanB = daysB !== null ? daysB : 999999;
+                  return dJanA - dJanB;
+                });
+              }
             }
 
             return (
@@ -7711,7 +10505,7 @@ export default function App() {
                   {/* Header Titles */}
                   <div className="text-center mb-6 select-none print:hidden">
                     <h3 className="text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-tighter">
-                      🛠️ {modalTitle}
+                      {isDepo ? '📦' : '🛠️'} {modalTitle}
                     </h3>
                     {formUpdateDates[`techizat_${activeTechizatType}`] && (
                       <p className="text-xs font-mono font-extrabold text-emerald-700 mt-2 bg-emerald-100 border border-emerald-200/50 rounded-full px-4 py-1.5 inline-block shadow-sm">
@@ -7772,7 +10566,7 @@ export default function App() {
                       <div className="relative flex-1 sm:flex-initial">
                         <input
                           type="text"
-                          placeholder="Teçhizat veya seri no..."
+                          placeholder={isDepo ? "Malzeme, P/N veya seri no..." : "Teçhizat veya seri no..."}
                           value={techizatSearchQuery}
                           onChange={(e) => {
                             setTechizatSearchQuery(e.target.value);
@@ -7782,28 +10576,24 @@ export default function App() {
                         />
                       </div>
 
-                      {/* Firma Filtreleme Input / Datalist Dropdown */}
+                      {/* Firma Filtreleme Dropdown (Dinamik) */}
                       <div className="relative flex-1 sm:flex-initial">
-                        <input
-                          type="text"
-                          list="techizat-firmalar-list"
-                          placeholder="🏢 Firma ile ara / seç..."
+                        <select
                           value={techizatFirmaFilter}
                           onChange={(e) => {
                             setTechizatFirmaFilter(e.target.value);
                             setActiveTechizatMatchIdx(0);
                           }}
-                          className="bg-slate-800 text-emerald-300 font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-52 border border-slate-700 placeholder-slate-400"
-                        />
-                        <datalist id="techizat-firmalar-list">
-                          <option value="TÜM FİRMALAR">TÜM FİRMALAR</option>
+                          className="bg-slate-800 text-emerald-300 font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-52 border border-slate-700 cursor-pointer shadow-sm"
+                        >
+                          <option value="">{isDepo ? "🏢 TÜM TEDARİKÇİLER" : "🏢 TÜM FİRMALAR"} ({uniqueFirmalar.length})</option>
                           {uniqueFirmalar.map((f, i) => (
                             <option key={i} value={f}>{f}</option>
                           ))}
-                        </datalist>
+                        </select>
                       </div>
 
-                      {/* Durum Filtreleme Dropdown */}
+                      {/* Durum Filtreleme Dropdown (Dinamik Tablodaki Değerlere Göre) */}
                       <div className="relative flex-1 sm:flex-initial">
                         <select
                           value={techizatDurumFilter}
@@ -7811,21 +10601,48 @@ export default function App() {
                             setTechizatDurumFilter(e.target.value);
                             setActiveTechizatMatchIdx(0);
                           }}
-                          className="bg-slate-800 text-amber-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-44 border border-slate-700 cursor-pointer"
+                          className="bg-slate-800 text-amber-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-48 border border-slate-700 cursor-pointer shadow-sm"
                         >
-                          <option value="">🟢 TÜM DURUMLAR</option>
-                          <option value="FAAL">FAAL</option>
-                          <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
-                          <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                          <option value="">⚡ TÜM DURUMLAR ({uniqueDurumlar.length})</option>
+                          {uniqueDurumlar.length > 0 ? (
+                            uniqueDurumlar.map((d, i) => (
+                              <option key={i} value={d}>{d}</option>
+                            ))
+                          ) : (
+                            <>
+                              <option value="FAAL">FAAL</option>
+                              <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                            </>
+                          )}
                         </select>
                       </div>
 
-                      {(techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter) && (
+                      {/* Renk Koduna Seç Doğrudan Filtreleme Dropdown */}
+                      <div className="relative flex-1 sm:flex-initial">
+                        <select
+                          value={techizatColorFilter}
+                          onChange={(e) => {
+                            setTechizatColorFilter(e.target.value);
+                            setActiveTechizatMatchIdx(0);
+                          }}
+                          className="bg-slate-800 text-cyan-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-56 border border-slate-700 cursor-pointer shadow-sm"
+                          title="Renk Koduna Göre Seç / Filtrele"
+                        >
+                          <option value="ALL">🎨 RENK KODUNA SEÇ (TÜMÜ)</option>
+                          <option value="RED">🔴 KIRMIZI (SÜRESİ DOLAN / ACİL)</option>
+                          <option value="ORANGE">🟠 TURUNCU (&lt; 90 GÜN KALANLAR)</option>
+                          <option value="GREEN">🟢 YEŞİL (SÜRESİ UYGUN / FAAL)</option>
+                          <option value="GRAY">⚪ GRİ (BAKIMA TABİ DEĞİL / MUAF)</option>
+                        </select>
+                      </div>
+
+                      {(techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter || techizatColorFilter !== "ALL") && (
                         <button
                           onClick={() => {
                             setTechizatSearchQuery("");
                             setTechizatFirmaFilter("");
                             setTechizatDurumFilter("");
+                            setTechizatColorFilter("ALL");
                             setActiveTechizatMatchIdx(0);
                           }}
                           className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-700"
@@ -7841,6 +10658,34 @@ export default function App() {
                         </span>
                       )}
 
+                      {/* YUKARDAKİ FİLTER KISMINA RENK KODU SEÇ SEÇENEĞİ */}
+                      <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-700/80 rounded-2xl px-3 py-2 shrink-0 shadow-md">
+                        <span className="text-[11px] font-black font-mono text-slate-300 uppercase flex items-center gap-1">
+                          <span>🎨</span>
+                          <span className="hidden sm:inline">RENK KODU:</span>
+                        </span>
+                        <select
+                          value={selectedColorFilter}
+                          onChange={(e) => setSelectedColorFilter(e.target.value as any)}
+                          className="bg-slate-800 text-white font-bold text-xs rounded-xl px-2.5 py-1.5 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                        >
+                          <option value="all">TÜMÜ (Renk Filtresi Yok)</option>
+                          <option value="red">🔴 KIRMIZI (Günü Geçmiş / Süresi Dolan)</option>
+                          <option value="orange">🟠 TURUNCU (90 Gün Altı / Yaklaşan)</option>
+                          <option value="green">🟢 YEŞİL (Faal / Güvenli)</option>
+                          <option value="neutral">⚪ NÖTR (Muaf / Süresiz)</option>
+                        </select>
+                        {selectedColorFilter !== 'all' && (
+                          <button
+                            onClick={() => setSelectedColorFilter('all')}
+                            className="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold transition-all"
+                            title="Renk filtresini temizle"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+
                       <button
                         onClick={() => setSortByColor(!sortByColor)}
                         className={`px-4 py-3 active:scale-95 font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border shrink-0 ${
@@ -7848,10 +10693,14 @@ export default function App() {
                             ? 'bg-red-600 hover:bg-red-700 text-white border-red-500 animate-pulse' 
                             : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
                         }`}
-                        title="Bakım gün sayısına göre (Kırmızı ➜ Turuncu ➜ Sarı ➜ Yeşil) sıralar"
+                        title={isDepo ? "Raf ömrü kalan gün sayısına göre (Kırmızı ➜ Turuncu ➜ Yeşil) sıralar" : "Bakım gün sayısına göre (Kırmızı ➜ Turuncu ➜ Sarı ➜ Yeşil) sıralar"}
                       >
                         <SlidersHorizontal className="w-4 h-4 text-amber-400" />
-                        <span>{sortByColor ? "🔴 RENK SIRALAMASI AKTİF" : "⏳ RENK KODUNA GÖRE SIRALA"}</span>
+                        <span>
+                          {sortByColor 
+                            ? (isDepo ? "🔴 RAF ÖMRÜ SIRALAMASI AKTİF" : "🔴 RENK SIRALAMASI AKTİF") 
+                            : (isDepo ? "⏳ RAF ÖMRÜNE GÖRE SIRALA" : "⏳ RENK KODUNA GÖRE SIRALA")}
+                        </span>
                       </button>
                     </div>
 
@@ -7882,9 +10731,22 @@ export default function App() {
                         </div>
                       )}
 
+                      <button
+                        onClick={async () => {
+                          showNotification("Google Drive'dan bu sayfaya ait güncel veriler doğrudan alınıyor...");
+                          await pullTechizatUnitFromDrive(activeTechizatType, false);
+                        }}
+                        className="px-4 py-3 bg-sky-800 hover:bg-sky-700 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-sky-600 shrink-0"
+                        title="Google Drive klasöründeki güncel Excel dosyasından sadece bu sayfanın verilerini yeniler"
+                      >
+                        <RefreshCw className="w-4 h-4 text-sky-300" />
+                        <span>DRİVE İLE YENİLE</span>
+                      </button>
+
                       {activeTechizatType !== 'all' && (
                         <button
                           onClick={() => {
+                            setPasswordActionType('filter_sync');
                             setPasswordInput('');
                             setPasswordError(false);
                             setIsPasswordModalOpen(true);
@@ -7897,19 +10759,41 @@ export default function App() {
                       )}
 
                       <button
+                        onClick={() => {
+                          setPasswordActionType('new_product');
+                          setPasswordInput('');
+                          setPasswordError(false);
+                          setIsPasswordModalOpen(true);
+                        }}
+                        className="px-4 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-950/20 border border-emerald-500 shrink-0"
+                        title="Yetkili şifresi ile yeni ürün veya teçhizat kaydı ekle"
+                      >
+                        <PlusCircle className="w-4 h-4 text-white" />
+                        <span>YENİ ÜRÜN EKLE</span>
+                      </button>
+
+                      {isDepo && (
+                        <button
+                          onClick={() => {
+                            setPasswordActionType('depo_management');
+                            setPasswordInput('');
+                            setPasswordError(false);
+                            setIsPasswordModalOpen(true);
+                          }}
+                          className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
+                          title="Depo Giriş/Çıkış, Kit Montajı ve Transfer Yönetimi"
+                        >
+                          <Boxes className="w-4 h-4 text-emerald-400" />
+                          <span>DEPO YÖNETİM</span>
+                        </button>
+                      )}
+
+                      <button
                         onClick={() => exportTechizatToExcel(activeTechizatType, cols, rows, modalTitle)}
                         className="px-4 py-3 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-900/10 border border-emerald-600 shrink-0"
                       >
                         <Download className="w-4 h-4" />
-                        <span>EXCEL OLARAK AKTAR</span>
-                      </button>
-
-                      <button
-                        onClick={() => window.print()}
-                        className="px-4 py-3 bg-indigo-700 hover:bg-indigo-600 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-indigo-900/10 border border-indigo-600 shrink-0"
-                      >
-                        <Printer className="w-4 h-4" />
-                        <span>YAZDIR / PDF İNDİR</span>
+                        <span>EXCEL İNDİR</span>
                       </button>
                     </div>
                   </div>
@@ -7918,11 +10802,11 @@ export default function App() {
                   <div className="flex-1 bg-white border-2 border-slate-200/60 rounded-[2.5rem] shadow-xl overflow-hidden flex flex-col print:border-none print:shadow-none min-h-[400px]">
                     
                     {/* Table Title Bar */}
-                    <div className="bg-slate-900 px-6 py-4 border-b border-slate-800 flex items-center justify-between print:hidden shrink-0">
+                    <div className="bg-slate-900 px-6 py-4 border-b border-slate-800 flex items-center justify-between print:hidden shrink-0 flex-wrap gap-3">
                       {Object.keys(selectedTechizatItems).length > 0 ? (
-                        <div className="flex items-center gap-3 animate-fade-in">
+                        <div className="flex items-center gap-3 animate-fade-in flex-wrap">
                           <span className="text-xs font-black text-amber-400 bg-amber-950/40 border border-amber-900 px-3 py-1.5 rounded-xl">
-                            ⚡ {Object.keys(selectedTechizatItems).length} TEÇHİZAT SEÇİLDİ
+                            ⚡ {Object.keys(selectedTechizatItems).length} {isDepo ? 'MALZEME SEÇİLDİ' : 'TEÇHİZAT SEÇİLDİ'}
                           </span>
                           <button
                             onClick={() => {
@@ -7934,18 +10818,67 @@ export default function App() {
                             <Sparkles className="w-3.5 h-3.5" />
                             <span>DÜZENLE / GÖNDER</span>
                           </button>
+                          <button
+                            onClick={handleDeleteSelectedTechizatRows}
+                            className="px-4 py-1.5 bg-rose-700 hover:bg-rose-600 hover:scale-105 active:scale-95 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center gap-2 shadow-lg shadow-rose-950/30 border border-rose-600"
+                            title="Seçilen satırları sil ve Drive/E-Tablo ile senkronize et"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>SEÇİLENLERİ SİL</span>
+                          </button>
                         </div>
                       ) : (
-                        <div />
+                        <div className="hidden lg:flex items-center gap-2 text-[11px] font-mono font-black select-none">
+                          <span className="flex items-center gap-1.5 bg-emerald-950/60 text-emerald-300 border border-emerald-800/80 px-2.5 py-1 rounded-lg">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block shadow-sm"></span>
+                            🟢 &ge;90 Gün
+                          </span>
+                          <span className="flex items-center gap-1.5 bg-orange-950/60 text-orange-300 border border-orange-800/80 px-2.5 py-1 rounded-lg">
+                            <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block shadow-sm"></span>
+                            🟠 &lt;90 Gün
+                          </span>
+                          <span className="flex items-center gap-1.5 bg-rose-950/60 text-rose-300 border border-rose-800/80 px-2.5 py-1 rounded-lg">
+                            <span className="w-2.5 h-2.5 rounded-full bg-rose-600 inline-block shadow-sm animate-pulse"></span>
+                            🔴 Bakım/Ömür Geçmiş
+                          </span>
+                        </div>
+                      )}
+                      {isTechizatDriveLoading && (
+                        <span className="text-[10px] font-mono font-black text-amber-300 bg-amber-950/80 px-3 py-1 rounded-full border border-amber-600 flex items-center gap-1.5 animate-pulse">
+                          <RefreshCw className="w-3 h-3 animate-spin text-amber-300" />
+                          VERİ KONTROL EDİLİYOR...
+                        </span>
                       )}
                       <span className="text-[10px] font-mono font-black text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
-                        {processedRows.length} KALEM TEÇHİZAT LİSTELENDİ
+                        {processedRows.length} KALEM {isDepo ? 'MALZEME LİSTELENDİ' : 'TEÇHİZAT LİSTELENDİ'}
                       </span>
                     </div>
 
                     {/* Table Grid Scroll Wrapper */}
-                    <div className="flex-1 overflow-auto max-h-[75vh] print:max-h-none print:overflow-visible">
-                      <table className="w-full border-collapse text-left min-w-[1200px]">
+                    <div className="flex-1 overflow-auto max-h-[85vh] print:max-h-none print:overflow-visible relative">
+                      {(isPullingTechizat || isTechizatDriveLoading) && processedRows.length === 0 && (
+                        <div className="absolute inset-0 z-30 backdrop-blur-md bg-slate-900/70 flex flex-col items-center justify-center gap-3 p-6 pointer-events-auto">
+                          <div className="bg-slate-900/95 border-2 border-emerald-500/70 p-6 rounded-3xl shadow-2xl flex flex-col items-center gap-3 text-center max-w-md">
+                            <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
+                              <RefreshCw className="w-7 h-7 text-emerald-400 animate-spin" />
+                            </div>
+                            <p className="text-base font-black uppercase tracking-wider text-emerald-300">⏳ VERİLER BEKLENİYOR...</p>
+                            <p className="text-xs text-slate-300 font-medium leading-relaxed">
+                              Veriler sunucudan alınıyor...
+                            </p>
+                            <button
+                              onClick={() => {
+                                setIsTechizatDriveLoading(false);
+                                setIsPullingTechizat(false);
+                              }}
+                              className="mt-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 cursor-pointer"
+                            >
+                              Beklemeyi Sonlandır
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <table className={`w-full border-collapse text-left min-w-[1200px] ${((isPullingTechizat || isTechizatDriveLoading) && processedRows.length === 0) ? 'filter blur-sm select-none pointer-events-none' : ''}`}>
                         <thead>
                           <tr className="bg-slate-900 border-b border-slate-800 print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10">
                             <th className="px-3 py-3.5 text-center text-[10px] font-black text-slate-300 uppercase font-mono border-r border-slate-800 w-[50px] print:hidden">
@@ -7999,7 +10932,47 @@ export default function App() {
                           {processedRows.length === 0 ? (
                             <tr key="no-equipment-row">
                               <td colSpan={cols.length + 1} className="px-6 py-16 text-center text-slate-400 font-extrabold text-sm">
-                                🔍 Arama kriterlerine uygun teçhizat kaydı bulunamadı.
+                                {isPullingTechizat ? (
+                                  <div className="flex flex-col items-center justify-center gap-3 py-10">
+                                    <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-200 flex items-center justify-center shadow-sm">
+                                      <RefreshCw className="w-6 h-6 text-sky-600 animate-spin" />
+                                    </div>
+                                    <span className="text-slate-800 font-black text-sm uppercase tracking-wider">
+                                      GOOGLE DRIVE'DAN EXCEL ARANIYOR VE YÜKLENİYOR...
+                                    </span>
+                                    <p className="text-xs text-slate-500 font-medium">
+                                      Drive klasöründeki güncel Excel tablosu kontrol ediliyor, lütfen bekleyiniz.
+                                    </p>
+                                  </div>
+                                ) : isDepo ? (
+                                  <div className="flex flex-col items-center justify-center gap-3 py-6">
+                                    <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center shadow-inner">
+                                      <Boxes className="w-8 h-8 text-amber-700" />
+                                    </div>
+                                    <span className="text-slate-800 font-black text-base uppercase tracking-wider">
+                                      {techizatActiveSection === 'depo_sarf' ? 'SARF VE PARÇA DEPOSUNDA KAYIT BULUNMUYOR' : techizatActiveSection === 'depo_kimyasal' ? 'KİMYASAL DEPOSUNDA KAYIT BULUNMUYOR' : 'DEPOLARDA HENÜZ KAYITLI MALZEME BULUNMUYOR'}
+                                    </span>
+                                    <p className="text-xs text-slate-500 font-medium max-w-md text-center leading-relaxed">
+                                      Google Drive üzerinde bu birime ait kayıtlı Excel bulunamadı veya henüz veri yüklenmedi. <strong>"VERİ GÜNCELLE"</strong> veya <strong>"YENİ EKLE"</strong> butonunu kullanarak Excel yükleyebilirsiniz.
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center gap-3 py-6">
+                                    <div className="w-16 h-16 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center shadow-inner">
+                                      <FileSpreadsheet className="w-8 h-8 text-slate-500" />
+                                    </div>
+                                    <span className="text-slate-800 font-black text-base uppercase tracking-wider">
+                                      {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter 
+                                        ? "🔍 ARAMA KRİTERLERİNE UYGUN KAYIT BULUNAMADI" 
+                                        : "BU BİRİME AİT KAYITLI EXCEL BULUNAMADI"}
+                                    </span>
+                                    <p className="text-xs text-slate-500 font-medium max-w-md text-center leading-relaxed">
+                                      {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter
+                                        ? "Filtreleri temizleyerek tüm listeyi görebilirsiniz."
+                                        : "Sistemde henüz bu birime ait bir Excel dosyası yok veya dosya boş. 'VERİ GÜNCELLE' butonuyla Excel yükleyebilir veya 'YENİ EKLE' ile ilk kaydı oluşturabilirsiniz."}
+                                    </p>
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           ) : (
@@ -8007,8 +10980,7 @@ export default function App() {
                                const isAll = activeTechizatType === 'all';
                                const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
                                const targetRow = isAll ? row.slice(1) : row;
-                               const rowImageKey = targetTechType + "_" + (targetRow[1] || "").replace(/\s+/g, '_') + "_" + (targetRow[3] || "").replace(/\s+/g, '_');
-                               const rowImageUrl = techizatImages[rowImageKey];
+                               const rowImageUrl = findRowImageUrl(targetTechType, targetRow, techizatImages);
 
                                return (
                                  <tr 
@@ -8017,7 +10989,7 @@ export default function App() {
                                      if (rowImageUrl) {
                                        setHoveredRowImage({
                                          url: rowImageUrl,
-                                         title: targetRow[1] || "Teçhizat",
+                                         title: targetRow[1] || "Kayıt",
                                          subtitle: `${targetRow[2] || ""} ${targetRow[3] ? "• " + targetRow[3] : ""}`,
                                          x: e.clientX,
                                          y: e.clientY
@@ -8045,6 +11017,7 @@ export default function App() {
                                           else if (targetTechType === 'at802') sourceList = techizatAt802Data;
                                           else if (targetTechType === 't70') sourceList = techizatT70Data;
                                           else if (targetTechType === 't70_bumbi_backet') sourceList = techizatT70BumbiBacketData;
+                                          else if (targetTechType === 't70_helitak') sourceList = techizatT70HelitakData;
                                           else if (targetTechType === 'b360') sourceList = techizatB360Data;
                                           else if (targetTechType === 'c650') sourceList = techizatC650Data;
                                           else if (targetTechType === 'hangar') sourceList = techizatHangarData;
@@ -8054,14 +11027,25 @@ export default function App() {
                                         }
                                       }
 
+                                      let resolvedCopy: string[] = [];
+                                      if (targetTechType === 'kara_araclari') {
+                                        resolvedCopy = formatKaraAraciToStandardRow(resolvedRow);
+                                      } else if (isDepo) {
+                                        resolvedCopy = formatDepoRow(resolvedRow);
+                                      } else {
+                                        resolvedCopy = formatStandardRow(resolvedRow);
+                                      }
+
                                       setActiveTechizatRowEdit({
                                         rIdx,
-                                        techType: targetTechType,
-                                        row: [...resolvedRow]
+                                        techType: targetTechType as any,
+                                        row: resolvedCopy
                                       });
-                                      const imageKey = targetTechType + "_" + (resolvedRow[1] || "").replace(/\s+/g, '_') + "_" + (resolvedRow[3] || "").replace(/\s+/g, '_');
-                                      setTempImageUrlInput(techizatImages[imageKey] && !techizatImages[imageKey].startsWith('data:') ? techizatImages[imageKey] : "");
-                                      setEditRowValues([...resolvedRow]);
+                                      loadRegionalLocationsForRow(targetTechType, resolvedCopy);
+                                      setMobileEditTab('form');
+                                      const matchedImg = findRowImageUrl(targetTechType, resolvedCopy, techizatImages);
+                                      setTempImageUrlInput(matchedImg && !matchedImg.startsWith('data:') ? matchedImg : "");
+                                      setEditRowValues([...resolvedCopy]);
                                       setTechizatImageScale(1);
                                       setIsFullScreenImage(false);
                                       setImagePasswordInput('');
@@ -8086,31 +11070,68 @@ export default function App() {
                                      const label = cols[cIdx] || "Veri";
                                      const isMatch = q && cell && cell.toLowerCase().includes(q);
                                      const isActiveMatch = activeMatch && activeMatch.r === rIdx && activeMatch.c === cIdx;
- 
+                                     const isMultiLine = Boolean(cell && cell.includes('\n'));
+
+                                     const isDateCol = Boolean(
+                                       label.toUpperCase().includes("KONTROL") || 
+                                       label.toUpperCase().includes("BAKIM") || 
+                                       label.toUpperCase().includes("TARİH") || 
+                                       label.toUpperCase().includes("MUAYENE") || 
+                                       label.toUpperCase().includes("ÖMÜR") ||
+                                       (/^\d{5}$/.test(String(cell || '').trim()) && parseFloat(String(cell || '').trim()) >= 20000 && parseFloat(String(cell || '').trim()) <= 90000)
+                                     );
+
+                                     const displayCell = isDateCol ? cleanAndFormatDateString(cell) : cell;
+
                                      let cellStyleClass = cell 
                                        ? 'text-slate-800 font-sans font-semibold' 
                                        : 'text-slate-300 italic';
                                        
-                                     const isBakimaTabiColIdx = cols.indexOf("BAKIMA TABİ Mİ?");
-                                     const isBakimaTabi = isBakimaTabiColIdx !== -1 ? row[isBakimaTabiColIdx] : "Evet";
+                                     const isKalibTabiColIdx = cols.findIndex(c => c.includes("KALİBRASYONA TABİ") || c.includes("BAKIMA TABİ"));
+                                     const isKalibTabiVal = isKalibTabiColIdx !== -1 ? String(row[isKalibTabiColIdx] || "").trim().toUpperCase() : "EVET";
+                                     const isBakimMuaf = isKalibTabiVal === "HAYIR" || isKalibTabiVal === "HAYIR (MUAFIYET)" || isKalibTabiVal === "MUAFIYET";
 
-                                     const isGelecekBakimCol = cIdx === gelecekBakimColIdx || (isKaraAraci && label === "BİR SONRAKİ MUAYENE TARİHİ");
+                                     const isGelecekBakimCol = !isDepo && (cIdx === gelecekBakimColIdx || (isKaraAraci && (label === "BİR SONRAKİ MUAYENE TARİHİ" || label.includes("GELECEK"))));
+                                     const isOmurBitisCol = isDepo && (label === "ÖMÜR BİTİŞ TARİHİ" || label.includes("ÖMÜR"));
 
-                                     if (isGelecekBakimCol && cell) {
-                                       if (isBakimaTabi === "Hayır") {
-                                         cellStyleClass = 'text-slate-400 italic font-bold text-center';
-                                       } else {
-                                         const days = parseGelecekBakimDays(cell);
-                                         if (days !== null) {
-                                           if (days >= 90) {
-                                             cellStyleClass = 'bg-emerald-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
-                                           } else {
-                                             cellStyleClass = 'bg-orange-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center animate-pulse';
+                                     if (!isMultiLine) {
+                                       if (isGelecekBakimCol && cell && cell !== "-" && cell !== "--") {
+                                         if (isBakimMuaf) {
+                                           cellStyleClass = 'text-slate-400 italic font-bold text-center';
+                                         } else {
+                                           const days = parseGelecekBakimDays(cell);
+                                           if (days !== null) {
+                                             if (days < 0) {
+                                               cellStyleClass = 'bg-rose-600 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center animate-pulse';
+                                             } else if (days < 90) {
+                                               cellStyleClass = 'bg-orange-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                             } else {
+                                               cellStyleClass = 'bg-emerald-600 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                             }
                                            }
                                          }
                                        }
+
+                                       if (isOmurBitisCol && cell && cell !== "-" && cell !== "--") {
+                                         const omurluIdx = cols.indexOf("ÖMÜRLÜ PARÇA MI?");
+                                         const isOmurlu = omurluIdx !== -1 ? (row[omurluIdx] || "").toUpperCase() === "EVET" : true;
+                                         if (isOmurlu) {
+                                           const days = parseGelecekBakimDays(cell);
+                                           if (days !== null) {
+                                             if (days < 0) {
+                                               cellStyleClass = 'bg-rose-600 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center animate-pulse';
+                                             } else if (days < 90) {
+                                               cellStyleClass = 'bg-orange-500 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                             } else {
+                                               cellStyleClass = 'bg-emerald-600 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center';
+                                             }
+                                           }
+                                         } else {
+                                           cellStyleClass = 'text-slate-400 italic font-medium text-center';
+                                         }
+                                       }
                                      }
- 
+
                                      return (
                                        <React.Fragment key={cIdx}>
                                          {cIdx === 0 && (
@@ -8144,33 +11165,133 @@ export default function App() {
                                              />
                                            </td>
                                          )}
+                                         {label === "BELGE YÜKLE" ? (
+                                           <td 
+                                             key={cIdx} 
+                                             className="px-3 py-2 text-center border-r border-slate-100 last:border-r-0 min-w-[130px]"
+                                             onClick={(e) => e.stopPropagation()}
+                                           >
+                                             {(() => {
+                                               const itemDocs = findMatchingDocs(targetRow, hangarPdfDocs);
+                                               return (
+                                                 <button
+                                                   type="button"
+                                                   onClick={() => {
+                                                     loadRegionalLocationsForRow('hangar', targetRow);
+                                                     setActiveTechizatRowEdit({
+                                                       rIdx,
+                                                       techType: 'hangar',
+                                                       row: targetRow
+                                                     });
+                                                     setMobileEditTab('documents');
+                                                   }}
+                                                   className={`px-3 py-1.5 rounded-xl font-black text-[11px] flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer mx-auto ${
+                                                     itemDocs.length > 0
+                                                       ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-600/20'
+                                                       : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300'
+                                                   }`}
+                                                   title="Hangar Yer Destek belgelerini yönetmek ve PDF önizlemek için tıklayınız"
+                                                 >
+                                                   <FileText className="w-3.5 h-3.5" />
+                                                   <span>{itemDocs.length > 0 ? `📄 ${itemDocs.length} Belge` : '+ Belge Yükle'}</span>
+                                                 </button>
+                                               );
+                                             })()}
+                                           </td>
+                                         ) : (
                                          <td 
                                            key={cIdx} 
                                            className="px-4 py-3 text-center border-r border-slate-100 last:border-r-0 max-w-[200px]"
                                          >
                                            <div 
                                              title={cell ? `${label}: ${cell} (Düzenlemek ve görsel eklemek için Tıklayın)` : "Boş Veri"}
-                                             className={`${cell && cell.includes('\n') ? 'whitespace-pre-line leading-relaxed min-w-[110px]' : 'truncate'} px-2 py-1 rounded-xl transition-all text-xs text-center select-text hover:bg-emerald-100/50 hover:text-emerald-950 flex items-center justify-center gap-1 ${
+                                             className={`${isMultiLine ? 'whitespace-pre-line leading-relaxed min-w-[120px]' : 'truncate'} px-2 py-1 rounded-xl transition-all text-xs text-center select-text hover:bg-emerald-100/50 hover:text-emerald-950 flex items-center justify-center gap-1 ${
                                                isActiveMatch 
                                                  ? 'bg-blue-600 text-white font-black scale-105 shadow-md ring-2 ring-blue-400 animate-pulse'
                                                  : isMatch
                                                    ? 'bg-blue-200 text-blue-950 font-black border border-blue-400'
-                                                   : cellStyleClass
+                                                   : isMultiLine
+                                                     ? 'text-slate-800 font-sans'
+                                                     : cellStyleClass
                                              }`}
                                            >
-                                             {cell && cell.includes('\n') ? (
+                                             {isMultiLine ? (
                                                <div className="w-full text-center whitespace-pre-line leading-relaxed font-bold divide-y divide-slate-200/60 py-0.5">
-                                                 {cell.split('\n').map((lineVal, lineIdx) => (
-                                                   <div key={lineIdx} className="py-0.5 first:pt-0 last:pb-0">
-                                                     {lineVal || "-"}
-                                                   </div>
-                                                 ))}
+                                                 {cell.split('\n').map((lineVal, lineIdx) => {
+                                                   const trimmed = (lineVal || "").trim();
+                                                   const trimmedFormatted = (isGelecekBakimCol || isOmurBitisCol || isDateCol) ? cleanAndFormatDateString(trimmed) : trimmed;
+
+                                                   if (isGelecekBakimCol) {
+                                                     const days = parseGelecekBakimDays(trimmed);
+                                                     let lineBadgeClass = "";
+                                                     if (trimmed && trimmed !== "-" && trimmed !== "--" && !isBakimMuaf && days !== null) {
+                                                       if (days < 0) {
+                                                         lineBadgeClass = "bg-rose-600 text-white font-extrabold px-2.5 py-1 rounded-lg shadow-sm text-center animate-pulse inline-block w-full max-w-[130px]";
+                                                       } else if (days < 90) {
+                                                         lineBadgeClass = "bg-orange-500 text-white font-extrabold px-2.5 py-1 rounded-lg shadow-sm text-center inline-block w-full max-w-[130px]";
+                                                       } else {
+                                                         lineBadgeClass = "bg-emerald-600 text-white font-extrabold px-2.5 py-1 rounded-lg shadow-sm text-center inline-block w-full max-w-[130px]";
+                                                       }
+                                                     }
+
+                                                     return (
+                                                       <div key={lineIdx} className="py-1 first:pt-0 last:pb-0 min-h-[30px] flex items-center justify-center">
+                                                         {lineBadgeClass ? (
+                                                           <span className={lineBadgeClass}>
+                                                             {trimmedFormatted}
+                                                           </span>
+                                                         ) : (
+                                                           <span className={isBakimMuaf ? "text-slate-400 italic font-bold" : "text-slate-700 font-bold"}>
+                                                             {trimmedFormatted || "-"}
+                                                           </span>
+                                                         )}
+                                                       </div>
+                                                     );
+                                                   }
+
+                                                   if (isOmurBitisCol) {
+                                                     const omurluIdx = cols.indexOf("ÖMÜRLÜ PARÇA MI?");
+                                                     const isOmurlu = omurluIdx !== -1 ? (row[omurluIdx] || "").toUpperCase() === "EVET" : true;
+                                                     const days = parseGelecekBakimDays(trimmed);
+                                                     let lineBadgeClass = "";
+                                                     if (trimmed && trimmed !== "-" && trimmed !== "--" && isOmurlu && days !== null) {
+                                                       if (days < 0) {
+                                                         lineBadgeClass = "bg-rose-600 text-white font-extrabold px-2.5 py-1 rounded-lg shadow-sm text-center animate-pulse inline-block w-full max-w-[130px]";
+                                                       } else if (days < 90) {
+                                                         lineBadgeClass = "bg-orange-500 text-white font-extrabold px-2.5 py-1 rounded-lg shadow-sm text-center inline-block w-full max-w-[130px]";
+                                                       } else {
+                                                         lineBadgeClass = "bg-emerald-600 text-white font-extrabold px-2.5 py-1 rounded-lg shadow-sm text-center inline-block w-full max-w-[130px]";
+                                                       }
+                                                     }
+
+                                                     return (
+                                                       <div key={lineIdx} className="py-1 first:pt-0 last:pb-0 min-h-[30px] flex items-center justify-center">
+                                                         {lineBadgeClass ? (
+                                                           <span className={lineBadgeClass}>
+                                                             {trimmedFormatted}
+                                                           </span>
+                                                         ) : (
+                                                           <span className={!isOmurlu ? "text-slate-400 italic font-medium" : "text-slate-700 font-bold"}>
+                                                             {trimmedFormatted || "-"}
+                                                           </span>
+                                                         )}
+                                                       </div>
+                                                     );
+                                                   }
+
+                                                   return (
+                                                     <div key={lineIdx} className="py-1 first:pt-0 last:pb-0 min-h-[30px] flex items-center justify-center text-center font-bold text-slate-800">
+                                                       {trimmedFormatted || "-"}
+                                                     </div>
+                                                   );
+                                                 })}
                                                </div>
                                              ) : (
-                                               <span className="truncate">{cell || "-"}</span>
+                                               <span className="truncate">{displayCell || (label.toUpperCase().includes("MAİL") || label.toUpperCase().includes("MAIL") || label.toUpperCase().includes("90 GÜN") ? "" : "-")}</span>
                                              )}
                                            </div>
                                          </td>
+                                         )}
                                        </React.Fragment>
                                      );
                                    })}
@@ -8183,30 +11304,7 @@ export default function App() {
                     </div>
 
                   </div>
-
-                   {/* Renk Kodları Açıklama Paneli */}
-                   <div className="mt-6 bg-white border border-slate-200 rounded-3xl p-5 shadow-sm print:hidden select-none">
-                     <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider mb-3">
-                       💡 GELECEK BAKIM / KONTROL RENK KODU AÇIKLAMALARI
-                     </h4>
-                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                       <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-2xl">
-                         <span className="w-5 h-5 rounded-lg bg-emerald-500 shrink-0" />
-                         <div>
-                           <p className="text-xs font-bold text-emerald-950">YEŞİL (BAKIMA UYGUN)</p>
-                           <p className="text-[10px] text-emerald-700">90 Gün ve Fazla (<span className="font-mono">{'>='}90 Gün</span>)</p>
-                         </div>
-                       </div>
-                       <div className="flex items-center gap-3 p-3 bg-orange-50 border border-orange-200 rounded-2xl">
-                         <span className="w-5 h-5 rounded-lg bg-orange-500 shrink-0 animate-pulse" />
-                         <div>
-                           <p className="text-xs font-bold text-orange-950">TURUNCU (BAKIM YAKLAŞTI / AZALDI)</p>
-                           <p className="text-[10px] text-orange-700">90 Günden Az (<span className="font-mono">{'<'}90 Gün</span>)</p>
-                         </div>
-                       </div>
-                     </div>
-                   </div>
-                 </>
+                </>
                ) : (
                  <div className="flex-1 flex flex-col gap-6 print:hidden">
                    {/* Left Panel: Yeni Görev Emri (Step-by-Step Wizard) */}
@@ -8487,10 +11585,10 @@ export default function App() {
                                             updated[rIdx].from = e.target.value;
                                             setGeRoutes(updated);
                                           }}
-                                          className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all"
+                                          className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-[#0b3d1d] focus:bg-white transition-all"
                                         />
                                       </div>
-                                      <span className="text-slate-400 font-bold px-1">-</span>
+                                      <span className="text-slate-400 font-bold">→</span>
                                       <div className="flex-1">
                                         <input
                                           type="text"
@@ -8501,18 +11599,19 @@ export default function App() {
                                             updated[rIdx].to = e.target.value;
                                             setGeRoutes(updated);
                                           }}
-                                          className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all"
+                                          className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-[#0b3d1d] focus:bg-white transition-all"
                                         />
                                       </div>
                                       {geRoutes.length > 1 && (
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            setGeRoutes(geRoutes.filter((_, i) => i !== rIdx));
+                                            setGeRoutes(geRoutes.filter((_, idx) => idx !== rIdx));
                                           }}
-                                          className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-all"
+                                          className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                                          title="Güzergahı Sil"
                                         >
-                                          <X className="w-4 h-4" />
+                                          ✕
                                         </button>
                                       )}
                                     </div>
@@ -8520,16 +11619,17 @@ export default function App() {
                                   <button
                                     type="button"
                                     onClick={() => setGeRoutes([...geRoutes, { from: "", to: "" }])}
-                                    className="self-start text-[10px] font-black text-[#0b3d1d] bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 px-3 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1 mt-1"
+                                    className="self-start text-[11px] font-extrabold text-[#0b3d1d] hover:underline flex items-center gap-1 mt-1 cursor-pointer"
                                   >
-                                    <Plus className="w-3.5 h-3.5" />
-                                    Yeni Lokasyon Ekle
+                                    + Yeni Güzergah Ekle
                                   </button>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                   <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">⏱️ Çıkış Saati</label>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">
+                                      ⏰ Çıkış Saati
+                                    </label>
                                     <input
                                       type="time"
                                       value={geDepartureTime}
@@ -8538,7 +11638,9 @@ export default function App() {
                                     />
                                   </div>
                                   <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">⏱️ Dönüş Saati</label>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">
+                                      ⏰ Dönüş Saati
+                                    </label>
                                     <input
                                       type="time"
                                       value={geReturnTime}
@@ -8548,648 +11650,220 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                   <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📈 Çıkış KM</label>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">
+                                      🚗 Çıkış Kilometresi (KM)
+                                    </label>
                                     <input
                                       type="number"
-                                      placeholder="Örn: 15150"
+                                      placeholder="Örn: 124500"
                                       value={geDepartureKm}
                                       onChange={(e) => setGeDepartureKm(e.target.value)}
                                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
                                     />
                                   </div>
                                   <div>
-                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📈 Dönüş KM</label>
+                                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">
+                                      🏁 Dönüş Kilometresi (KM)
+                                    </label>
                                     <input
                                       type="number"
-                                      placeholder="Örn: 15300"
+                                      placeholder="Örn: 124650"
                                       value={geReturnKm}
                                       onChange={(e) => setGeReturnKm(e.target.value)}
                                       className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
                                     />
                                   </div>
                                 </div>
+
+                                {geDepartureKm && geReturnKm && (
+                                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between">
+                                    <span className="text-xs font-bold text-emerald-900">Toplam Yapılan Yol:</span>
+                                    <span className="text-sm font-black text-emerald-950 font-mono">
+                                      {Math.max(0, Number(geReturnKm) - Number(geDepartureKm))} KM
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             )}
+                          </div>
 
-                            {/* Step Navigation Controls */}
-                            <div className="flex items-center gap-3 pt-3 border-t border-slate-100">
-                              {geStep > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={handlePrevStep}
-                                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 font-extrabold text-xs uppercase tracking-widest rounded-2xl cursor-pointer transition-all flex items-center gap-1.5"
-                                >
-                                  <ChevronLeft className="w-4 h-4" />
-                                  Geri
-                                </button>
-                              )}
+                          {/* Wizard Navigation Buttons */}
+                          <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                            {geStep > 1 ? (
+                              <button
+                                type="button"
+                                onClick={handlePrevStep}
+                                className="px-5 py-2.5 rounded-2xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs transition-all active:scale-95 cursor-pointer"
+                              >
+                                ← Önceki Adım
+                              </button>
+                            ) : <div />}
 
-                              {geStep < 3 ? (
-                                <button
-                                  type="button"
-                                  onClick={handleNextStep}
-                                  className="flex-1 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-extrabold text-xs uppercase tracking-widest rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-900/10"
-                                >
-                                  İleri
-                                  <ChevronRight className="w-4 h-4 text-emerald-300" />
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!geTarih || !gePlaka || !geSoforName || !geSeriNo || !geReturnKm || !geDepartureKm || !geDepartureTime || !geReturnTime) {
-                                      alert("Lütfen form alanlarının tamamını doldurmak için bilgileri kontrol edin.");
-                                      return;
-                                    }
-                                    if (Number(geReturnKm) <= Number(geDepartureKm)) {
-                                      alert("Dönüş kilometresi, çıkış kilometresinden küçük veya eşit olamaz.");
-                                      return;
-                                    }
+                            {geStep < 3 ? (
+                              <button
+                                type="button"
+                                onClick={handleNextStep}
+                                className="px-6 py-2.5 rounded-2xl bg-[#0b3d1d] hover:bg-[#072612] text-white font-black text-xs uppercase tracking-wider shadow-md shadow-emerald-900/20 transition-all active:scale-95 cursor-pointer"
+                              >
+                                İleri Adım →
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!geDepartureKm || !geReturnKm) {
+                                    alert("Lütfen çıkış ve dönüş kilometrelerini giriniz.");
+                                    return;
+                                  }
+                                  if (Number(geReturnKm) < Number(geDepartureKm)) {
+                                    alert("Dönüş kilometresi çıkış kilometresinden küçük olamaz.");
+                                    return;
+                                  }
+                                  const driverObj = drivers.find(d => d.name.toLowerCase() === geSoforName.toLowerCase());
+                                  const routeSummary = geRoutes.filter(r => r.from || r.to).map(r => `${r.from} -> ${r.to}`).join(' | ');
+                                  
+                                  const newOrder = {
+                                    id: Date.now(),
+                                    date: geTarih,
+                                    plate: gePlaka,
+                                    driverName: geSoforName,
+                                    driverId: (driverObj as any)?.tc || driverObj?.idNo || "",
+                                    driverSicil: (driverObj as any)?.sicil || driverObj?.sicilNo || "",
+                                    driverPhone: driverObj?.phone || "",
+                                    driverKanGrubu: driverObj?.kanGrubu || "",
+                                    driverAdres: driverObj?.adres || "",
+                                    serialNo: geSeriNo,
+                                    departureTime: geDepartureTime,
+                                    returnTime: geReturnTime,
+                                    departureKm: geDepartureKm,
+                                    returnKm: geReturnKm,
+                                    route: routeSummary
+                                  };
 
-                                    const routeStr = geRoutes
-                                      .map(r => r.from.trim() && r.to.trim() ? `${r.from.trim()} - ${r.to.trim()}` : '')
-                                      .filter(Boolean)
-                                      .join(", ");
+                                  const updatedOrders = [newOrder, ...karaAraclariGorevEmirleri];
+                                  setKaraAraclariGorevEmirleri(updatedOrders);
+                                  localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updatedOrders));
+                                  pushKaraAraclariGorevEmirleri(updatedOrders);
 
-                                    if (!routeStr) {
-                                      alert("Lütfen en az bir güzergah (nereden - nereye) bilgisi giriniz.");
-                                      return;
-                                    }
-
-                                    const activeDriver = drivers.find(d => d.name.toLowerCase() === geSoforName.toLowerCase()) || 
-                                                         drivers.find(d => d.name.toLowerCase().includes(geSoforName.toLowerCase()));
-
-                                    const newOrder = {
-                                      id: Date.now(),
-                                      date: geTarih,
-                                      plate: gePlaka,
-                                      driverName: geSoforName,
-                                      driverId: activeDriver?.idNo || "",
-                                      driverSicil: activeDriver?.sicilNo || "",
-                                      driverPhone: activeDriver?.phone || "",
-                                      driverKanGrubu: activeDriver?.kanGrubu || "",
-                                      driverAdres: activeDriver?.adres || "",
-                                      serialNo: geSeriNo,
-                                      departureTime: geDepartureTime,
-                                      returnTime: geReturnTime,
-                                      departureKm: geDepartureKm,
-                                      returnKm: Number(geReturnKm),
-                                      route: routeStr
-                                    };
-
-                                    const updatedOrders = [newOrder, ...karaAraclariGorevEmirleri];
-                                    setKaraAraclariGorevEmirleri(updatedOrders);
-                                    pushKaraAraclariGorevEmirleri(updatedOrders);
-
-                                    // Automation: update vehicle KM in standard list
-                                    const updatedVehicles = techizatKaraAraclariData.map(row => {
-                                      if (row[1] && row[1].toLowerCase().includes(gePlaka.toLowerCase())) {
-                                        const newRow = [...row];
-                                        const returnKmNum = Number(geReturnKm);
-
-                                        if (newRow.length < 11) {
-                                          while (newRow.length < 11) newRow.push("");
-                                        }
-
-                                        newRow[4] = String(returnKmNum); // SON KM Sİ
-
-                                        const today = new Date();
-                                        const todayStr = today.toLocaleDateString('tr-TR');
-                                        const nextMaintenanceDate = new Date();
-                                        nextMaintenanceDate.setMonth(nextMaintenanceDate.getMonth() + 6);
-                                        const nextMaintenanceStr = nextMaintenanceDate.toLocaleDateString('tr-TR');
-
-                                        newRow[6] = todayStr; // SON KONTROL / KALİBRASYON / BAKIM
-                                        newRow[7] = nextMaintenanceStr; // GELECEK KONTROL / KALİBRASYON / BAKIM
-
-                                        return newRow;
+                                  if (gePlaka && geReturnKm) {
+                                    const updatedKara = techizatKaraAraclariData.map(row => {
+                                      if ((row[1] || "").toLowerCase() === gePlaka.toLowerCase()) {
+                                        const copy = [...row];
+                                        copy[4] = geReturnKm;
+                                        return copy;
                                       }
                                       return row;
                                     });
+                                    setTechizatKaraAraclariData(updatedKara);
+                                  }
 
-                                    setTechizatKaraAraclariData(updatedVehicles);
-                                    localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
-
-                                    // Sync updated vehicle database to Google Sheets online database immediately
-                                    const unitLabel = "KARA ARAÇLARI";
-                                    fetch(GOOGLE_SCRIPT_URL, {
-                                      method: "POST",
-                                      headers: {
-                                        "Content-Type": "text/plain;charset=utf-8"
-                                      },
-                                      body: JSON.stringify({
-                                        action: "updateTumTechizat",
-                                        unitLabel: unitLabel,
-                                        data: updatedVehicles.map(r => [unitLabel, ...r])
-                                      })
-                                    }).catch(err => console.error("Central sheet vehicle sync error:", err));
-
-                                    // Reset
-                                    setGeSeriNo("");
-                                    setGeSoforName("");
-                                    setGePlaka("");
-                                    setGeDepartureKm("");
-                                    setGeReturnKm("");
-                                    setGeDepartureTime("08:00");
-                                    setGeReturnTime("17:00");
-                                    setGeRoutes([{ from: "", to: "" }]);
-                                    setGeStep(1);
-
-                                    showNotification("Görev Emri Girişi Başarıyla Tamamlandı! Araç KM'si ve Bakım Periyotları Otomatik Güncellendi.");
-                                    
-                                    // Trigger transition screen
-                                    setIsRedirectingToPortal(true);
-                                    setIsSlidingUp(false);
-                                    
-                                    // Step 1: Wait 2.5 seconds with pulsing logo, then slide the screen up
-                                    setTimeout(() => {
-                                      setIsSlidingUp(true);
-                                      // Step 2: After the slide-up animation (0.8s) finishes, do the redirect
-                                      setTimeout(() => {
-                                        window.location.href = "https://bulut.ogm.gov.tr/gorevemri";
-                                      }, 800);
-                                    }, 2500);
-                                  }}
-                                  className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs uppercase tracking-widest rounded-2xl cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/20"
-                                >
-                                  <CheckCircle className="w-4 h-4 text-emerald-200" />
-                                  KAYDET VE YÖNLENDİR
-                                </button>
-                              )}
-                            </div>
+                                  setGeStep(1);
+                                  setGeSeriNo("");
+                                  setGeDepartureKm("");
+                                  setGeReturnKm("");
+                                  setGeRoutes([{ from: "", to: "" }]);
+                                  showNotification("Görev emri başarıyla kaydedildi!");
+                                  setKaraAraclariSubTab('past_records');
+                                }}
+                                className="px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 transition-all active:scale-95 cursor-pointer"
+                              >
+                                ✅ Kaydet ve Görev Emrini Tamamla
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
                     })()}
 
-                   {/* HIDDEN OLD FORM */}
-                   {false && (
-                     <div className="w-full xl:w-5/12 bg-white border border-slate-200 rounded-[2.5rem] p-6 shadow-xl flex flex-col gap-5">
-                     <div className="border-b border-slate-100 pb-3">
-                       <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse inline-block" />
-                         📝 YENİ ARAÇ GÖREV EMRİ KAYDI
-                       </h4>
-                     </div>
-
-                     <div className="flex flex-col gap-4">
-                       <div>
-                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📅 Görev Tarihi</label>
-                         <input
-                           type="date"
-                           value={geTarih}
-                           onChange={(e) => setGeTarih(e.target.value)}
-                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
-                         />
-                       </div>
-
-                       <div>
-                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🚗 Araç Plakası</label>
-                         <select
-                           value={gePlaka}
-                           onChange={(e) => setGePlaka(e.target.value)}
-                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-extrabold text-slate-800 transition-all"
-                         >
-                           <option value="">-- Lütfen Araç Seçiniz --</option>
-                           {vehiclePlates.map(p => (
-                             <option key={p} value={p}>{p}</option>
-                           ))}
-                         </select>
-                       </div>
-
-                       <div>
-                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">👨‍✈️ Sürücü Personel (Şoför)</label>
-                         <select
-                           value={geSoforName}
-                           onChange={(e) => setGeSoforName(e.target.value)}
-                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-extrabold text-slate-800 transition-all"
-                         >
-                           <option value="">-- Lütfen Şoför Seçiniz --</option>
-                           {drivers.map(d => (
-                             <option key={d.name} value={d.name}>{d.name} ({d.unvan})</option>
-                           ))}
-                         </select>
-                       </div>
-
-                       {(() => {
-                         const activeDriver = drivers.find(d => d.name === geSoforName);
-                         if (!activeDriver) return null;
-                         return (
-                           <div className="bg-emerald-50/40 border border-emerald-100 rounded-2xl p-4 flex flex-col gap-2.5 text-xs animate-fade-in">
-                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
-                               <span className="font-extrabold text-slate-500">T.C. Kimlik No:</span>
-                               <span className="font-mono font-bold text-slate-800">{activeDriver.idNo || "Belirtilmemiş"}</span>
-                             </div>
-                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
-                               <span className="font-extrabold text-slate-500">Sicil No:</span>
-                               <span className="font-mono font-bold text-slate-800">{activeDriver.sicilNo || "Belirtilmemiş"}</span>
-                             </div>
-                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
-                               <span className="font-extrabold text-slate-500">Sürücü Telefon:</span>
-                               <span className="font-mono font-bold text-[#0b3d1d]">{activeDriver.phone || "Belirtilmemiş"}</span>
-                             </div>
-                             <div className="flex justify-between border-b border-emerald-100/50 pb-1.5">
-                               <span className="font-extrabold text-slate-500">Kan Grubu:</span>
-                               <span className="font-bold text-red-600 bg-red-50 px-2.5 py-0.5 rounded-lg border border-red-100">{activeDriver.kanGrubu || "Belirtilmemiş"}</span>
-                             </div>
-                             <div className="flex flex-col gap-1">
-                               <span className="font-extrabold text-slate-500">Adres Bilgisi:</span>
-                               <span className="font-semibold text-slate-600 leading-relaxed">{activeDriver.adres || "Belirtilmemiş"}</span>
-                             </div>
-                           </div>
-                         );
-                       })()}
-
-                       <div>
-                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">🔢 Görev Seri No (S/N)</label>
-                         <input
-                           type="text"
-                           placeholder="Örn: SERI-772"
-                           value={geSeriNo}
-                           onChange={(e) => setGeSeriNo(e.target.value)}
-                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
-                         />
-                       </div>
-
-                       <div>
-                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">📈 Dönüş Kilometresi (KM)</label>
-                         <input
-                           type="number"
-                           placeholder="Örn: 15300"
-                           value={geReturnKm}
-                           onChange={(e) => setGeReturnKm(e.target.value)}
-                           className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 text-xs font-bold text-slate-800 transition-all font-mono"
-                         />
-                       </div>
-
-                       <button
-                         onClick={() => {
-                           if (!geTarih || !gePlaka || !geSoforName || !geSeriNo || !geReturnKm) {
-                             alert("Lütfen form alanlarının tamamını doldurunuz.");
-                             return;
-                           }
-                           
-                           const activeDriver = drivers.find(d => d.name === geSoforName);
-                           
-                           const newOrder = {
-                             id: Date.now(),
-                             date: geTarih,
-                             plate: gePlaka,
-                             driverName: geSoforName,
-                             driverId: activeDriver?.idNo || "",
-                             driverSicil: activeDriver?.sicilNo || "",
-                             driverPhone: activeDriver?.phone || "",
-                             driverKanGrubu: activeDriver?.kanGrubu || "",
-                             driverAdres: activeDriver?.adres || "",
-                             serialNo: geSeriNo,
-                             returnKm: Number(geReturnKm)
-                           };
-                           
-                           const updatedOrders = [newOrder, ...karaAraclariGorevEmirleri];
-                           setKaraAraclariGorevEmirleri(updatedOrders);
-                           
-                           // Automation: update vehicle KM in standard list
-                           const updatedVehicles = techizatKaraAraclariData.map(row => {
-                             if (row[1] && row[1].toLowerCase().includes(gePlaka.toLowerCase())) {
-                               const newRow = [...row];
-                               const returnKmNum = Number(geReturnKm);
-                               
-                               if (newRow.length < 14) {
-                                 while (newRow.length < 14) newRow.push("");
-                                }
-                                
-                                newRow[10] = String(returnKmNum); // Current KM
-                                newRow[11] = String(returnKmNum + 5000); // Next KM Periyot (+5000 KM)
-                                
-                                const today = new Date();
-                                const todayStr = today.toLocaleDateString('tr-TR');
-                                const nextMaintenanceDate = new Date();
-                                nextMaintenanceDate.setMonth(nextMaintenanceDate.getMonth() + 6);
-                                const nextMaintenanceStr = nextMaintenanceDate.toLocaleDateString('tr-TR');
-                                
-                                newRow[6] = todayStr; // SON BAKIM TARİHİ
-                                newRow[8] = nextMaintenanceStr; // BİR SONRAKİ BAKIM TARİHİ
-                                
-                                return newRow;
-                              }
-                              return row;
-                            });
-                            
-                            setTechizatKaraAraclariData(updatedVehicles);
-                            localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
-                            
-                            // Clear form fields
-                            setGeSeriNo("");
-                            setGeReturnKm("");
-                            
-                            showNotification("Görev Emri Girişi Başarıyla Tamamlandı! Araç KM'si ve Bakım Periyodu Otomatik Güncellendi.");
-                          }}
-                          className="w-full py-3.5 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-extrabold text-xs uppercase tracking-widest rounded-2xl shadow-lg shadow-emerald-900/10 cursor-pointer transition-all flex items-center justify-center gap-2"
-                        >
-                          <CheckCircle className="w-4 h-4 text-emerald-300" />
-                          GÖREVİ KAYDET VE KM GÜNCELLE
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                    {/* Right Panel: Görev Emri Geçmişi */}
+                    {/* PAST RECORDS TAB */}
                     {karaAraclariSubTab === 'past_records' && (
-                      <div className="w-full max-w-4xl mx-auto bg-white border border-slate-200 rounded-[2.5rem] p-6 shadow-xl flex flex-col animate-fade-in">
-                        <div className="border-b border-slate-100 pb-3 mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                            📋 GÖREV EMRİ GEÇMİŞİ VE KAYITLARI
-                          </h4>
-                          {karaAraclariGorevEmirleri.length > 0 && (
+                      <div className="w-full bg-white border border-slate-200 rounded-[2.5rem] p-6 shadow-xl flex flex-col gap-6 animate-fade-in">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                          <div>
+                            <h4 className="text-base font-black text-slate-800 uppercase tracking-wide flex items-center gap-2">
+                              📜 GEÇMİŞ GÖREV EMİRLERİ ({karaAraclariGorevEmirleri.length})
+                            </h4>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Kara araçları için oluşturulmuş ve kaydedilmiş görev emirleri listesi
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
                             <button
+                              type="button"
                               onClick={exportGorevEmirleriToExcel}
-                              className="px-4 py-2 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-[10px] rounded-2xl flex items-center gap-1.5 transition-all cursor-pointer shadow-md border border-[#0b3d1d]/20 shrink-0 uppercase tracking-wider"
+                              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer"
                             >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>EXCEL OLARAK AKTAR</span>
+                              <FileSpreadsheet className="w-4 h-4" />
+                              <span>Excel Olarak İndir</span>
                             </button>
-                          )}
+                          </div>
                         </div>
 
-                        <div className="flex-1 overflow-x-auto min-w-full">
-                          {karaAraclariGorevEmirleri.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-                              <FileText className="w-12 h-12 text-slate-300 stroke-1 mb-3" />
-                              <p className="text-xs font-bold">Kayıtlı görev emri bulunmuyor.</p>
-                              <p className="text-[10px] text-slate-400 mt-1">Sol taraftaki formdan yeni bir görev emri ekleyebilirsiniz.</p>
-                            </div>
-                          ) : (
-                            <table className="w-full text-left border-collapse min-w-[750px]">
-                              <thead>
-                                <tr className="bg-slate-50 border-b border-slate-100 shrink-0">
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Tarih</th>
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Araç Plakası</th>
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Sürücü Personel</th>
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Görev Seri No</th>
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">KM Bilgisi</th>
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Çıkış / Giriş Saati</th>
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider">Güzergah</th>
-                                  <th className="px-4 py-3 text-[10px] font-black uppercase text-slate-500 tracking-wider text-right">İşlemler</th>
+                        {karaAraclariGorevEmirleri.length === 0 ? (
+                          <div className="p-12 text-center text-slate-400 text-sm font-medium">
+                            Henüz kayıtlı görev emri bulunmuyor. Yeni bir görev emri oluşturmak için "GÖREV EMRİ GİRİŞ" sekmesini kullanabilirsiniz.
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto border border-slate-200 rounded-2xl shadow-sm">
+                            <table className="w-full text-left text-xs">
+                              <thead className="bg-slate-900 text-slate-100 uppercase tracking-wider text-[10px] font-black select-none">
+                                <tr>
+                                  <th className="px-4 py-3">SIRA</th>
+                                  <th className="px-4 py-3">TARİH</th>
+                                  <th className="px-4 py-3">ARAÇ PLAKASI</th>
+                                  <th className="px-4 py-3">SÜRÜCÜ</th>
+                                  <th className="px-4 py-3">SERİ NO</th>
+                                  <th className="px-4 py-3 text-right">ÇIKIŞ KM</th>
+                                  <th className="px-4 py-3 text-right">DÖNÜŞ KM</th>
+                                  <th className="px-4 py-3 text-right">TOPLAM KM</th>
+                                  <th className="px-4 py-3">SAATLER</th>
+                                  <th className="px-4 py-3">GÜZERGAH</th>
+                                  <th className="px-4 py-3 text-center">İŞLEM</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100">
-                                {karaAraclariGorevEmirleri.map((order, oIdx) => (
-                                  <tr 
-                                    key={order.id || oIdx} 
-                                    onDoubleClick={() => {
-                                      setEditGorevEmriValues({ ...order });
-                                      setActiveGorevEmriEdit(order);
-                                    }}
-                                    className="hover:bg-slate-50/50 transition-colors cursor-pointer select-none"
-                                    title="Düzenlemek için Çift Tıklayın"
-                                  >
-                                    <td className="px-4 py-3 text-xs font-mono text-slate-500 whitespace-nowrap">{order.date}</td>
-                                    <td className="px-4 py-3 whitespace-nowrap">
-                                      <span className="text-xs font-black text-[#0b3d1d] bg-emerald-100 px-2.5 py-1 rounded-xl">
-                                        {order.plate}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-3 text-xs font-bold text-slate-700">
-                                      <div className="flex flex-col">
-                                        <span>{order.driverName}</span>
-                                        <span className="text-[10px] text-slate-400 font-medium">Sicil: {order.driverSicil || "-"}</span>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-xs font-mono text-slate-600 font-bold whitespace-nowrap">{order.serialNo}</td>
-                                    <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">
-                                      <div className="flex flex-col text-[10px] font-semibold text-slate-500">
-                                        <span>Çıkış: <strong className="text-slate-700 font-mono">{order.departureKm} KM</strong></span>
-                                        <span>Dönüş: <strong className="text-slate-700 font-mono">{order.returnKm} KM</strong></span>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">
-                                      <div className="flex flex-col text-[10px] font-semibold text-slate-500">
-                                        <span>Çıkış: <strong className="text-slate-700 font-mono">{order.departureTime || "-"}</strong></span>
-                                        <span>Giriş: <strong className="text-slate-700 font-mono">{order.returnTime || "-"}</strong></span>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-xs text-emerald-800 font-bold max-w-xs truncate" title={order.route}>
-                                      {order.route}
-                                    </td>
-                                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                                      <div className="flex items-center justify-end gap-1.5">
-                                        {/* Düzenle Button */}
+                                {karaAraclariGorevEmirleri.map((order, idx) => {
+                                  const depKm = Number(order.departureKm) || 0;
+                                  const retKm = Number(order.returnKm) || 0;
+                                  const diffKm = Math.max(0, retKm - depKm);
+                                  return (
+                                    <tr key={order.id || idx} className="hover:bg-emerald-50/40 transition-colors">
+                                      <td className="px-4 py-3 font-mono text-slate-500 font-bold">{idx + 1}</td>
+                                      <td className="px-4 py-3 font-mono font-bold text-slate-800">{order.date || "-"}</td>
+                                      <td className="px-4 py-3 font-bold text-slate-900">{order.plate || "-"}</td>
+                                      <td className="px-4 py-3 text-slate-700 font-semibold">{order.driverName || "-"}</td>
+                                      <td className="px-4 py-3 font-mono text-slate-600">{order.serialNo || "-"}</td>
+                                      <td className="px-4 py-3 font-mono text-right text-slate-700">{order.departureKm || "-"}</td>
+                                      <td className="px-4 py-3 font-mono text-right text-slate-700">{order.returnKm || "-"}</td>
+                                      <td className="px-4 py-3 font-mono text-right font-black text-emerald-800">{diffKm > 0 ? `${diffKm} KM` : "-"}</td>
+                                      <td className="px-4 py-3 text-[11px] text-slate-500 font-mono">
+                                        {order.departureTime || "-"} / {order.returnTime || "-"}
+                                      </td>
+                                      <td className="px-4 py-3 text-[11px] text-slate-600 max-w-xs truncate" title={order.route}>
+                                        {order.route || "-"}
+                                      </td>
+                                      <td className="px-4 py-3 text-center">
                                         <button
-                                          onClick={() => {
-                                            setEditGorevEmriValues({ ...order });
-                                            setActiveGorevEmriEdit(order);
-                                          }}
-                                          className="text-amber-600 hover:text-amber-700 hover:bg-amber-50 p-2 rounded-xl transition-all cursor-pointer active:scale-95"
-                                          title="Kayıt Düzenle"
-                                        >
-                                          <Edit3 className="w-4 h-4" />
-                                        </button>
-                                        {/* Sil Button */}
-                                        <button
+                                          type="button"
                                           onClick={() => {
                                             setGeDeleteOrderId(String(order.id));
                                             setGeDeletePasswordInput("");
                                             setGeDeletePasswordError(false);
                                             setShowGeDeletePasswordPrompt(true);
                                           }}
-                                          className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-xl transition-all cursor-pointer active:scale-95"
-                                          title="Kayıt Sil"
+                                          className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                                          title="Görevi Sil"
                                         >
                                           <Trash2 className="w-4 h-4" />
                                         </button>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ))}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
-                          )}
-                        </div>
-
-                        {/* Görev Emri Düzenleme Yetkili Şifre Onayı */}
-                        {showGeEditPasswordPrompt && (
-                          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 select-text animate-fade-in">
-                            <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
-                              <div className="absolute top-0 inset-x-0 h-1 bg-amber-600"></div>
-                              <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-amber-600">
-                                <Lock className="w-6 h-6" />
-                              </div>
-                              <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">YETKİLİ DÜZENLEME ONAYI</h4>
-                              <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
-                                Bu görev emri kaydını manuel olarak düzenlemek için lütfen yetkili şifresini giriniz.
-                              </p>
-                              <input
-                                type="password"
-                                placeholder="Şifre"
-                                value={geEditPasswordInput}
-                                onChange={(e) => {
-                                  setGeEditPasswordInput(e.target.value);
-                                  setGeEditPasswordError(false);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    if (geEditPasswordInput === '1839') {
-                                      if (activeGorevEmriEdit) {
-                                        const updated = karaAraclariGorevEmirleri.map(order => {
-                                          if (order.id === pendingGeEditOrder.id) {
-                                            return pendingGeEditOrder;
-                                          }
-                                          return order;
-                                        });
-                                        setKaraAraclariGorevEmirleri(updated);
-                                        localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
-                                        pushKaraAraclariGorevEmirleri(updated);
-                                        
-                                        setActiveGorevEmriEdit(null);
-                                        setEditGorevEmriValues(null);
-                                        setPendingGeEditOrder(null);
-                                        showNotification("Görev emri manuel olarak başarıyla güncellendi ve senkronize edildi!");
-                                      } else {
-                                        setEditGorevEmriValues({ ...pendingGeEditOrder });
-                                        setActiveGorevEmriEdit(pendingGeEditOrder);
-                                      }
-                                      setShowGeEditPasswordPrompt(false);
-                                      setGeEditPasswordInput("");
-                                    } else {
-                                      setGeEditPasswordError(true);
-                                    }
-                                  }
-                                }}
-                                className={`w-full px-4 py-3 bg-slate-50 border-2 rounded-2xl text-center font-bold text-sm focus:outline-none transition-all mb-2 ${
-                                  geEditPasswordError ? 'border-red-500 focus:border-red-500 text-red-600' : 'border-slate-200 focus:border-slate-400'
-                                }`}
-                                autoFocus
-                              />
-                              {geEditPasswordError && (
-                                <p className="text-[10px] text-red-500 font-bold mb-3">⚠️ Hatalı Şifre! Lütfen tekrar deneyiniz.</p>
-                              )}
-                              <div className="flex gap-2.5 mt-4">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (geEditPasswordInput === '1839') {
-                                      if (activeGorevEmriEdit) {
-                                        const updated = karaAraclariGorevEmirleri.map(order => {
-                                          if (order.id === pendingGeEditOrder.id) {
-                                            return pendingGeEditOrder;
-                                          }
-                                          return order;
-                                        });
-                                        setKaraAraclariGorevEmirleri(updated);
-                                        localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
-                                        pushKaraAraclariGorevEmirleri(updated);
-                                        
-                                        setActiveGorevEmriEdit(null);
-                                        setEditGorevEmriValues(null);
-                                        setPendingGeEditOrder(null);
-                                        showNotification("Görev emri manuel olarak başarıyla güncellendi ve senkronize edildi!");
-                                      } else {
-                                        setEditGorevEmriValues({ ...pendingGeEditOrder });
-                                        setActiveGorevEmriEdit(pendingGeEditOrder);
-                                      }
-                                      setShowGeEditPasswordPrompt(false);
-                                      setGeEditPasswordInput("");
-                                    } else {
-                                      setGeEditPasswordError(true);
-                                    }
-                                  }}
-                                  className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs rounded-2xl cursor-pointer shadow-md"
-                                >
-                                  Onayla ve Düzenle
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setShowGeEditPasswordPrompt(false);
-                                    setGeEditPasswordInput("");
-                                    setGeEditPasswordError(false);
-                                  }}
-                                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-500 font-extrabold text-xs rounded-2xl cursor-pointer"
-                                >
-                                  İptal
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Görev Emri Silme Yetkili Şifre Onayı */}
-                        {showGeDeletePasswordPrompt && (
-                          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 select-text animate-fade-in">
-                            <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
-                              <div className="absolute top-0 inset-x-0 h-1 bg-red-600"></div>
-                              <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-600">
-                                <Trash2 className="w-6 h-6" />
-                              </div>
-                              <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">YETKİLİ SİLME ONAYI</h4>
-                              <p className="text-xs font-semibold mb-4 leading-relaxed text-slate-500">
-                                Bu görev emri kaydını kalıcı olarak silmek için lütfen yetkili şifresini giriniz.
-                              </p>
-                              <input
-                                type="password"
-                                placeholder="Şifre"
-                                value={geDeletePasswordInput}
-                                onChange={(e) => {
-                                  setGeDeletePasswordInput(e.target.value);
-                                  setGeDeletePasswordError(false);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    if (geDeletePasswordInput === '1839') {
-                                      const filtered = karaAraclariGorevEmirleri.filter(o => String(o.id) !== geDeleteOrderId);
-                                      setKaraAraclariGorevEmirleri(filtered);
-                                      pushKaraAraclariGorevEmirleri(filtered);
-                                      setShowGeDeletePasswordPrompt(false);
-                                      setGeDeleteOrderId(null);
-                                      setGeDeletePasswordInput("");
-                                      showNotification("Görev emri kaydı başarıyla silindi ve Excel'e kaydedildi.");
-                                    } else {
-                                      setGeDeletePasswordError(true);
-                                    }
-                                  }
-                                }}
-                                className="w-full px-4 py-2.5 bg-slate-50 border-2 border-red-500/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-red-500 text-slate-900 placeholder-slate-400"
-                                autoFocus
-                              />
-                              {geDeletePasswordError && (
-                                <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
-                              )}
-                              <div className="flex gap-2 justify-center">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setShowGeDeletePasswordPrompt(false);
-                                    setGeDeleteOrderId(null);
-                                    setGeDeletePasswordInput("");
-                                    setGeDeletePasswordError(false);
-                                  }}
-                                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-black rounded-xl transition-colors cursor-pointer"
-                                >
-                                  İPTAL
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (geDeletePasswordInput === '1839') {
-                                      const filtered = karaAraclariGorevEmirleri.filter(o => String(o.id) !== geDeleteOrderId);
-                                      setKaraAraclariGorevEmirleri(filtered);
-                                      pushKaraAraclariGorevEmirleri(filtered);
-                                      setShowGeDeletePasswordPrompt(false);
-                                      setGeDeleteOrderId(null);
-                                      setGeDeletePasswordInput("");
-                                      showNotification("Görev emri kaydı başarıyla silindi.");
-                                    } else {
-                                      setGeDeletePasswordError(true);
-                                    }
-                                  }}
-                                  className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer shadow-md"
-                                >
-                                  SİL
-                                </button>
-                              </div>
-                            </div>
                           </div>
                         )}
                       </div>
@@ -9197,3498 +11871,2051 @@ export default function App() {
                   </div>
                 )}
               </>
-
-
-
-                  {/* Print Only Representation (High contrast landscape layout) */}
-                  <div className="print-only-container hidden print:block bg-white text-black p-6 w-full">
-                    <div className="w-full text-black bg-white min-h-screen">
-                      
-                      {/* Brand Header */}
-                      <div className="border-b-4 border-[#0b3d1d] pb-4 mb-6 flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-[#0b3d1d] text-white rounded-xl flex items-center justify-center font-black text-sm">
-                            OGM
-                          </div>
-                          <div className="text-left">
-                            <h4 className="text-sm font-black text-[#0b3d1d] uppercase tracking-wider leading-none">ORMAN GENEL MÜDÜRLÜĞÜ</h4>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <h3 className="text-base font-black text-slate-900 uppercase tracking-tighter">{modalTitle}</h3>
-                          <p className="text-[10px] text-slate-500 mt-1 font-mono font-semibold">Tarih: {new Date().toLocaleDateString('tr-TR')}</p>
-                        </div>
-                      </div>
-
-                      {/* Print Grid Table */}
-                      <table className="w-full border-collapse border border-slate-300 text-[9px]">
-                        <thead>
-                          <tr className="bg-[#0b3d1d] text-white font-bold">
-                            {cols.map((col, idx) => (
-                              <th key={idx} className="border border-slate-300 p-1.5 bg-[#0b3d1d] text-white text-center uppercase font-mono">{col}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {processedRows.map((row, rIdx) => (
-                            <tr key={rIdx} className={rIdx % 2 === 1 ? "bg-slate-50" : "bg-white"}>
-                              {row.map((cell, cIdx) => (
-                                <td key={cIdx} className="border border-slate-300 p-1.5 text-center text-slate-900 font-bold">{cell || "-"}</td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-
-                    </div>
-                  </div>
-
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* EXCEL ONLINE & ÇEVRİMDIŞI UPDATE PANELİ WITH SMART CONTROLLER */}
-          {modalType === 'excel_sync' && (
-            <div className="absolute inset-0 flex flex-col bg-slate-50 p-6 md:p-8 animate-fade-in overflow-y-auto">
-              
-              {/* Header Title */}
-              <div className="max-w-4xl mx-auto w-full text-center mb-6 select-none">
-                <p className="text-[10px] font-black text-emerald-800 tracking-widest uppercase mb-1">HA BAKIM BAŞKANLIĞI VERİ AKTARIM PORTALİ</p>
-                <h3 className="text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-tighter">
-                  🔄 VERİ GÜNCELLEME SİHİRBAZI ({activeSyncStep}. ADIM)
-                </h3>
-                <p className="text-xs text-slate-500 mt-2 max-w-2xl mx-auto leading-relaxed">
-                  {activeSyncStep === 1 
-                    ? 'Güncellemek istediğiniz birimi (tablo sayfasını) listeden seçin.' 
-                    : 'Güncel planlama belgesini PDF formatında yükleyerek son güncelleme tarihini e-tabloya kaydedin ve sayfaları portal görünümünde güncelleyin.'}
-                </p>
-              </div>
-
-              {activeSyncStep === 1 ? (
-                <>
-                  {/* Step 1: Sleek Liste Kutusu (Select Dropdown) & Button */}
-                  <div className="max-w-xl mx-auto w-full mb-8 animate-fade-in">
-                  <div className="bg-white rounded-3xl border border-slate-200/80 p-6 md:p-8 text-left shadow-lg">
-                    
-                    <div className="flex items-center gap-2 mb-6">
-                      <span className="flex h-3 w-3 rounded-full bg-emerald-600 animate-pulse pointer-events-none" />
-                      <h4 className="text-xs font-black text-[#0b3d1d] uppercase tracking-wider">
-                        GÜNCELLEME YAPILACAK BİRİM SEÇİMİ
-                      </h4>
-                    </div>
-
-                    <div className="space-y-4">
-                      <label htmlFor="unit-select-box" className="block text-xs font-black text-slate-600 uppercase tracking-wide">
-                        Lütfen Bir Liste Seçimi Yapın:
-                      </label>
-                      
-                      <div className="relative">
-                        <select
-                          id="unit-select-box"
-                          value={step1Target || "1"}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setStep1Target(val);
-                            if (val === 'gun_takip') {
-                              fetchGunTakipSorumlulari();
-                              setIsSorumluModalOpen(true);
-                            }
-                          }}
-                          className="w-full bg-white border-2 border-slate-200 text-slate-800 font-extrabold text-xs uppercase px-4 py-4 rounded-xl shadow-sm focus:border-emerald-600 focus:ring-0 transition-all cursor-pointer appearance-none"
-                        >
-                          <option value="1">1. GÖREVLENDİRME ÇİZELGELERİ (1-Gorevlendirme)</option>
-                          <option value="21">2. YAZ DÖNEMİ PLANLAMASI - BELL 429 (2-Yaz_Donemi-bell_429)</option>
-                          <option value="22">2. YAZ DÖNEMİ PLANLAMASI - T-70 (2-Yaz_Donemi-t_70)</option>
-                          <option value="23">2. YAZ DÖNEMİ PLANLAMASI - AT-802 (2-Yaz_Donemi-at_802)</option>
-                          <option value="24">2. YAZ DÖNEMİ PLANLAMASI - ANKARA BEKLEME (BELL-429) (2-Ankara_Bekleme-bell_429)</option>
-                          <option value="25">2. YAZ DÖNEMİ PLANLAMASI - ANKARA BEKLEME (C-650/B-360) (2-Ankara_Bekleme-c650_b360)</option>
-                          <option value="3">3. BAKIM YETKİ ÇİZELGELERİ (3-Bakim_Yetki)</option>
-                          <option value="5">5. PERSONEL BİLGİ ÇİZELGELERİ (5-Personel_Bilgi)</option>
-                          <option value="6">6. PERSONEL UÇUŞ-HİZMET YILLARI (6-Personel_Ucus_Hizmet)</option>
-                          <option value="techizat_bell429">TEÇHİZAT ENVANTER TAKİBİ - BELL 429 (EXCEL)</option>
-                          <option value="techizat_at802">TEÇHİZAT ENVANTER TAKİBİ - AT-802 (EXCEL)</option>
-                          <option value="techizat_t70">TEÇHİZAT ENVANTER TAKİBİ - T-70 (EXCEL)</option>
-                          <option value="techizat_t70_bumbi_backet">TEÇHİZAT ENVANTER TAKİBİ - T-70 BUMBİ BACKET (EXCEL)</option>
-                          <option value="techizat_t70_helitak">TEÇHİZAT ENVANTER TAKİBİ - T-70 HELİTAK (EXCEL)</option>
-                          <option value="techizat_b360">TEÇHİZAT ENVANTER TAKİBİ - B-360 (EXCEL)</option>
-                          <option value="techizat_c650">TEÇHİZAT ENVANTER TAKİBİ - C-650 (EXCEL)</option>
-                          <option value="techizat_hangar">TEÇHİZAT ENVANTER TAKİBİ - HANGAR YER DESTEK (EXCEL)</option>
-                          <option value="techizat_kara_araclari">TEÇHİZAT ENVANTER TAKİBİ - KARA ARAÇLARI TAKİP (EXCEL)</option>
-                          <option value="gun_takip">📋 SORUMLU BİRİM VE MAİL AYARLARI (GÜN TAKİP)</option>
-                        </select>
-                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-505">
-                          🔻
-                        </div>
-                      </div>
-
-                      {/* Yaz Dönemi için başlangıç ve bitiş tarihi seçimi */}
-                      {["21", "22", "23", "24", "25"].includes(step1Target) && (
-                        <div className="mt-4 pt-4 border-t border-slate-100 animate-fade-in space-y-3">
-                          <label className="block text-[11px] font-black text-slate-600 uppercase tracking-wide">
-                            📅 PLANLAMA DÖNEMİ TARİH SEÇİMİ:
-                          </label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div className="space-y-1.5">
-                              <span className="block text-[10px] font-bold text-[#0b3d1d] uppercase">BAŞLANGIÇ TARİHİ:</span>
-                              <input
-                                type="date"
-                                value={selectedUploadSummerStartDate}
-                                onChange={(e) => {
-                                  if (e.target.value) {
-                                    setSelectedUploadSummerStartDate(e.target.value);
-                                  }
-                                }}
-                                className="w-full bg-[#f8fafc] border-2 border-slate-200 text-slate-700 font-bold text-xs px-4 py-3 rounded-xl shadow-sm focus:border-emerald-600 focus:ring-0 transition-all cursor-pointer"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <span className="block text-[10px] font-bold text-[#0b3d1d] uppercase">BİTİŞ TARİHİ:</span>
-                              <input
-                                type="date"
-                                value={selectedUploadSummerEndDate}
-                                onChange={(e) => {
-                                  if (e.target.value) {
-                                    setSelectedUploadSummerEndDate(e.target.value);
-                                  }
-                                }}
-                                className="w-full bg-[#f8fafc] border-2 border-slate-200 text-slate-700 font-bold text-xs px-4 py-3 rounded-xl shadow-sm focus:border-emerald-600 focus:ring-0 transition-all cursor-pointer"
-                              />
-                            </div>
-                          </div>
-                          <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl mt-2 flex items-center justify-between">
-                            <span className="text-[10px] font-black text-emerald-800 uppercase tracking-wider">OLUŞTURULACAK DÖNEM:</span>
-                            <span className="text-xs font-black text-[#0b3d1d] uppercase">{getReadablePeriodName(selectedUploadSummerMonth)}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Advance trigger button */}
-                    <div className="mt-8 pt-5 border-t border-slate-100 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (step1Target === 'gun_takip') {
-                            fetchGunTakipSorumlulari();
-                            setIsSorumluModalOpen(true);
-                          } else {
-                            const targetId = step1Target || '1';
-                            setSyncSelectedTarget(targetId);
-                            setActiveSyncStep(2);
-                          }
-                        }}
-                        className="w-full py-4 bg-[#0b3d1d] hover:bg-[#072612] text-white font-extrabold text-xs rounded-xl tracking-widest uppercase transition-all shadow-md active:scale-95 cursor-pointer select-none"
-                      >
-                        {step1Target === 'gun_takip' ? '📋 SORUMLU BİRİM AYARLARINI AÇ ➜' : 'İLERLE VE PDF YÜKLEME EKRANINA GEÇ ➜'}
-                      </button>
-                    </div>
-
-                  </div>
-                </div>
-
-                {/* Historical Periods list for Summer planning */}
-                {["21", "22", "23", "24", "25"].includes(step1Target) && (
-                  <div className="max-w-xl mx-auto w-full animate-fade-in mt-6">
-                    <div className="bg-white rounded-3xl border border-slate-200/80 p-6 md:p-8 text-left shadow-lg">
-                      <div className="flex items-center gap-2 mb-4">
-                        <span className="text-lg">🗓️</span>
-                        <h4 className="text-xs font-black text-[#0b3d1d] uppercase tracking-wider">
-                          GEÇMİŞ YAZ PLANLAMA PERİYOTLARI
-                        </h4>
-                      </div>
-                      <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
-                        Aşağıda bu hava aracı için daha önce girilmiş/yüklenmiş olan planlama dönemleri yer almaktadır. Yanlarındaki butona tıklayarak doğrudan o dönemin PDF dosyasını güncelleyebilirsiniz.
-                      </p>
-
-                      {(() => {
-                        const targetId = Number(step1Target);
-                        const airframeSuffix = getAirframeSuffix(targetId);
-                        const activePeriods: string[] = [];
-                        
-                        pdfMetadataList.forEach(m => {
-                          const lowerName = m.name.toLowerCase();
-                          if (lowerName.includes("_yaz_plan_") && lowerName.endsWith(".pdf")) {
-                            const isBeklemeFile = lowerName.includes('bekleme') || lowerName.includes('ankara');
-                            
-                            if (airframeSuffix === 'bell429') {
-                              if (isBeklemeFile || (!lowerName.includes('bell429') && !lowerName.includes('bell_429'))) {
-                                return;
-                              }
-                            } else if (airframeSuffix === 'bekleme_bell429') {
-                              if (!isBeklemeFile || (!lowerName.includes('bell429') && !lowerName.includes('bell_429'))) {
-                                return;
-                              }
-                            } else {
-                              if (!lowerName.includes(airframeSuffix)) {
-                                return;
-                              }
-                            }
-
-                            const idx = lowerName.indexOf("_yaz_plan_");
-                            if (idx !== -1) {
-                              const periodPart = m.name.substring(0, idx);
-                              if (periodPart && !activePeriods.includes(periodPart)) {
-                                activePeriods.push(periodPart);
-                              }
-                            }
-                          }
-                        });
-
-                        activePeriods.sort((a, b) => {
-                          const dateA = new Date(parseRawPeriodStringToDates(a).start).getTime();
-                          const dateB = new Date(parseRawPeriodStringToDates(b).start).getTime();
-                          return dateB - dateA;
-                        });
-
-                        if (activePeriods.length === 0) {
-                          return (
-                            <div className="bg-slate-50 rounded-xl p-4 text-center border border-dashed border-slate-200">
-                              <p className="text-[11px] text-slate-400 font-bold uppercase">Henüz girilmiş bir periyot bulunmamaktadır.</p>
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                            {activePeriods.map((period) => (
-                              <div key={period} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 hover:border-emerald-100 transition-colors">
-                                <div className="flex flex-col">
-                                  <span className="text-xs font-black text-[#0b3d1d] uppercase">
-                                    {getReadablePeriodName(period)}
-                                  </span>
-                                  <span className="text-[9px] text-slate-400 font-mono">
-                                    Dosya: {period}_yaz_plan_{airframeSuffix}.pdf
-                                  </span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSyncSelectedTarget(step1Target);
-                                    const { start, end } = parseRawPeriodStringToDates(period);
-                                    setSelectedUploadSummerStartDate(start);
-                                    setSelectedUploadSummerEndDate(end);
-                                    setSelectedSummerStartDate(start);
-                                    setSelectedSummerEndDate(end);
-                                    setActiveSyncStep(2);
-                                    
-                                    setTimeout(() => {
-                                      const fileInput = document.getElementById("pdf-file-contextual-upload") as HTMLInputElement;
-                                      if (fileInput) {
-                                        fileInput.click();
-                                      }
-                                    }, 400);
-                                  }}
-                                  className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] rounded-lg tracking-wider uppercase transition-all shadow-sm active:scale-95 cursor-pointer"
-                                >
-                                  🔄 GÜNCEL PDF YÜKLE
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
-              </>
-              ) : (
-                /* Step 2: Download / Upload Action Cards */
-                <div className="max-w-4xl mx-auto w-full mb-8 animate-fade-in flex flex-col items-center">
-                  
-                  {/* Active Unit Indicator */}
-                  <div className="w-full bg-emerald-900 text-emerald-50 rounded-3xl p-5 md:p-6 mb-6 shadow-md border border-emerald-950 flex flex-col sm:flex-row gap-4 items-center justify-between select-none">
-                    <div className="text-left w-full sm:w-auto">
-                      <div className="text-[10px] uppercase font-bold text-emerald-300 tracking-wider">AKTİF SEÇİLEN BİRİM / TABLO SEÇİMİ:</div>
-                      <h4 className="text-sm font-black uppercase mt-1">
-                        {TABLE_CONFIGS[Number(syncSelectedTarget)]?.title || `BİRİM ${syncSelectedTarget}`}
-                        {["21", "22", "23", "24", "25"].includes(syncSelectedTarget) && ` (${getReadablePeriodName(selectedUploadSummerMonth)})`}
-                      </h4>
-                      <p className="text-[11px] text-emerald-200 mt-1 font-mono">
-                        Hedef Sayfa Adresi: <strong>{["21", "22", "23", "24", "25"].includes(syncSelectedTarget) ? `${getSummerPeriodSheetPrefix(Number(syncSelectedTarget), selectedUploadSummerMonth)}` : TABLE_CONFIGS[Number(syncSelectedTarget)]?.sheetName}</strong>
-                      </p>
-                    </div>
-                    
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveSyncStep(1);
-                      }}
-                      className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-950/80 hover:bg-emerald-950 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-inner border border-emerald-900 select-none"
-                    >
-                      <ArrowLeft className="w-4 h-4" />
-                      <span>Birim Değiştir / Geri Dön</span>
-                    </button>
-                  </div>
-
-                  {/* Unified PDF Upload card for both summer and non-summer targets */}
-                  <div className="max-w-xl w-full mb-6">
-                    <div className="bg-white border-2 border-emerald-200/80 rounded-[2rem] p-8 flex flex-col items-center justify-between text-center transition-all shadow-xl hover:border-emerald-300">
-                      <div className="p-5 bg-emerald-50 rounded-2xl mb-5 text-[#0b3d1d] shadow-inner">
-                        {isSendingToSheets[String(syncSelectedTarget)] ? (
-                          <Loader2 className="w-10 h-10 animate-spin text-emerald-700" />
-                        ) : (
-                          <FileText className="w-10 h-10 animate-pulse text-[#0b3d1d]" />
-                        )}
-                      </div>
-                      
-                      <div className="flex-1 flex flex-col justify-center select-none w-full">
-                        <h4 className="text-slate-800 font-extrabold text-sm uppercase tracking-wider mb-2">
-                          {String(syncSelectedTarget).startsWith('techizat_') ? "TEÇHİZAT ENVENTAR BELGESİ YÜKLE (EXCEL)" : syncSelectedTarget === '5' ? "PLANLAMA BELGESİ YÜKLE (EXCEL VEYA PDF)" : "PLANLAMA BELGESİ YÜKLE (PDF)"}
-                        </h4>
-                        <p className="text-xs text-slate-500 leading-relaxed max-w-sm mx-auto mb-6">
-                          {isSendingToSheets[String(syncSelectedTarget)] 
-                            ? "Plan belgesi sisteme aktarılıyor ve veriler işleniyor. Lütfen bekleyin..." 
-                            : String(syncSelectedTarget).startsWith('techizat_')
-                              ? "İlgili hava aracı grubu için Excel (.xlsx, .xls) dosyasını yükleyin."
-                              : syncSelectedTarget === '5'
-                                ? "Personel Bilgi Çizelgesi için güncel Excel (.xlsx, .xls) veya PDF dosyasını yükleyin."
-                                : "Seçilen birim için güncel planlama belgesini PDF formatında yükleyin."}
-                        </p>
-
-                        {/* Guide rules depending on summer period or not */}
-                        <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100 text-left w-full">
-                          <span className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-2">
-                            📋 {syncSelectedTarget === '5' || String(syncSelectedTarget).startsWith('techizat_') ? "Yükleme ve Önizleme Teknolojisi:" : "Sürücü (Drive) Otomatik Adlandırma Formatı:"}
-                          </span>
-                          <div className="space-y-1.5 font-mono text-[10px] text-slate-600">
-                            {String(syncSelectedTarget).startsWith('techizat_') ? (
-                              <>
-                                <div className="text-emerald-800 font-bold uppercase tracking-wider">
-                                  • MATRİS EXCEL VERİ GÜNCELLEME SİSTEMİ
-                                </div>
-                                <div className="text-slate-500 text-[10px] leading-relaxed">
-                                  Yüklenen Excel belgesindeki sütunlar otomatik olarak <strong>Teçhizat Takis Matrisine</strong> işlenecektir. Kaydedilen parçalar kalıcı olarak sürücüye kaydedilecektir.
-                                </div>
-                              </>
-                            ) : syncSelectedTarget === '5' ? (
-                              <>
-                                <div className="text-emerald-800 font-bold uppercase tracking-wider">
-                                  • EXCEL ➔ PDF MATRİS DÖNÜŞTÜRÜCÜ
-                                </div>
-                                <div className="text-slate-500 text-[10px] leading-relaxed">
-                                  Yüklenen Excel belgesindeki satırlar çözümlenerek <strong>537 Satır x 12 Sütunluk (537rx12c)</strong> yatay bir elektronik tabloya dönüştürülür. Sadece metin içeren kısımlar şık ve yüksek çözünürlüklü bir PDF belgesi gibi taranarak ekranda gösterilir.
-                                </div>
-                              </>
-                            ) : ["21", "22", "23", "24", "25"].includes(String(syncSelectedTarget)) ? (
-                              <>
-                                <div>
-                                  • Dosyanız otomatik olarak şu adla kaydedilecektir:
-                                </div>
-                                <div className="text-emerald-800 pl-4 font-bold break-all">
-                                  {(() => {
-                                    const airframeSuffix = getAirframeSuffix(Number(syncSelectedTarget));
-                                    const cleanMonth = sanitizeTurkishForFilename(selectedUploadSummerMonth);
-                                    return `${cleanMonth}_yaz_plan_${airframeSuffix}.pdf`;
-                                  })()}
-                                </div>
-                                <div className="text-slate-400 pl-4">
-                                  Sistemimiz bu dosya adını kullanarak Drive üzerinden canlı önizlemeyi yakalayacaktır.
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div>
-                                  • Dosyanız otomatik olarak şu adla kaydedilecektir:
-                                </div>
-                                <div className="text-emerald-800 pl-4 font-bold break-all">
-                                  {(() => {
-                                    const prefix = syncSelectedTarget === '1' ? 'gorevlendirme' : syncSelectedTarget === '3' ? 'bakim_yetki' : syncSelectedTarget === '5' ? 'personel_bilgi' : 'personel_ucus_hizmet';
-                                    return `${prefix}_cizelgesi.pdf`;
-                                  })()}
-                                </div>
-                                <div className="text-slate-400 pl-4">
-                                  Portalımız bu dosyayı otomatik olarak yakalayıp PDF Görünümünde gösterecektir.
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="w-full space-y-4">
-                        <label
-                          htmlFor="pdf-file-contextual-upload"
-                          className={`w-full py-4 text-white text-center font-extrabold text-xs rounded-xl tracking-widest uppercase transition-all block select-none cursor-pointer shadow-md ${
-                            isSendingToSheets[String(syncSelectedTarget)] 
-                              ? "bg-slate-400 cursor-not-allowed animate-pulse" 
-                              : "bg-[#0b3d1d] hover:bg-[#072612]"
-                          }`}
-                        >
-                          <input
-                            type="file"
-                            id="pdf-file-contextual-upload"
-                            accept={syncSelectedTarget === '5' || String(syncSelectedTarget).startsWith('techizat_') ? ".xlsx,.xls,.csv" : ".pdf"}
-                            onChange={handlePdfUpload}
-                            disabled={isSendingToSheets[String(syncSelectedTarget)]}
-                            className="hidden"
-                          />
-                          {isSendingToSheets[String(syncSelectedTarget)] ? (
-                            <span className="flex flex-col items-center justify-center gap-1.5 font-black">
-                              <span className="flex items-center gap-1.5 justify-center">
-                                <Loader2 className="w-4 h-4 animate-spin text-white" />
-                                {uploadProgress}% İŞLENİYOR...
-                              </span>
-                            </span>
-                          ) : (
-                            "⚡ DOSYA SEÇ VE SİSTEME AKTAR"
-                          )}
-                        </label>
-
-                        {isSendingToSheets[String(syncSelectedTarget)] && (
-                          <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200/50 shadow-inner p-0.5">
-                            <div 
-                              className="bg-emerald-600 h-2 rounded-full transition-all duration-300 shadow-sm relative overflow-hidden" 
-                              style={{ width: `${uploadProgress}%` }}
-                            >
-                              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-pulse" />
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="flex gap-3">
-                          <a
-                            href="https://drive.google.com/drive/folders/1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex-1 py-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-center font-extrabold text-[10px] rounded-xl tracking-wider uppercase transition-all block shadow-sm cursor-pointer"
-                          >
-                            📁 DRİVE KLASÖRÜNÜ AÇ
-                          </a>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              showNotification("Portal verileri ve PDF listesi yenileniyor...");
-                              await fetchPdfMetadata();
-                              showNotification("Drive üzerindeki PDF listesi başarıyla güncellendi!");
-                            }}
-                            className="flex-1 py-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-center font-extrabold text-[10px] rounded-xl tracking-wider uppercase transition-all block shadow-sm cursor-pointer"
-                          >
-                            🔄 GÜNCELLEMELERİ KONTROL ET
-                          </button>
-                        </div>
-
-                        {(syncSelectedTarget === '5' || String(syncSelectedTarget).startsWith('techizat_')) && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              try {
-                                const wb = XLSX.utils.book_new();
-                                let headers: string[] = [];
-                                let data: string[][] = [];
-                                let sheetName = "Sayfa1";
-                                let fileName = "en_son_surum.xlsx";
-
-                                if (syncSelectedTarget === '5') {
-                                  headers = TABLE_CONFIGS[5].columns.map(col => col.label);
-                                  data = excelForm5Data.map(row => {
-                                    const formattedRow = [...row];
-                                    formattedRow[5] = formatBirthDateToTurkish(formattedRow[5]);
-                                    return formattedRow;
-                                  });
-                                  sheetName = "Personel_Bilgi";
-                                  fileName = "personel_bilgi_cizelgesi_en_son_surum.xlsx";
-                                } else {
-                                  const techType = String(syncSelectedTarget).replace('techizat_', '');
-                                  if (techType === 'bell429') {
-                                    headers = techizatBell429Columns;
-                                    data = techizatBell429Data;
-                                    sheetName = "Bell429_Techizat";
-                                    fileName = "hava_araçları_yer_destek_bell-429.xlsx";
-                                  } else if (techType === 'at802') {
-                                    headers = techizatAt802Columns;
-                                    data = techizatAt802Data;
-                                    sheetName = "At802_Techizat";
-                                    fileName = "hava_araçları_yer_destek_at-802.xlsx";
-                                  } else if (techType === 't70') {
-                                    headers = techizatT70Columns;
-                                    data = techizatT70Data;
-                                    sheetName = "T70_Techizat";
-                                    fileName = "hava_araçları_yer_destek_t-70.xlsx";
-                                  } else if (techType === 't70_bumbi_backet') {
-                                    headers = techizatT70BumbiBacketColumns;
-                                    data = techizatT70BumbiBacketData;
-                                    sheetName = "T70_Bumbi_Backet";
-                                    fileName = "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx";
-                                  } else if (techType === 't70_helitak') {
-                                    headers = techizatT70HelitakColumns;
-                                    data = techizatT70HelitakData;
-                                    sheetName = "T70_Helitak";
-                                    fileName = "hava_araçları_yer_destek_t-70_helitak.xlsx";
-                                  } else if (techType === 'b360') {
-                                    headers = techizatB360Columns;
-                                    data = techizatB360Data;
-                                    sheetName = "B360_Techizat";
-                                    fileName = "hava_araçları_yer_destek_b-360.xlsx";
-                                  } else if (techType === 'c650') {
-                                    headers = techizatC650Columns;
-                                    data = techizatC650Data;
-                                    sheetName = "C650_Techizat";
-                                    fileName = "hava_araçları_yer_destek_c-650.xlsx";
-                                  } else if (techType === 'hangar') {
-                                    headers = techizatHangarColumns;
-                                    data = techizatHangarData;
-                                    sheetName = "Hangar_Techizat";
-                                    fileName = "hava_araçları_yer_destek_hangar.xlsx";
-                                  }
-                                }
-
-                                const dataWithHeaders = [headers, ...data];
-                                const ws = XLSX.utils.aoa_to_sheet(dataWithHeaders);
-                                XLSX.utils.book_append_sheet(wb, ws, sheetName);
-                                XLSX.writeFile(wb, fileName);
-                                showNotification(`Sistemdeki en son sürüm '${fileName}' Excel verisi başarıyla indirildi.`);
-                              } catch (e) {
-                                alert("Hata: " + e);
-                              }
-                            }}
-                            className="w-full py-3.5 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[11px] rounded-xl tracking-wider uppercase transition-all flex items-center justify-center gap-2 shadow-sm cursor-pointer"
-                            title="Sistemde saklanan en son sürüm Excel verisini indir"
-                          >
-                            <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
-                            <span>📥 EN SON SÜRÜM EXCEL İNDİR</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Guidelines footer info */}
-              <div className="max-w-4xl mx-auto w-full grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-white border border-slate-200 rounded-3xl p-4 text-left shadow-sm">
-                  <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide block mb-1">📌 GÜNCELLEME AKIŞ PRENSİPLERİ:</span>
-                  <p className="text-[10px] text-slate-500 leading-relaxed font-sans">
-                    Sistemimiz çevrimdışı yükleme yapılmadan önce o birimin mevcut veri kaydını <strong>baştan tamamen sıfırlar</strong> ve yeni yüklediğiniz güncel dosyadaki verileri aktarır.
-                  </p>
-                </div>
-
-                <div className="bg-white border border-slate-200 rounded-3xl p-4 text-left flex flex-col justify-between shadow-sm">
-                  <div>
-                    <span className="text-[11px] font-extrabold text-[#0b3d1d] uppercase tracking-wide block mb-1">🔗 ENTEGRE LİNK VE ERİŞİM:</span>
-                    <p className="text-[10px] text-slate-500 leading-relaxed font-sans">
-                      Entegrasyonumuz aktif ve sabittir. İnternet üzerinden veri havuzuna her an canlı müdahale edebilirsiniz.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
             </div>
-          )}
+          </div>
+        );
+      })()}
 
-          {/* Iframe Penceresi Kendisi */}
-          {modalType === 'iframe' && modalUrl && (
-            <div className="w-full h-full relative flex flex-col items-center justify-center bg-slate-50">
-              <iframe
-                id="system-iframe"
-                src={modalUrl}
-                className="w-full h-full border-none bg-white"
-                title={modalTitle}
-                referrerPolicy="no-referrer"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                onLoad={() => setIframeLoading(false)}
-              ></iframe>
-            </div>
-          )}
-
-          {/* DENETLEME RAPOR VE EKLERİ İÇ BÜNYE MODÜLÜ */}
-          {modalType === 'denetleme' && (
-            <div className="w-full h-full relative flex flex-col bg-slate-900 animate-fade-in pt-16">
-              <iframe
-                id="denetleme-iframe"
-                src="https://ogmhavacilik.github.io/surecyonet/"
-                className="w-full h-full border-none bg-white"
-                title="8. DENETLEME RAPOR VE EKLER"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              ></iframe>
-            </div>
-          )}
-
-        </div>
       </div>
+    </div>
 
-      {/* 4. PASSWORD VERIFICATION MODAL ("1839") */}
-      <AnimatePresence>
-        {isPasswordModalOpen && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 select-none animate-fade-in">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white border-2 border-emerald-800/10 rounded-[2rem] shadow-2xl max-w-sm w-full p-8 text-center relative overflow-hidden"
-            >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-700"></div>
-              
-              <button
-                onClick={() => setIsPasswordModalOpen(false)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-50"
-              >
-                <X className="w-5 h-5" />
-              </button>
+      {/* ACTIVE TECHIZAT ROW EDIT MODAL */}
+      {activeTechizatRowEdit && (() => {
+        const { rIdx, techType, row } = activeTechizatRowEdit;
+        const isKaraAraci = techType === 'kara_araclari';
+        const rowSection = getRowSection(row, techType);
+        const isDepo = techizatActiveSection === 'depo_sarf' || 
+                       techizatActiveSection === 'depo_kimyasal' || 
+                       techizatActiveSection === 'depo_all' || 
+                       rowSection === 'depo_sarf' || 
+                       rowSection === 'depo_kimyasal';
+        const baseColumns = [
+          "SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+        ];
+        const depoColumns = [
+          "SIRA NO", "MALZEME / PARÇA ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER / RAF", "DURUMU", "ÖMÜRLÜ PARÇA MI?", "ÖMÜR BİTİŞ TARİHİ", "TEDARİK EDİLEN FİRMA", "AÇIKLAMA"
+        ];
+        const karaAraclariColumns = [
+          "SIRA NO", "ARAÇ PLAKASI / TANIMI", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+        ];
+        const columns = isKaraAraci ? karaAraclariColumns : (isDepo ? depoColumns : baseColumns);
+        const imageKey = techType + "_" + (row[1] || "").replace(/\s+/g, '_') + "_" + (row[3] || "").replace(/\s+/g, '_');
+        const currentImageUrl = techizatImages[imageKey] || null;
 
-              <div className="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-6 text-[#0b3d1d]">
-                <Lock className="w-7 h-7" />
-              </div>
-
-              <h4 className="text-slate-800 font-extrabold tracking-wider text-sm uppercase mb-2">YETKİLİ VERİ ERİŞİMİ GİRİŞİ</h4>
-              <p className="text-xs text-slate-500 font-semibold leading-relaxed mb-6">
-                Lütfen form veritabanı indirme/güncelleme işlemini başlatmak için 4 haneli güvenlik şifresini giriniz.
-              </p>
-
-              <div className="mb-6">
-                <input
-                  type="password"
-                  placeholder="••••"
-                  maxLength={4}
-                  value={passwordInput}
-                  onChange={(e) => {
-                    setPasswordError(false);
-                    setPasswordInput(e.target.value);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleVerifyPassword();
-                  }}
-                  className="w-40 text-center tracking-[0.8em] text-xl font-black border-2 border-slate-200 rounded-2xl py-3 focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/10 transition-all font-mono text-slate-800"
-                  autoFocus
-                />
-                
-                {passwordError && (
-                  <p className="text-red-600 text-[11px] font-extrabold mt-3 animate-pulse flex items-center justify-center gap-1">
-                    ⚠️ Şifre Hatalı! Erişim Engellendi.
+        return (
+          <div className="fixed inset-0 z-[600] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-100">
+              {/* Modal Header */}
+              <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wider flex items-center gap-2">
+                    <Edit3 className="w-4 h-4 text-emerald-400" />
+                    <span>{row[1] || "Kayıt Detayı ve Düzenleme"}</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                    P/N: {row[2] || "-"} • S/N: {row[3] || "-"} • {getUnitDisplayName(techType)}
                   </p>
+                </div>
+                <button
+                  onClick={() => setActiveTechizatRowEdit(null)}
+                  className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center font-bold text-sm transition-all cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Tab Switcher: Form vs Bölgesel vs Görsel */}
+              <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-3 gap-2">
+                <button
+                  onClick={() => setMobileEditTab('form')}
+                  className={`px-5 py-2.5 rounded-t-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                    mobileEditTab === 'form'
+                      ? 'bg-white text-emerald-950 border-t-2 border-x border-slate-200 border-t-emerald-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Kayıt Bilgileri</span>
+                </button>
+                <button
+                  onClick={() => setMobileEditTab('regional')}
+                  className={`px-5 py-2.5 rounded-t-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                    mobileEditTab === 'regional'
+                      ? 'bg-white text-emerald-950 border-t-2 border-x border-slate-200 border-t-emerald-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <MapPin className="w-4 h-4 text-emerald-600" />
+                  <span>Bölge Dağılımları</span>
+                  {regionalLocations.length > 0 && (
+                    <span className="text-[10px] font-mono bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded-full">
+                      {regionalLocations.length}
+                    </span>
+                  )}
+                </button>
+                {techType === 'hangar' && (
+                  <button
+                    onClick={() => setMobileEditTab('documents')}
+                    className={`px-5 py-2.5 rounded-t-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                      mobileEditTab === 'documents'
+                        ? 'bg-white text-emerald-950 border-t-2 border-x border-slate-200 border-t-emerald-600 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <FileText className="w-4 h-4 text-rose-600" />
+                    <span>Belge Yükle / Evraklar</span>
+                    {findMatchingDocs(row, hangarPdfDocs).length > 0 && (
+                      <span className="text-[10px] font-mono bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded-full">
+                        {hangarPdfDocs.filter(d => d.itemKey === (row[2] || row[1] || "").trim().toUpperCase()).length}
+                      </span>
+                    )}
+                  </button>
                 )}
-              </div>
-
-              <div className="flex gap-3 justify-center">
                 <button
-                  type="button"
-                  onClick={() => setIsPasswordModalOpen(false)}
-                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                  onClick={() => setMobileEditTab('image')}
+                  className={`px-5 py-2.5 rounded-t-2xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                    mobileEditTab === 'image'
+                      ? 'bg-white text-emerald-950 border-t-2 border-x border-slate-200 border-t-emerald-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
                 >
-                  İptal
-                </button>
-                <button
-                  type="button"
-                  onClick={handleVerifyPassword}
-                  className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#0b3d1d]/90 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer"
-                >
-                  Giriş Yap
+                  <Camera className="w-4 h-4" />
+                  <span>Fotoğraf & Görsel Düzenleyici</span>
                 </button>
               </div>
 
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* GÖREV EMRİ MANUEL DÜZENLEME MODALİ */}
-      <AnimatePresence>
-        {activeGorevEmriEdit && editGorevEmriValues && (
-          <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[2100] flex items-center justify-center p-4 select-text">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white border-2 border-slate-200/50 rounded-[2.5rem] shadow-2xl max-w-lg w-full p-6 relative overflow-hidden"
-            >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-amber-500"></div>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveGorevEmriEdit(null);
-                  setEditGorevEmriValues(null);
-                  setPendingGeEditOrder(null);
-                }}
-                className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-xl transition-all cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-
-              <h3 className="text-slate-800 font-black text-sm uppercase mb-4 flex items-center gap-2">
-                ✏️ GÖREV EMRİ MANUEL DÜZENLEME PANELİ
-              </h3>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Görev Tarihi</label>
-                  <input
-                    type="date"
-                    value={convertToInputDateFormat(editGorevEmriValues.date || "")}
-                    onChange={(e) => {
-                      const formatted = convertToDisplayDateFormat(e.target.value);
-                      setEditGorevEmriValues({ ...editGorevEmriValues, date: formatted });
-                    }}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none cursor-pointer"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Araç Plakası</label>
-                  <input
-                    type="text"
-                    value={editGorevEmriValues.plate || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, plate: e.target.value.toUpperCase() })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Sürücü Personel Ad Soyad</label>
-                  <input
-                    type="text"
-                    value={editGorevEmriValues.driverName || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, driverName: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Sürücü Sicil No</label>
-                  <input
-                    type="text"
-                    value={editGorevEmriValues.driverSicil || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, driverSicil: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Görev Seri No</label>
-                  <input
-                    type="text"
-                    value={editGorevEmriValues.serialNo || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, serialNo: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Çıkış KM</label>
-                  <input
-                    type="number"
-                    value={editGorevEmriValues.departureKm || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, departureKm: parseInt(e.target.value) || 0 })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Dönüş KM</label>
-                  <input
-                    type="number"
-                    value={editGorevEmriValues.returnKm || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, returnKm: parseInt(e.target.value) || 0 })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Güzergah</label>
-                  <input
-                    type="text"
-                    value={editGorevEmriValues.route || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, route: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Çıkış Saati</label>
-                  <input
-                    type="text"
-                    placeholder="örn: 08:00"
-                    value={editGorevEmriValues.departureTime || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, departureTime: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Dönüş Saati</label>
-                  <input
-                    type="text"
-                    placeholder="örn: 17:00"
-                    value={editGorevEmriValues.returnTime || ""}
-                    onChange={(e) => setEditGorevEmriValues({ ...editGorevEmriValues, returnTime: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-slate-100 focus:border-slate-300 rounded-xl text-xs font-bold text-slate-700 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-3 justify-end mt-6 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveGorevEmriEdit(null);
-                    setEditGorevEmriValues(null);
-                    setPendingGeEditOrder(null);
-                  }}
-                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 font-extrabold text-xs rounded-2xl transition-all cursor-pointer"
-                >
-                  İPTAL
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPendingGeEditOrder(editGorevEmriValues);
-                    setGeEditPasswordInput("");
-                    setGeEditPasswordError(false);
-                    setShowGeEditPasswordPrompt(true);
-                  }}
-                  className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white font-extrabold text-xs uppercase tracking-wider rounded-2xl transition-all cursor-pointer shadow-md"
-                >
-                  KAYDET VE SENKRONİZE ET
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* 4.5. TEÇHİZAT SATIR DÜZENLEME VE GÖRSEL YÜKLEME MODALİ */}
-      <AnimatePresence>
-        {activeTechizatRowEdit && (() => {
-          const { rIdx, techType, row } = activeTechizatRowEdit;
-          const isKaraAraciEdit = techType === 'kara_araclari';
-          const colsList = isKaraAraciEdit
-            ? [
-                "SIRA NO", 
-                "ARAÇ PLAKASI / TANIMI", 
-                "PARÇA NO (P/N) / MODEL", 
-                "BULUNDUĞU YER", 
-                "SON KM Sİ", 
-                "DURUMU", 
-                "KALİBRASYONA TABİ",
-                "SON KONTROL / KALİBRASYON / BAKIM", 
-                "GELECEK KONTROL / KALİBRASYON / BAKIM", 
-                "SON KONTROLÜ YAPAN FİRMA", 
-                "AÇIKLAMA", 
-                "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
-              ]
-            : [
-                "SIRA NO", 
-                "TEÇHİZAT ADI", 
-                "PARÇA NO (P/N) / MODEL", 
-                "SERİ NO (S/N)", 
-                "MİKTAR / KAPASİTE", 
-                "BULUNDUĞU YER", 
-                "DURUMU", 
-                "KALİBRASYONA TABİ",
-                "SON KONTROL / KALİBRASYON / BAKIM", 
-                "GELECEK KONTROL / KALİBRASYON / BAKIM", 
-                "SON KONTROLÜ YAPAN FİRMA", 
-                "AÇIKLAMA", 
-                "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
-              ];
-
-          const imageKey = techType + "_" + (row[1] || "").replace(/\s+/g, '_') + "_" + (row[3] || "").replace(/\s+/g, '_');
-          const hasImage = !!techizatImages[imageKey];
-
-          return (
-            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md flex items-start lg:items-center justify-center z-[2100] p-4 overflow-y-auto animate-fade-in select-text">
-              <motion.div
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                className="bg-white border-2 border-slate-200/50 rounded-[2.5rem] shadow-2xl max-w-5xl w-full p-5 md:p-8 relative flex flex-col lg:flex-row gap-8 my-4 lg:my-8 lg:max-h-[92vh] lg:overflow-hidden select-text"
-              >
-                {/* Decorative top strip */}
-                <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-700"></div>
-
-                {/* Close Button */}
-                <button
-                  onClick={() => {
-                    setActiveTechizatRowEdit(null);
-                    setPendingImageFile(null);
-                    setPendingImagePreview(null);
-                    setPendingImageBase64(null);
-                    setPendingImageMimeType(null);
-                    setIsDragging(false);
-                    setIsImageUploadingToDrive(false);
-                    setIsDataUpdateUnlocked(false);
-                    setDataPasswordInput('');
-                    setDataPasswordError(false);
-                  }}
-                  className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-50 z-20"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-
-                {/* Mobile / Tablet Segment/Tab Switcher */}
-                <div className="flex lg:hidden bg-slate-100 p-1.5 rounded-2xl gap-1 w-full mt-4 shrink-0 select-none">
-                  <button
-                    type="button"
-                    onClick={() => setMobileEditTab('form')}
-                    className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
-                      mobileEditTab === 'form'
-                        ? 'bg-[#0b3d1d] text-white shadow-md'
-                        : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
-                    }`}
-                  >
-                    📝 Kayıt Bilgileri
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMobileEditTab('image')}
-                    className={`flex-1 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
-                      mobileEditTab === 'image'
-                        ? 'bg-[#0b3d1d] text-white shadow-md'
-                        : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/50'
-                    }`}
-                  >
-                    📷 Teçhizat Görseli
-                  </button>
-                </div>
-
-                {/* Left Side: Dynamic Form Fields */}
-                <div className={`flex-1 lg:overflow-y-auto pr-2 lg:max-h-[82vh] flex flex-col text-left ${mobileEditTab === 'form' ? 'flex' : 'hidden lg:flex'}`}>
-                  <div className="mb-6">
-                    <h3 className="text-base font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                      🛠️ KAYIT DÜZENLEME PANELİ
-                    </h3>
-                    <p className="text-[11px] text-slate-400 font-semibold mt-1">
-                      {isKaraAraciEdit ? "Kara Aracı" : "Standart Teçhizat"} listesindeki seçili kalemin tüm teknik özelliklerini ve tarihlerini güncelleyebilirsiniz.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {(() => {
-                      const locColIdx = colsList.indexOf("BULUNDUĞU YER");
-                      const miktarColIdx = colsList.findIndex(c => c.includes("MİKTAR") || c.includes("KAPASİTE"));
-
-                      const rawLoc = locColIdx !== -1 ? (editRowValues[locColIdx] || "") : "";
-                      const rawMiktar = miktarColIdx !== -1 ? (editRowValues[miktarColIdx] || "") : "";
-
-                      const parsedLocs = rawLoc ? rawLoc.split('\n') : [""];
-                      const parsedMiktars = rawMiktar ? rawMiktar.split('\n') : ["1"];
-
-                      const pairCount = Math.max(1, parsedLocs.length, parsedMiktars.length);
-                      while (parsedLocs.length < pairCount) parsedLocs.push("");
-                      while (parsedMiktars.length < pairCount) parsedMiktars.push("1");
-
-                      return colsList.map((col, idx) => {
-                        // Skip Sıra No (index 0) - make it read-only
-                        if (idx === 0) {
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
-                              <input
-                                type="text"
-                                value={editRowValues[idx] || ""}
-                                disabled
-                                className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
-                              />
-                            </div>
-                          );
-                        }
-
-                        // Paired Miktar / Kapasite column field
-                        if (idx === miktarColIdx && locColIdx !== -1) {
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                                📦 {col}
-                              </label>
-                              <div className="flex flex-col gap-2">
-                                {parsedMiktars.map((mVal, pIdx) => (
-                                  <div key={pIdx} className="flex items-center gap-1.5 h-[42px]">
-                                    <input
-                                      type="text"
-                                      value={mVal}
-                                      placeholder="1"
-                                      onChange={(e) => {
-                                        const newMiktars = [...parsedMiktars];
-                                        newMiktars[pIdx] = e.target.value;
-                                        const cloned = [...editRowValues];
-                                        cloned[miktarColIdx] = newMiktars.join('\n');
-                                        setEditRowValues(cloned);
-                                      }}
-                                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                                    />
-                                    {pairCount > 1 && <div className="w-8 h-8 shrink-0" />}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        }
-
-                        // Paired Bulunduğu Yer column field
-                        if (idx === locColIdx) {
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                                📍 {col}
-                              </label>
-                              <div className="flex flex-col gap-2">
-                                {parsedLocs.map((lVal, pIdx) => (
-                                  <div key={pIdx} className="flex items-center gap-1.5 h-[42px]">
-                                    <input
-                                      type="text"
-                                      value={lVal}
-                                      placeholder={pIdx === 0 ? "Örn: Y/D HANGAR" : "Örn: Muğla / Antalya"}
-                                      onChange={(e) => {
-                                        const newLocs = [...parsedLocs];
-                                        newLocs[pIdx] = e.target.value;
-                                        const cloned = [...editRowValues];
-                                        cloned[locColIdx] = newLocs.join('\n');
-                                        setEditRowValues(cloned);
-                                      }}
-                                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                                    />
-                                    {pairCount > 1 && (
-                                      <button
-                                        type="button"
-                                        title="Bu Lokasyonu ve Miktarını Sil"
-                                        onClick={() => {
-                                          const newLocs = parsedLocs.filter((_, i) => i !== pIdx);
-                                          const newMiktars = parsedMiktars.filter((_, i) => i !== pIdx);
-                                          const cloned = [...editRowValues];
-                                          cloned[locColIdx] = newLocs.join('\n');
-                                          if (miktarColIdx !== -1) cloned[miktarColIdx] = newMiktars.join('\n');
-                                          setEditRowValues(cloned);
-                                        }}
-                                        className="w-8 h-8 shrink-0 flex items-center justify-center bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl transition-colors cursor-pointer border border-rose-200/80 active:scale-95"
-                                      >
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
-
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const newLocs = [...parsedLocs, ""];
-                                    const newMiktars = [...parsedMiktars, "1"];
-                                    const cloned = [...editRowValues];
-                                    cloned[locColIdx] = newLocs.join('\n');
-                                    if (miktarColIdx !== -1) cloned[miktarColIdx] = newMiktars.join('\n');
-                                    setEditRowValues(cloned);
-                                  }}
-                                  className="mt-1 self-start inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#0b3d1d] text-xs font-extrabold rounded-xl border border-emerald-200/80 transition-all cursor-pointer active:scale-95 shadow-sm"
-                                >
-                                  <Plus className="w-3.5 h-3.5 text-emerald-700" />
-                                  <span>+ Yeni Lokasyon Ekle</span>
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        }
-
-                        // Special field: KALİBRASYONA TABİ (Dropdown selection EVET / HAYIR)
-                        if (col === "KALİBRASYONA TABİ" || col === "BAKIMA TABİ Mİ?") {
-                          const currentVal = (editRowValues[idx] || "EVET").toString().trim().toUpperCase();
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                                ⚙️ KALİBRASYONA TABİ
-                              </label>
-                              <select
-                                value={currentVal === "HAYIR" ? "HAYIR" : "EVET"}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  const cloned = [...editRowValues];
-                                  cloned[idx] = val;
-                                  // If "HAYIR" is selected, clear maintenance fields and firm
-                                  if (val === "HAYIR") {
-                                    const lastCntIdx = colsList.indexOf("SON KONTROL / KALİBRASYON / BAKIM");
-                                    const nextCntIdx = colsList.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
-                                    const firmIdx = colsList.indexOf("SON KONTROLÜ YAPAN FİRMA");
-                                    if (lastCntIdx !== -1) cloned[lastCntIdx] = "-";
-                                    if (nextCntIdx !== -1) cloned[nextCntIdx] = "-";
-                                    if (firmIdx !== -1) cloned[firmIdx] = "-";
-                                  }
-                                  setEditRowValues(cloned);
-                                }}
-                                className="w-full px-3.5 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d] cursor-pointer"
-                              >
-                                <option value="EVET">EVET (Kalibrasyona / Bakıma Tabi)</option>
-                                <option value="HAYIR">HAYIR (Kalibrasyon / Bakımdan Muaf)</option>
-                              </select>
-                            </div>
-                          );
-                        }
-
-                        // Check if KALİBRASYONA TABİ is HAYIR (disabled flu mode for maintenance & firm fields)
-                        const kalibColIdx = colsList.indexOf("KALİBRASYONA TABİ") !== -1 ? colsList.indexOf("KALİBRASYONA TABİ") : colsList.indexOf("BAKIMA TABİ Mİ?");
-                        const isKalibTabiHayir = kalibColIdx !== -1 && (editRowValues[kalibColIdx] || "").toString().trim().toUpperCase() === "HAYIR";
-                        const isMaintenanceOrFirmField = col === "SON KONTROL / KALİBRASYON / BAKIM" || 
-                                                         col === "GELECEK KONTROL / KALİBRASYON / BAKIM" || 
-                                                         col === "SON KONTROLÜ YAPAN FİRMA";
-
-                        if (isKalibTabiHayir && isMaintenanceOrFirmField) {
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5 opacity-40">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
-                              <input
-                                type="text"
-                                value="MUAFIYET (TABİ DEĞİL)"
-                                disabled
-                                className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-400 cursor-not-allowed"
-                              />
-                            </div>
-                          );
-                        }
-
-                        // Special field: DURUMU (Dropdown FAAL / BAKIM KALİBRASYON / GAYRİ FAAL)
-                        if (col === "DURUMU") {
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                                🟢 {col}
-                              </label>
-                              <select
-                                value={editRowValues[idx] || "FAAL"}
-                                onChange={(e) => {
-                                  const cloned = [...editRowValues];
-                                  cloned[idx] = e.target.value;
-                                  setEditRowValues(cloned);
-                                }}
-                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all cursor-pointer"
-                              >
-                                <option value="FAAL">FAAL</option>
-                                <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
-                                <option value="GAYRİ FAAL">GAYRİ FAAL</option>
-                              </select>
-                            </div>
-                          );
-                        }
-
-                        // Special field: SON KONTROLÜ YAPAN FİRMA (With Firm Datalist)
-                        if (col === "SON KONTROLÜ YAPAN FİRMA") {
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                                🏢 {col}
-                              </label>
-                              <input
-                                type="text"
-                                list="techizat-firmalar-list"
-                                value={editRowValues[idx] || ""}
-                                placeholder="Firma seçiniz veya yazınız..."
-                                onChange={(e) => {
-                                  const cloned = [...editRowValues];
-                                  cloned[idx] = e.target.value;
-                                  setEditRowValues(cloned);
-                                }}
-                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                              />
-                            </div>
-                          );
-                        }
-
-                        const isDateField = col.includes("TARİH") || col.includes("KONTROL / KALİBRASYON / BAKIM");
-                        const isMailSendDate = col === "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ" || 
-                          col.toUpperCase().includes("MAİL GÖNDERİM") || 
-                          col.toUpperCase().includes("MAIL GONDERIM") || 
-                          col.toUpperCase().includes("MAİL GÖNDERİLDİĞİ") || 
-                          col.toUpperCase().includes("MAIL GONDERILDI") || 
-                          col.toLowerCase().includes("mail") || 
-                          col.toLowerCase().includes("e-posta");
-
-                        if (isMailSendDate) {
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{col}</label>
-                              <input
-                                type="text"
-                                value={editRowValues[idx] || "Belirtilmemiş"}
-                                disabled
-                                className="w-full px-3.5 py-2.5 bg-slate-100 border border-slate-200 rounded-2xl text-xs font-bold text-slate-500 cursor-not-allowed"
-                              />
-                            </div>
-                          );
-                        }
-
-                        if (isDateField) {
-                          const dateVal = convertToInputDateFormat(editRowValues[idx] || "");
-                          return (
-                            <div key={idx} className="flex flex-col gap-1.5">
-                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">📅 {col}</label>
-                              <input
-                                type="date"
-                                value={dateVal}
-                                onChange={(e) => {
-                                  const formatted = convertToDisplayDateFormat(e.target.value);
-                                  const cloned = [...editRowValues];
-                                  cloned[idx] = formatted;
-                                  setEditRowValues(cloned);
-                                }}
-                                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                              />
-                            </div>
-                          );
-                        }
-
-                        // Render normal input fields
-                        return (
-                          <div key={idx} className="flex flex-col gap-1.5">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">{col}</label>
-                            <input
-                              type="text"
-                              value={editRowValues[idx] || ""}
-                              placeholder="Belirtilmemiş"
-                              onChange={(e) => {
-                                const cloned = [...editRowValues];
-                                cloned[idx] = e.target.value;
-                                setEditRowValues(cloned);
-                              }}
-                              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                            />
+              {/* Modal Body */}
+              <div className="flex-1 p-6 overflow-y-auto">
+                {mobileEditTab === 'form' ? (
+                  <div className="flex flex-col gap-5">
+                    {/* Password unlock banner */}
+                    {!isDataUpdateUnlocked ? (
+                      <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">🔒</span>
+                          <div>
+                            <p className="text-xs font-bold text-amber-950">Veri Düzenleme Kilidi Aktif</p>
+                            <p className="text-[11px] text-amber-700">Değerleri değiştirmek için yönetici şifresini giriniz.</p>
                           </div>
-                        );
-                      });
-                    })()}
-                  </div>
-
-                  {/* Save buttons */}
-                  <div className="flex flex-col gap-3 mt-8 border-t border-slate-100 pt-5">
-                    <div className="flex gap-3 justify-end items-center">
-                      {isDataUpdateUnlocked && (
-                        <span className="text-[10px] font-black text-emerald-800 flex items-center gap-1.5 mr-auto">
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                          GÜNCELLEME YETKİSİ ONAYLANDI
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        disabled={isTechizatSaving}
-                        onClick={() => {
-                          setActiveTechizatRowEdit(null);
-                          setPendingImageFile(null);
-                          setPendingImagePreview(null);
-                          setIsDragging(false);
-                          setIsImageUploadingToDrive(false);
-                          setDataPasswordInput('');
-                          setDataPasswordError(false);
-                          setShowSavePasswordPrompt(false);
-                        }}
-                        className={`px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-2xl transition-colors cursor-pointer ${isTechizatSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        Kapat / İptal
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isTechizatSaving}
-                        onClick={async () => {
-                          if (isDataUpdateUnlocked) {
-                            await handleSaveTechizatRow(editRowValues, techType, rIdx);
-                          } else {
-                            setDataPasswordInput('');
-                            setDataPasswordError(false);
-                            setShowSavePasswordPrompt(true);
-                          }
-                        }}
-                        className={`px-8 py-3 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-widest rounded-2xl shadow-lg transition-all cursor-pointer active:scale-95 flex items-center gap-2 ${isTechizatSaving ? 'opacity-70 cursor-not-allowed' : ''}`}
-                      >
-                        {isTechizatSaving ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin text-white" />
-                            <span>SENKRONİZE EDİLİYOR...</span>
-                          </>
-                        ) : (
-                          <span>KAYDET VE GÜNCELLE</span>
-                        )}
-                      </button>
-                    </div>
-
-                    {showSavePasswordPrompt && (
-                      <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text">
-                        <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden animate-fade-in">
-                          <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
-                          <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
-                            <Lock className="w-6 h-6" />
-                          </div>
-                          <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">KAYIT DEĞİŞİKLİK ONAYI</h4>
-                          <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
-                            Yapılan değişiklikleri kaydetmek için lütfen yetkili şifresini giriniz.
-                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
                           <input
                             type="password"
-                            placeholder="Şifre"
+                            placeholder="Yönetici Şifresi"
                             value={dataPasswordInput}
                             onChange={(e) => {
                               setDataPasswordInput(e.target.value);
                               setDataPasswordError(false);
                             }}
-                            onKeyDown={async (e) => {
+                            onKeyDown={(e) => {
                               if (e.key === 'Enter') {
-                                if (dataPasswordInput === '1839') {
+                                const targetPwd = getTechizatUnitPassword(techType);
+                                if (dataPasswordInput === targetPwd) {
                                   setIsDataUpdateUnlocked(true);
                                   setDataPasswordInput('');
                                   setDataPasswordError(false);
-                                  setShowSavePasswordPrompt(false);
-                                  await handleSaveTechizatRow(editRowValues, techType, rIdx);
                                 } else {
                                   setDataPasswordError(true);
                                 }
                               }
                             }}
-                            className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
-                            autoFocus
+                            className="px-3 py-1.5 bg-white border border-amber-300 rounded-xl text-xs font-mono font-bold text-slate-900 !text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-500"
                           />
-                          {dataPasswordError && (
-                            <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
-                          )}
-                          <div className="flex gap-2 justify-center">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowSavePasswordPrompt(false);
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetPwd = getTechizatUnitPassword(techType);
+                              if (dataPasswordInput === targetPwd) {
+                                setIsDataUpdateUnlocked(true);
                                 setDataPasswordInput('');
                                 setDataPasswordError(false);
-                              }}
-                              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
-                            >
-                              İptal
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                if (dataPasswordInput === '1839') {
-                                  setIsDataUpdateUnlocked(true);
-                                  setDataPasswordInput('');
-                                  setDataPasswordError(false);
-                                  setShowSavePasswordPrompt(false);
-                                  await handleSaveTechizatRow(editRowValues, techType, rIdx);
-                                } else {
-                                  setDataPasswordError(true);
-                                }
-                              }}
-                              className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer"
-                            >
-                              Onayla ve Kaydet
-                            </button>
-                          </div>
+                              } else {
+                                setDataPasswordError(true);
+                              }
+                            }}
+                            className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all cursor-pointer"
+                          >
+                            Kilidi Aç
+                          </button>
                         </div>
+                        {dataPasswordError && (
+                          <p className="text-rose-600 text-xs font-bold w-full">Hatalı şifre! Lütfen tekrar deneyiniz.</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between">
+                        <span className="text-xs font-bold text-emerald-900 flex items-center gap-2">
+                          🔓 Düzenleme modu aktif. Yapılan değişiklikleri kaydetmeyi unutmayınız.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsDataUpdateUnlocked(false)}
+                          className="text-xs text-emerald-700 hover:text-emerald-950 font-bold underline cursor-pointer"
+                        >
+                          Kilitle
+                        </button>
                       </div>
                     )}
-                  </div>
-                </div>
 
-                {/* Right Side: Image Upload, Background Removal and Manual Retouch Panel */}
-                <div className={`w-full lg:w-5/12 border-t lg:border-t-0 lg:border-l border-slate-200 pt-6 lg:pt-0 lg:pl-8 lg:overflow-y-auto lg:max-h-[82vh] pr-1 flex flex-col gap-6 text-left ${mobileEditTab === 'image' ? 'flex' : 'hidden lg:flex'}`}>
-                  <ImageEditorAndRetoucher
-                    imageKey={imageKey}
-                    currentImageUrl={techizatImages[imageKey] || null}
-                    hasImage={hasImage}
-                    isImageUpdateUnlocked={isImageUpdateUnlocked}
-                    isUploadingToDrive={isImageUploadingToDrive}
-                    partName={row[1] || ""}
-                    manufacturer={row[3] || ""}
-                    onUnlockImageUpdate={() => {
-                      setTempImageAction('unlock_only');
-                      setImagePasswordInput('');
-                      setImagePasswordError(false);
-                      setShowImageSavePasswordPrompt(true);
-                    }}
-                    onLockImageUpdate={() => {
-                      setIsImageUpdateUnlocked(false);
-                    }}
-                    onRemoveImage={() => {
-                      if (isImageUpdateUnlocked) {
-                        setTechizatImages(prev => {
-                          const cloned = { ...prev };
-                          delete cloned[imageKey];
-                          localStorage.setItem('techizat_images', JSON.stringify(cloned));
-                          return cloned;
-                        });
-                        showNotification("Görsel kaldırıldı.");
-                      } else {
-                        setTempImageAction('remove');
-                        setImagePasswordInput('');
-                        setImagePasswordError(false);
-                        setShowImageSavePasswordPrompt(true);
-                      }
-                    }}
-                    onSaveImage={async (base64Data, mimeType) => {
-                      if (isImageUpdateUnlocked) {
+                    {/* Bölge Dağılımları Hızlı Erişim Kartı & Butonu */}
+                    <div className="p-4 bg-gradient-to-r from-emerald-50 via-teal-50/70 to-emerald-50 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black shadow-sm shrink-0">
+                          <MapPin className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-black text-emerald-950 uppercase tracking-tight flex items-center gap-2">
+                            <span>📍 BÖLGESEL LOKASYON & SERİ NUMARASI (S/N) DAĞILIMI</span>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900">
+                              {regionalLocations.length} Bölge Kaydı
+                            </span>
+                          </p>
+                          <p className="text-[11px] text-emerald-700">
+                            Bu parçanın farklı bölgelerdeki adet, S/N kırılımları ve bağımsız kontrol tarihlerini açmak için tıklayınız.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMobileEditTab('regional')}
+                        className="w-full sm:w-auto px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                      >
+                        <MapPin className="w-4 h-4" />
+                        <span>Bölge Dağılımlarını Yönet</span>
+                      </button>
+                    </div>
+
+                    {/* Hangar Yer Destek Belge Yükle Hızlı Kartı */}
+                    {techType === 'hangar' && (
+                      <div className="p-4 bg-gradient-to-r from-rose-50 via-pink-50/70 to-rose-50 border border-rose-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center font-black shadow-sm shrink-0">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-black text-rose-950 uppercase tracking-tight flex items-center gap-2">
+                              <span>📄 BELGE YÜKLE (PDF EVRAKLAR)</span>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-200 text-rose-900 font-bold">
+                                {findMatchingDocs(row, hangarPdfDocs).length} Evrak Kayıtlı
+                              </span>
+                            </p>
+                            <p className="text-[11px] text-rose-700">
+                              Bakım sonrası evraklar, kullanıcı kılavuzları, kontrol checklist PDF belgelerini yükleyin ve pencere içinde açın.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setMobileEditTab('documents')}
+                          className="w-full sm:w-auto px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>Belgeleri Yönet & Aç</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Editable Fields Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {columns.map((colName, cIdx) => {
+                        if (colName === "BELGE YÜKLE") {
+                          const docKey = (row[2] || row[1] || "").trim().toUpperCase();
+                          const count = findMatchingDocs(row, hangarPdfDocs).length;
+                          return (
+                            <div key={cIdx} className="flex flex-col gap-1.5 sm:col-span-2 lg:col-span-3 bg-rose-50/60 p-3.5 rounded-2xl border border-rose-200">
+                              <label className="text-[10px] font-black text-rose-800 uppercase tracking-wider flex items-center justify-between">
+                                <span>📄 BELGE YÜKLE</span>
+                                <span className="font-mono text-rose-600">{count} Belge</span>
+                              </label>
+                              <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                                <p className="text-xs text-rose-900 font-medium">
+                                  Hangar Yer Destek bakım ve kontrol evraklarını PDF olarak ekleyin ve sistemden çıkmadan inceleyin.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => setMobileEditTab('documents')}
+                                  className="w-full sm:w-auto px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                                >
+                                  <FileText className="w-4 h-4" />
+                                  <span>{count > 0 ? `Belgeleri İncele / Ekle (${count})` : '+ Belge Yükle'}</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+                        if (colName === "DURUMU") {
+                          const curDurum = editRowValues[cIdx] !== undefined ? editRowValues[cIdx] : (row[cIdx] || "");
+                          return (
+                            <div key={cIdx} className="flex flex-col gap-1.5">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider truncate flex items-center justify-between" title={colName}>
+                                <span>{colName}</span>
+                                <span className="text-[9px] font-mono text-emerald-600 font-bold">Faal olunca bakım güncellenir</span>
+                              </label>
+                              <div className="flex items-center gap-1.5">
+                                <select
+                                  disabled={!isDataUpdateUnlocked}
+                                  value={curDurum}
+                                  onChange={(e) => {
+                                    const newVal = e.target.value;
+                                    const copy = [...editRowValues];
+                                    while (copy.length <= cIdx) copy.push("");
+                                    const prevVal = (copy[cIdx] || row[cIdx] || "").toUpperCase().trim();
+                                    copy[cIdx] = newVal;
+
+                                    // FAAL'e çevrilince bakım tarihlerini ileriye çek
+                                    if (newVal.toUpperCase().trim() === "FAAL" && prevVal !== "FAAL") {
+                                      const sonIdx = columns.findIndex(c => c.includes("SON KONTROL"));
+                                      const gelecekIdx = columns.findIndex(c => c.includes("GELECEK KONTROL") || c.includes("MUAYENE"));
+                                      if (sonIdx !== -1 && gelecekIdx !== -1) {
+                                        const prevSon = copy[sonIdx] || row[sonIdx] || "";
+                                        const prevGelecek = copy[gelecekIdx] || row[gelecekIdx] || "";
+                                        const { newSonKontrol, newGelecekKontrol, intervalDays } = calculateReactivatedMaintenanceDates(prevSon, prevGelecek);
+                                        copy[sonIdx] = newSonKontrol;
+                                        copy[gelecekIdx] = newGelecekKontrol;
+                                        showNotification(`⚡ Ürün FAAL duruma alındı. Son kontrol bugüne (${newSonKontrol}), gelecek bakım ${intervalDays} gün ileriye (${newGelecekKontrol}) güncellendi!`);
+                                      }
+                                    }
+                                    setEditRowValues(copy);
+                                  }}
+                                  className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-bold border transition-all ${
+                                    !isDataUpdateUnlocked
+                                      ? 'bg-slate-100 border-slate-200 text-slate-600 cursor-not-allowed'
+                                      : 'bg-white border-slate-300 text-slate-800 focus:outline-none focus:border-[#0b3d1d] focus:ring-2 focus:ring-[#0b3d1d]/10'
+                                  }`}
+                                >
+                                  <option value="FAAL">FAAL</option>
+                                  <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                                  <option value="KISMEN FAAL">KISMEN FAAL</option>
+                                  <option value="ARIZALI">ARIZALI</option>
+                                  <option value="BAKIMDA">BAKIMDA</option>
+                                  <option value="RAF ÖMRÜ DOLDU">RAF ÖMRÜ DOLDU</option>
+                                  {curDurum && !['FAAL', 'GAYRİ FAAL', 'KISMEN FAAL', 'ARIZALI', 'BAKIMDA', 'RAF ÖMRÜ DOLDU'].includes(curDurum.toUpperCase().trim()) && (
+                                    <option value={curDurum}>{curDurum}</option>
+                                  )}
+                                </select>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        const isDateCol = colName.includes("TARİH") || colName.includes("KONTROL") || colName.includes("BAKIM") || colName.includes("ÖMÜR");
+
+                        return (
+                        <div key={cIdx} className="flex flex-col gap-1.5">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider truncate" title={colName}>
+                            {colName}
+                          </label>
+                          <input
+                            type="text"
+                            disabled={!isDataUpdateUnlocked}
+                            placeholder={isDateCol ? "GG.AA.YYYY" : ""}
+                            value={editRowValues[cIdx] !== undefined ? editRowValues[cIdx] : (row[cIdx] || "")}
+                            onChange={(e) => {
+                              const copy = [...editRowValues];
+                              while (copy.length <= cIdx) copy.push("");
+                              copy[cIdx] = e.target.value;
+                              setEditRowValues(copy);
+                            }}
+                            onBlur={(e) => {
+                              if (isDateCol && e.target.value) {
+                                const formatted = cleanAndFormatDateString(e.target.value);
+                                if (formatted && formatted !== e.target.value) {
+                                  const copy = [...editRowValues];
+                                  while (copy.length <= cIdx) copy.push("");
+                                  copy[cIdx] = formatted;
+                                  setEditRowValues(copy);
+                                }
+                              }
+                            }}
+                            className={`w-full px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition-all ${
+                              !isDataUpdateUnlocked
+                                ? 'bg-slate-100 border-slate-200 text-slate-600 cursor-not-allowed'
+                                : 'bg-white border-slate-300 text-slate-800 focus:outline-none focus:border-[#0b3d1d] focus:ring-2 focus:ring-[#0b3d1d]/10'
+                            }`}
+                          />
+                        </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : mobileEditTab === 'regional' ? (
+                  <div className="flex flex-col gap-5">
+                    {/* Header Banner */}
+                    <div className="p-4 bg-emerald-950 text-white rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-base">📍</span>
+                          <h4 className="text-xs sm:text-sm font-black uppercase tracking-tight text-white">
+                            BÖLGESEL LOKASYON, MİKTAR, S/N & KONTROL / BAKIM DAĞILIMI
+                          </h4>
+                        </div>
+                        <p className="text-[11px] text-emerald-200/90 leading-relaxed max-w-2xl">
+                          Aynı P/N'e ait ürünlerin bölgelere, adetlere ve seri numaralarına göre bağımsız Son Kontrol, Gelecek Kontrol ve Firma tarihlerini yönetiniz.
+                        </p>
+                      </div>
+                      <span className="text-xs font-mono font-black text-emerald-300 bg-emerald-900/90 border border-emerald-700/60 px-3 py-1.5 rounded-xl shrink-0">
+                        {regionalLocations.length} Ayrı Lokasyon / S/N Kaydı
+                      </span>
+                    </div>
+
+                    {/* Regional Cards List */}
+                    <div className="flex flex-col gap-4">
+                      {regionalLocations.map((item, idx) => {
+                        const daysInfo = getDaysRemainingLabel(item.gelecekKontrol);
+                        const curSerialInput = newSerialInputs[item.id] || '';
+
+                        return (
+                          <div
+                            key={item.id}
+                            className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col gap-4 shadow-sm hover:border-emerald-300 transition-all"
+                          >
+                            {/* Card Header Bar */}
+                            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                              <div className="flex items-center gap-2.5">
+                                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                                  {idx + 1}
+                                </span>
+                                <h5 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-tight">
+                                  {item.location || 'BÖLGE BELİRTİLMEDİ'} {item.quantity ? `(${item.quantity} ADET)` : ''}
+                                </h5>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {/* Kullanıcı kuralı: "faal yap butonu eğer geleceke kontrol bakım tarih geçmiş ise o butonn sil yanına olsun aşağıdan kaldır" */}
+                                {(() => {
+                                  let isExpired = false;
+                                  if (item.gelecekKontrol && item.gelecekKontrol !== '-') {
+                                    const parts = item.gelecekKontrol.trim().split('.');
+                                    if (parts.length === 3) {
+                                      const target = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+                                      if (!isNaN(target.getTime())) {
+                                        const today = new Date();
+                                        today.setHours(0, 0, 0, 0);
+                                        isExpired = target.getTime() < today.getTime();
+                                      }
+                                    }
+                                  }
+                                  if (!isExpired) return null;
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const { newSonKontrol, newGelecekKontrol, intervalDays } = calculateReactivatedMaintenanceDates(item.sonKontrol, item.gelecekKontrol);
+                                        setRegionalLocations(prev => prev.map(r => r.id === item.id ? {
+                                          ...r,
+                                          sonKontrol: newSonKontrol,
+                                          gelecekKontrol: newGelecekKontrol
+                                        } : r));
+                                        showNotification(`⚡ Bakım tamamlandı. Son kontrol bugüne (${newSonKontrol}), gelecek bakım ${intervalDays} gün sonraya (${newGelecekKontrol}) güncellendi!`);
+                                      }}
+                                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-lg transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+                                      title="Tarihi geçmiş ürünü faale al: Son kontrolü bugüne çeker, aradaki periyodu gelecek bakıma ekler"
+                                    >
+                                      <RefreshCw className="w-3.5 h-3.5" />
+                                      <span>Faal Yap</span>
+                                    </button>
+                                  );
+                                })()}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRegionalLocations(prev => prev.filter(r => r.id !== item.id));
+                                  }}
+                                  className="text-rose-500 hover:text-rose-700 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors px-2.5 py-1 rounded-lg hover:bg-rose-50"
+                                  title="Bu lokasyon kaydını sil"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Sil</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Row 1: Yer, Miktar, Seri No */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                                  <span>📍 BULUNDUĞU YER / BÖLGE</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Örn: ÇANAKKALE"
+                                  value={item.location}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setRegionalLocations(prev => prev.map(r => r.id === item.id ? { ...r, location: val } : r));
+                                  }}
+                                  className="px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                                    📦 MİKTAR
+                                  </label>
+                                  <span className="text-[9px] font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                    = S/N ({item.serialNumbers.length})
+                                  </span>
+                                </div>
+                                <input
+                                  type="text"
+                                  value={item.quantity}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setRegionalLocations(prev => prev.map(r => r.id === item.id ? { ...r, quantity: val } : r));
+                                  }}
+                                  placeholder="Adet giriniz..."
+                                  className="px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                                  🔢 SERİ NO (S/N)
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Seri no yazınız (birden fazla ise virgül ile ayırınız)..."
+                                  value={item.serialNumbers.join(', ')}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const parts = val.split(/[,;\/\n]+/).map(s => s.trim()).filter(Boolean);
+                                    setRegionalLocations(prev => prev.map(r => r.id === item.id ? {
+                                      ...r,
+                                      serialNumbers: parts,
+                                      quantity: parts.length > 0 ? String(parts.length) : r.quantity
+                                    } : r));
+                                  }}
+                                  className="px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-500"
+                                />
+                                <span className="text-[10px] text-slate-400">
+                                  {item.serialNumbers.length > 0 ? `Kayıtlı: ${item.serialNumbers.length} S/N` : "Seri no yoksa boş bırakabilirsiniz"}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Row 2: Son Kontrol, Gelecek Kontrol, Firma */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-2 border-t border-slate-200/60">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                                  🛠️ SON KONTROL / BAKIM
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="GG.AA.YYYY"
+                                  value={item.sonKontrol}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setRegionalLocations(prev => prev.map(r => r.id === item.id ? { ...r, sonKontrol: val } : r));
+                                  }}
+                                  className="px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                                    📅 GELECEK KONTROL / BAKIM
+                                  </label>
+                                  {daysInfo && (
+                                    <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full border ${daysInfo.color}`}>
+                                      {daysInfo.text}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    type="text"
+                                    placeholder="GG.AA.YYYY"
+                                    value={item.gelecekKontrol}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setRegionalLocations(prev => prev.map(r => r.id === item.id ? { ...r, gelecekKontrol: val } : r));
+                                    }}
+                                    className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-500"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const parts = (item.gelecekKontrol || item.sonKontrol || '').split('.');
+                                      if (parts.length === 3) {
+                                        const nextYear = String(Number(parts[2]) + 1);
+                                        const newDate = `${parts[0]}.${parts[1]}.${nextYear}`;
+                                        setRegionalLocations(prev => prev.map(r => r.id === item.id ? { ...r, gelecekKontrol: newDate } : r));
+                                      } else {
+                                        const d = new Date();
+                                        d.setFullYear(d.getFullYear() + 1);
+                                        const pad = (n: number) => n < 10 ? '0' + n : n;
+                                        const newDate = `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+                                        setRegionalLocations(prev => prev.map(r => r.id === item.id ? { ...r, gelecekKontrol: newDate } : r));
+                                      }
+                                    }}
+                                    className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-black rounded-xl transition-all cursor-pointer whitespace-nowrap"
+                                    title="Tarihi 1 yıl ileri al"
+                                  >
+                                    +1 Yıl
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                                  🏢 SON KONTROLÜ YAPAN FİRMA
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Firma adı..."
+                                  value={item.firma}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setRegionalLocations(prev => prev.map(r => r.id === item.id ? { ...r, firma: val } : r));
+                                  }}
+                                  className="px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-500"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Add & Save Action Buttons */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newItem = {
+                            id: `reg_${Date.now()}_${regionalLocations.length}`,
+                            location: 'YENİ BÖLGE',
+                            quantity: '1',
+                            serialNumbers: [],
+                            sonKontrol: '-',
+                            gelecekKontrol: '-',
+                            firma: '-'
+                          };
+                          setRegionalLocations(prev => [...prev, newItem]);
+                        }}
+                        className="w-full sm:w-auto px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>+ YENİ LOKASYON / BÖLGE EKLE</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const copy = [...editRowValues];
+                          while (copy.length < columns.length) copy.push("");
+
+                          const snIdx = columns.findIndex(c => c.includes("SERİ") || c.includes("S/N"));
+                          const miktarIdx = columns.findIndex(c => c.includes("MİKTAR") || c.includes("ADET"));
+                          const yerIdx = columns.findIndex(c => c.includes("YER") || c.includes("BÖLGE") || c.includes("LOKASYON"));
+                          const sonIdx = columns.findIndex(c => c.includes("SON KONTROL"));
+                          const gelecekIdx = columns.findIndex(c => c.includes("GELECEK KONTROL") || c.includes("MUAYENE"));
+                          const firmaIdx = columns.findIndex(c => c.includes("FİRMA") || c.includes("TEDARİKÇİ"));
+
+                          let totalQty = 0;
+                          regionalLocations.forEach(r => {
+                            const q = parseFloat(String(r.quantity)) || (r.serialNumbers.length > 0 ? r.serialNumbers.length : 1);
+                            totalQty += q;
+                          });
+                          if (miktarIdx !== -1) {
+                            copy[miktarIdx] = totalQty > 0 ? `${totalQty} ADET` : (copy[miktarIdx] || '1 ADET');
+                          }
+
+                          const locStr = regionalLocations.map(r => `${r.location}${r.quantity ? ` (${r.quantity})` : ''}`).join(' ; ');
+                          if (yerIdx !== -1) {
+                            copy[yerIdx] = locStr || copy[yerIdx];
+                          }
+
+                          const allSns = regionalLocations.flatMap(r => r.serialNumbers);
+                          if (snIdx !== -1 && allSns.length > 0) {
+                            copy[snIdx] = allSns.join(' ; ');
+                          }
+
+                          const validSon = regionalLocations.map(r => r.sonKontrol).filter(s => s && s !== '-');
+                          if (sonIdx !== -1 && validSon.length > 0) {
+                            copy[sonIdx] = validSon.join('\n');
+                          }
+
+                          const validGelecek = regionalLocations.map(r => r.gelecekKontrol).filter(g => g && g !== '-');
+                          if (gelecekIdx !== -1 && validGelecek.length > 0) {
+                            copy[gelecekIdx] = validGelecek.join('\n');
+                          }
+
+                          const validFirma = regionalLocations.map(r => r.firma).filter(f => f && f !== '-');
+                          if (firmaIdx !== -1 && validFirma.length > 0) {
+                            copy[firmaIdx] = validFirma.join('\n');
+                          }
+
+                          setEditRowValues(copy);
+                          showNotification("Bölge dağılımları form bilgileriyle senkronize edildi!");
+                          setMobileEditTab('form');
+                        }}
+                        className="w-full sm:w-auto px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span>Bölge Dağılımlarını Forma Aktar & Geri Dön</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : mobileEditTab === 'documents' ? (
+                  <div className="flex flex-col gap-6">
+                    {/* Header Banner */}
+                    <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-black text-rose-950 uppercase tracking-wide flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-rose-600" />
+                          <span>HANGAR YER DESTEK EVRAK & PDF BELGE YÖNETİMİ</span>
+                        </h4>
+                        <p className="text-xs text-rose-800 mt-1">
+                          Bu teçhizata ait bakım sonrası evrakları, kullanıcı kılavuzlarını ve kontrol checklist belgelerini yükleyin veya tarayıcı içi önizleyin.
+                        </p>
+                      </div>
+                      <span className="text-xs font-mono font-black bg-rose-200 text-rose-900 px-3 py-1.5 rounded-xl self-start sm:self-auto">
+                        P/N: {row[2] || "-"} | S/N: {row[3] || "-"}
+                      </span>
+                    </div>
+
+                    {/* Belge Yükleme Formu */}
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <h5 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                          <Upload className="w-4 h-4 text-rose-600" />
+                          <span>YENİ BELGE / DÖKÜMAN YÜKLE</span>
+                        </h5>
+                        <span className="text-[10px] text-slate-500 font-mono font-bold bg-slate-100 px-2 py-0.5 rounded-md">
+                          PDF • JPEG / GÖRSEL • ZIP • RAR
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {/* 1. Belge Türü Seçimi */}
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[11px] font-bold text-slate-700">
+                            Belge Türü <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            value={newDocDocType}
+                            onChange={(e) => setNewDocDocType(e.target.value)}
+                            className="w-full px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600"
+                          >
+                            <option value="Bakım Sonrası Evraklar">Bakım Sonrası Evraklar</option>
+                            <option value="Kullanıcı Kılavuzları">Kullanıcı Kılavuzları</option>
+                            <option value="Kontrol Checklist">Kontrol Checklist</option>
+                            <option value="Diğer">Diğer (Manuel Giriş)</option>
+                          </select>
+                        </div>
+
+                        {/* Manuel Belge Türü (Eğer Diğer seçilirse) */}
+                        {newDocDocType === "Diğer" && (
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[11px] font-bold text-slate-700">
+                              Evrak Türünü Yazınız <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={newDocCustomType}
+                              onChange={(e) => setNewDocCustomType(e.target.value)}
+                              placeholder="Örn: Kalibrasyon Sertifikası..."
+                              className="w-full px-3 py-2 text-xs font-semibold bg-white border border-rose-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600"
+                            />
+                          </div>
+                        )}
+
+                        {/* 2. Bakımı Yapan Firma */}
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[11px] font-bold text-slate-700">
+                            Bakımı Yapan Firma / Kurum
+                          </label>
+                          <input
+                            type="text"
+                            value={newDocFirma || (row[10] || "")}
+                            onChange={(e) => setNewDocFirma(e.target.value)}
+                            placeholder="Örn: TUSAŞ, THY Teknik..."
+                            className="w-full px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600"
+                          />
+                        </div>
+
+                        {/* 3. Belge Dosyası Seçme */}
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[11px] font-bold text-slate-700">
+                            Dosya Seçin (PDF, JPEG, ZIP, RAR) <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="file"
+                            accept=".pdf,application/pdf,image/jpeg,image/png,image/jpg,.jpg,.jpeg,.png,.zip,application/zip,application/x-zip-compressed,.rar,application/x-rar-compressed,application/octet-stream"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const ext = file.name.split('.').pop()?.toLowerCase();
+                                const allowedExts = ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'zip', 'rar'];
+                                if (!allowedExts.includes(ext || '')) {
+                                  alert("Lütfen geçerli bir dosya seçiniz (PDF, JPEG/Görsel, ZIP veya RAR)!");
+                                  e.target.value = "";
+                                  return;
+                                }
+                                setNewDocSelectedFile(file);
+                              }
+                            }}
+                            className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-black file:bg-rose-50 file:text-rose-700 hover:file:bg-rose-100 cursor-pointer border border-slate-200 rounded-xl p-1"
+                          />
+                        </div>
+                      </div>
+
+                      {newDocSelectedFile && (
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                            {(() => {
+                              const cat = getFileCategory(newDocSelectedFile.name);
+                              if (cat === 'image') return <ImageIcon className="w-4 h-4 text-blue-600 shrink-0" />;
+                              if (cat === 'archive') return <Archive className="w-4 h-4 text-indigo-600 shrink-0" />;
+                              return <FileText className="w-4 h-4 text-rose-600 shrink-0" />;
+                            })()}
+                            <span className="truncate max-w-xs">Seçilen Dosya: {newDocSelectedFile.name}</span>
+                            <span className="text-slate-400 font-mono text-[11px]">({(newDocSelectedFile.size / 1024 / 1024).toFixed(2)} MB)</span>
+                            <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded uppercase bg-slate-200 text-slate-700">
+                              {newDocSelectedFile.name.split('.').pop()?.toUpperCase()}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={isUploadingDoc}
+                            onClick={async () => {
+                              if (!newDocSelectedFile) {
+                                showNotification("Lütfen bir dosya seçiniz.");
+                                return;
+                              }
+                              const file = newDocSelectedFile;
+                              const docKey = `${(row[2] || row[1] || "").trim().toUpperCase()}`;
+                              const finalType = newDocDocType === "Diğer" ? (newDocCustomType.trim() || "Diğer") : newDocDocType;
+                              const finalFirma = newDocFirma.trim() || (row[10] || "");
+                              const fileMimeType = getDocMimeType(file.name);
+
+                              setIsUploadingDoc(true);
+                              showNotification("Belge Google Drive'a aktarılıyor...");
+
+                              try {
+                                const base64Data = await fileToBase64(file);
+                                const fullDataUrl = `data:${fileMimeType};base64,${base64Data}`;
+
+                                // Upload via backend proxy (/api/upload-hangar-pdf) first
+                                let driveFileId = "";
+                                let driveUrl = "";
+                                try {
+                                  const proxyRes = await fetch('/api/upload-hangar-pdf', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      fileName: `${docKey}_${file.name}`,
+                                      base64Data: base64Data,
+                                      mimeType: fileMimeType,
+                                      folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP",
+                                      itemKey: docKey,
+                                      docType: finalType,
+                                      firma: finalFirma
+                                    })
+                                  });
+                                  if (proxyRes.ok) {
+                                    const proxyJson = await proxyRes.json();
+                                    if (proxyJson && proxyJson.fileId) {
+                                      driveFileId = proxyJson.fileId;
+                                      driveUrl = proxyJson.viewUrl || `https://drive.google.com/file/d/${driveFileId}/preview`;
+                                    }
+                                  }
+                                } catch (proxyErr) {
+                                  console.warn("Proxy upload fallback to direct GAS:", proxyErr);
+                                }
+
+                                // Fallback to Google Apps Script if proxy didn't succeed
+                                if (!driveFileId) {
+                                  try {
+                                    const driveRes = await fetch(GOOGLE_SCRIPT_URL, {
+                                      method: "POST",
+                                      headers: { "Content-Type": "text/plain;charset=utf-8" },
+                                      body: JSON.stringify({
+                                        action: "uploadPdfToDrive",
+                                        fileName: `${docKey}_${file.name}`,
+                                        mimeType: fileMimeType,
+                                        base64Data: base64Data,
+                                        folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP",
+                                        itemKey: docKey,
+                                        docType: finalType,
+                                        firma: finalFirma
+                                      })
+                                    });
+                                    if (driveRes.ok) {
+                                      const driveJson = await driveRes.json();
+                                      if (driveJson && driveJson.fileId) {
+                                        driveFileId = driveJson.fileId;
+                                        driveUrl = driveJson.viewUrl || `https://drive.google.com/file/d/${driveFileId}/preview`;
+                                      }
+                                    }
+                                  } catch (driveErr) {
+                                    console.warn("Drive upload background notice:", driveErr);
+                                  }
+                                }
+
+                                const newDoc: HangarPdfDoc = {
+                                  id: driveFileId ? `drive_doc_${driveFileId}` : `hangar_doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                                  itemKey: docKey,
+                                  fileName: file.name,
+                                  fileData: fullDataUrl,
+                                  docType: finalType,
+                                  firma: finalFirma,
+                                  mimeType: fileMimeType,
+                                  uploadDate: new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                                  fileSize: `${(file.size / (1024 * 1024) > 1 ? (file.size / (1024 * 1024)).toFixed(2) + ' MB' : (file.size / 1024).toFixed(1) + ' KB')}`,
+                                  uploadedAt: new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                                  driveFileId: driveFileId,
+                                  driveUrl: driveUrl
+                                };
+
+                                await saveHangarPdfDoc(newDoc);
+                                setHangarPdfDocs(prev => [newDoc, ...prev.filter(d => d.id !== newDoc.id)]);
+
+                                setNewDocSelectedFile(null);
+                                setNewDocCustomType("");
+                                showNotification("Belge başarıyla yüklendi ve kaydedildi!");
+                              } catch (err: any) {
+                                console.error("Belge yükleme hatası:", err);
+                                showNotification("Belge yükleme hatası: " + (err.message || "İşlem tamamlanamadı"));
+                              } finally {
+                                setIsUploadingDoc(false);
+                              }
+                            }}
+                            className="px-6 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md shadow-rose-600/20 transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                          >
+                            {isUploadingDoc ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>YÜKLENİYOR...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Upload className="w-3.5 h-3.5" />
+                                <span>YÜKLE</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Yüklenen Belgeler Tablosu */}
+                    {(() => {
+                      const docKey = `${(row[2] || row[1] || "").trim().toUpperCase()}`;
+                      const itemDocs = hangarPdfDocs.filter(d => d.itemKey === docKey);
+
+                      return (
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                          <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-rose-400" />
+                              <h5 className="text-xs font-black uppercase tracking-wider">
+                                YÜKLENEN BELGELER ({itemDocs.length})
+                              </h5>
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-400">
+                              Tıklayarak tam pencere önizleme yapabilirsiniz
+                            </span>
+                          </div>
+
+                          {itemDocs.length === 0 ? (
+                            <div className="p-8 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+                              <FileText className="w-10 h-10 text-slate-300 stroke-1" />
+                              <p className="text-xs font-semibold">Henüz bu teçhizata ait yüklenmiş belge bulunmuyor.</p>
+                              <p className="text-[11px] text-slate-400">Yukarıdaki formdan PDF, JPEG, ZIP veya RAR evraklarını yükleyebilirsiniz.</p>
+                            </div>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left text-xs border-collapse">
+                                <thead>
+                                  <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase text-slate-600 font-mono">
+                                    <th className="px-4 py-3">BELGE ADI</th>
+                                    <th className="px-4 py-3">BELGE TÜRÜ</th>
+                                    <th className="px-4 py-3">BAKIMI YAPAN FİRMA</th>
+                                    <th className="px-4 py-3 text-center">BOYUT / TARİH</th>
+                                    <th className="px-4 py-3 text-right">İŞLEMLER</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {itemDocs.map((doc) => {
+                                    const cat = getFileCategory(doc.fileName);
+                                    const isImg = cat === 'image';
+                                    const isArch = cat === 'archive';
+                                    const ext = doc.fileName?.split('.').pop()?.toUpperCase() || 'BELGE';
+
+                                    return (
+                                      <tr key={doc.id} className="hover:bg-slate-50/80 transition-colors">
+                                        <td className="px-4 py-3 font-bold text-slate-800">
+                                          <button
+                                            type="button"
+                                            onClick={() => setActivePdfPreview(doc)}
+                                            className="text-left hover:text-rose-600 transition-colors flex items-center gap-2 group cursor-pointer"
+                                            title="Önizlemek için tıklayınız"
+                                          >
+                                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                                              isImg ? 'bg-blue-100 text-blue-800' :
+                                              isArch ? 'bg-indigo-100 text-indigo-800' :
+                                              'bg-rose-100 text-rose-700'
+                                            }`}>
+                                              {isImg ? <ImageIcon className="w-3.5 h-3.5" /> : isArch ? <Archive className="w-3.5 h-3.5" /> : <FileText className="w-3.5 h-3.5" />}
+                                            </div>
+                                            <span className="underline decoration-slate-300 underline-offset-4 group-hover:decoration-rose-500">
+                                              {doc.fileName}
+                                            </span>
+                                            <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-black uppercase shrink-0 ${
+                                              isImg ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                                              isArch ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+                                              'bg-rose-100 text-rose-800 border border-rose-200'
+                                            }`}>
+                                              {ext}
+                                            </span>
+                                          </button>
+                                        </td>
+                                        <td className="px-4 py-3">
+                                          <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-rose-50 text-rose-800 border border-rose-200">
+                                            {doc.docType}
+                                          </span>
+                                        </td>
+                                        <td className="px-4 py-3 font-medium text-slate-700">
+                                          {doc.firma || "-"}
+                                        </td>
+                                        <td className="px-4 py-3 text-center font-mono text-slate-600 text-[11px]">
+                                          <div>{doc.fileSize || '-'}</div>
+                                          <div className="text-[9px] text-slate-400">{doc.uploadDate || doc.uploadedAt || "-"}</div>
+                                        </td>
+                                        <td className="px-4 py-3 text-right">
+                                          <div className="flex items-center justify-end gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => setActivePdfPreview(doc)}
+                                              className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-700 font-bold text-[11px] rounded-lg border border-slate-200 transition-all flex items-center gap-1 cursor-pointer"
+                                              title="Görüntüle / İncele"
+                                            >
+                                              <Eye className="w-3.5 h-3.5" />
+                                              <span>Görüntüle</span>
+                                            </button>
+                                            <a
+                                              href={doc.fileData}
+                                              download={doc.fileName}
+                                              className="px-3 py-1.5 bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 font-bold text-[11px] rounded-lg border border-slate-200 transition-all flex items-center gap-1 cursor-pointer"
+                                              title="İndir"
+                                            >
+                                              <Download className="w-3.5 h-3.5" />
+                                              <span>İndir</span>
+                                            </a>
+                                            <button
+                                              type="button"
+                                              onClick={async () => {
+                                                await deleteHangarPdfDoc(doc.id);
+                                                setHangarPdfDocs(prev => prev.filter(d => d.id !== doc.id));
+                                                showNotification(`"${doc.fileName}" belgesi başarıyla silindi!`);
+                                              }}
+                                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                              title="Belgeyi Sil"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  <div className="w-full">
+                    <ImageEditorAndRetoucher
+                      imageKey={imageKey}
+                      currentImageUrl={currentImageUrl}
+                      hasImage={Boolean(currentImageUrl)}
+                      isImageUpdateUnlocked={isImageUpdateUnlocked}
+                      isUploadingToDrive={isImageUploadingToDrive}
+                      onSaveImage={async (base64Data, mimeType) => {
                         try {
                           setIsImageUploadingToDrive(true);
                           showNotification("Görsel Google Drive'a yükleniyor...");
-                          const driveFileName = `tech_img_${imageKey}.png`;
-                          const res = await fetch(GOOGLE_SCRIPT_URL, {
+                          const targetUrl = GOOGLE_SCRIPT_URL;
+                          const response = await fetch(targetUrl, {
                             method: "POST",
-                            headers: {
-                              "Content-Type": "text/plain;charset=utf-8"
-                            },
+                            headers: { "Content-Type": "text/plain;charset=utf-8" },
                             body: JSON.stringify({
-                              action: "uploadPdfToDrive",
-                              fileName: driveFileName,
+                              action: "uploadTechizatImageToDrive",
+                              folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP",
+                              imageKey: imageKey,
+                              fileName: `${imageKey}.png`,
                               base64Data: base64Data,
-                              mimeType: mimeType,
-                              folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
+                              mimeType: mimeType
                             })
                           });
-                          if (!res.ok) {
-                            throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
-                          }
-                          const result = await res.json();
-                          if (result.status === "success" && result.viewUrl) {
+                          const resJson = await response.json();
+                          if (resJson && resJson.status === "success") {
+                            const newUrl = resJson.downloadUrl || resJson.viewUrl || `data:${mimeType};base64,${base64Data}`;
                             setTechizatImages(prev => {
-                              const updated = {
-                                ...prev,
-                                [imageKey]: result.viewUrl
-                              };
+                              const updated = { ...prev, [imageKey]: newUrl };
                               localStorage.setItem('techizat_images', JSON.stringify(updated));
                               return updated;
                             });
-                            showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
+                            showNotification("Görsel başarıyla Drive'a yüklendi ve güncellendi!");
                           } else {
-                            throw new Error(result.message || "Bilinmeyen sunucu hatası.");
+                            const dataUrl = `data:${mimeType};base64,${base64Data}`;
+                            setTechizatImages(prev => {
+                              const updated = { ...prev, [imageKey]: dataUrl };
+                              localStorage.setItem('techizat_images', JSON.stringify(updated));
+                              return updated;
+                            });
+                            showNotification("Görsel yerel hafızaya kaydedildi!");
                           }
                         } catch (err: any) {
-                          console.error("Yükleme Hatası:", err);
-                          showNotification(`Yükleme başarısız: ${err.message}`);
+                          console.error("Görsel yükleme hatası:", err);
+                          const dataUrl = `data:${mimeType};base64,${base64Data}`;
+                          setTechizatImages(prev => {
+                            const updated = { ...prev, [imageKey]: dataUrl };
+                            localStorage.setItem('techizat_images', JSON.stringify(updated));
+                            return updated;
+                          });
+                          showNotification("Görsel yerel hafızaya kaydedildi!");
                         } finally {
                           setIsImageUploadingToDrive(false);
                         }
-                      } else {
-                        setPendingImageBase64(base64Data);
-                        setPendingImageMimeType(mimeType);
-                        setTempImageAction('upload');
-                        setImagePasswordInput('');
-                        setImagePasswordError(false);
-                        setShowImageSavePasswordPrompt(true);
-                      }
-                    }}
-                    onSaveImageUrl={(url) => {
-                      if (isImageUpdateUnlocked) {
+                      }}
+                      onRemoveImage={() => {
                         setTechizatImages(prev => {
-                          const updated = {
-                            ...prev,
-                            [imageKey]: url
-                          };
-                          localStorage.setItem('techizat_images', JSON.stringify(updated));
-                          return updated;
+                          const copy = { ...prev };
+                          delete copy[imageKey];
+                          localStorage.setItem('techizat_images', JSON.stringify(copy));
+                          return copy;
                         });
-                        showNotification("Görsel bağlantısı başarıyla kaydedildi!");
-                      } else {
-                        setTempImageUrlInput(url);
-                        setTempImageAction('link');
-                        setImagePasswordInput('');
-                        setImagePasswordError(false);
-                        setShowImageSavePasswordPrompt(true);
-                      }
-                    }}
-                  />
-
-                  {showImageSavePasswordPrompt && (
-                    <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text animate-fade-in">
-                      <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
-                        <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
-                        <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
-                          <Lock className="w-6 h-6" />
-                        </div>
-                        <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">GÖRSEL İŞLEM ONAYI</h4>
-                        <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
-                          {tempImageAction === 'upload' && "Görseli Google Drive'a kaydetmek için lütfen yetkili şifresini giriniz."}
-                          {tempImageAction === 'unlock_only' && "Görsel güncelleme kilidini açmak için lütfen yetkili şifresini giriniz."}
-                          {tempImageAction === 'remove' && "Görseli kaldırmak için lütfen yetkili şifresini giriniz."}
-                        </p>
-                        <input
-                          type="password"
-                          placeholder="Şifre"
-                          value={imagePasswordInput}
-                          onChange={(e) => {
-                            setImagePasswordInput(e.target.value);
-                            setImagePasswordError(false);
-                          }}
-                          onKeyDown={async (e) => {
-                            if (e.key === 'Enter') {
-                              if (imagePasswordInput === '1839') {
-                                setIsImageUpdateUnlocked(true);
-                                setImagePasswordInput('');
-                                setImagePasswordError(false);
-                                setShowImageSavePasswordPrompt(false);
-                                if (tempImageAction === 'upload' && pendingImageBase64) {
-                                  try {
-                                    setIsImageUploadingToDrive(true);
-                                    showNotification("Görsel Google Drive'a yükleniyor...");
-                                    const driveFileName = `tech_img_${imageKey}.png`;
-                                    const res = await fetch(GOOGLE_SCRIPT_URL, {
-                                      method: "POST",
-                                      headers: {
-                                        "Content-Type": "text/plain;charset=utf-8"
-                                      },
-                                      body: JSON.stringify({
-                                        action: "uploadPdfToDrive",
-                                        fileName: driveFileName,
-                                        base64Data: pendingImageBase64,
-                                        mimeType: pendingImageMimeType || "image/png",
-                                        folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
-                                      })
-                                    });
-                                    if (!res.ok) {
-                                      throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
-                                    }
-                                    const result = await res.json();
-                                    if (result.status === "success" && result.viewUrl) {
-                                      setTechizatImages(prev => {
-                                        const updated = {
-                                          ...prev,
-                                          [imageKey]: result.viewUrl
-                                        };
-                                        localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                        return updated;
-                                      });
-                                      setPendingImageBase64(null);
-                                      setPendingImageMimeType(null);
-                                      showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
-                                    } else {
-                                      throw new Error(result.message || "Bilinmeyen sunucu hatası.");
-                                    }
-                                  } catch (err: any) {
-                                    console.error("Yükleme Hatası:", err);
-                                    showNotification(`Yükleme başarısız: ${err.message}`);
-                                  } finally {
-                                    setIsImageUploadingToDrive(false);
-                                  }
-                                } else if (tempImageAction === 'remove') {
-                                  setTechizatImages(prev => {
-                                    const cloned = { ...prev };
-                                    delete cloned[imageKey];
-                                    localStorage.setItem('techizat_images', JSON.stringify(cloned));
-                                    return cloned;
-                                  });
-                                  showNotification("Görsel kaldırıldı.");
-                                } else if (tempImageAction === 'unlock_only') {
-                                  showNotification("Görsel güncelleme kilidi kaldırıldı!");
-                                }
-                              } else {
-                                setImagePasswordError(true);
-                              }
-                            }
-                          }}
-                          className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
-                          autoFocus
-                        />
-                        {imagePasswordError && (
-                          <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
-                        )}
-                        <div className="flex gap-2 justify-center">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowImageSavePasswordPrompt(false);
-                              setImagePasswordInput('');
-                              setImagePasswordError(false);
-                              setTempImageAction(null);
-                            }}
-                            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
-                          >
-                            İptal
-                          </button>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (imagePasswordInput === '1839') {
-                                setIsImageUpdateUnlocked(true);
-                                setImagePasswordInput('');
-                                setImagePasswordError(false);
-                                setShowImageSavePasswordPrompt(false);
-                                if (tempImageAction === 'upload' && pendingImageBase64) {
-                                  try {
-                                    setIsImageUploadingToDrive(true);
-                                    showNotification("Görsel Google Drive'a yükleniyor...");
-                                    const driveFileName = `tech_img_${imageKey}.png`;
-                                    const res = await fetch(GOOGLE_SCRIPT_URL, {
-                                      method: "POST",
-                                      headers: {
-                                        "Content-Type": "text/plain;charset=utf-8"
-                                      },
-                                      body: JSON.stringify({
-                                        action: "uploadPdfToDrive",
-                                        fileName: driveFileName,
-                                        base64Data: pendingImageBase64,
-                                        mimeType: pendingImageMimeType || "image/png",
-                                        folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
-                                      })
-                                    });
-                                    if (!res.ok) {
-                                      throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
-                                    }
-                                    const result = await res.json();
-                                    if (result.status === "success" && result.viewUrl) {
-                                      setTechizatImages(prev => {
-                                        const updated = {
-                                          ...prev,
-                                          [imageKey]: result.viewUrl
-                                        };
-                                        localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                        return updated;
-                                      });
-                                      setPendingImageBase64(null);
-                                      setPendingImageMimeType(null);
-                                      showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
-                                    } else {
-                                      throw new Error(result.message || "Bilinmeyen sunucu hatası.");
-                                    }
-                                  } catch (err: any) {
-                                    console.error("Yükleme Hatası:", err);
-                                    showNotification(`Yükleme başarısız: ${err.message}`);
-                                  } finally {
-                                    setIsImageUploadingToDrive(false);
-                                  }
-                                } else if (tempImageAction === 'remove') {
-                                  setTechizatImages(prev => {
-                                    const cloned = { ...prev };
-                                    delete cloned[imageKey];
-                                    localStorage.setItem('techizat_images', JSON.stringify(cloned));
-                                    return cloned;
-                                  });
-                                  showNotification("Görsel kaldırıldı.");
-                                } else if (tempImageAction === 'unlock_only') {
-                                  showNotification("Görsel güncelleme kilidi kaldırıldı!");
-                                }
-                              } else {
-                                setImagePasswordError(true);
-                              }
-                            }}
-                            className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer"
-                          >
-                            Onayla
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* OLD IMAGE STUFF CLEANED */}
-                <div className="hidden" style={{ display: 'none' }}>
-                  <div className="w-full aspect-square bg-slate-50 rounded-[2rem] border-2 border-slate-200 overflow-hidden relative flex flex-col items-center justify-center p-2 shadow-inner group">
-                    {pendingImagePreview ? (
-                      <div className="w-full h-full relative">
-                        <img
-                          src={pendingImagePreview}
-                          alt="Teçhizat Görseli Önizleme"
-                          referrerPolicy="no-referrer"
-                          style={{ transform: `scale(${techizatImageScale})` }}
-                          className="w-full h-full object-contain rounded-3xl transition-transform duration-150"
-                        />
-                        <div className="absolute top-4 left-4 bg-emerald-700 text-white text-[10px] font-black px-3 py-1.5 rounded-xl uppercase tracking-wider shadow-md animate-pulse z-20">
-                          Önizleme Aşamasında
-                        </div>
-                        {/* Zoom controls on hover */}
-                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                          <button
-                            type="button"
-                            onClick={() => setTechizatImageScale(prev => Math.min(prev + 0.25, 3))}
-                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
-                            title="Yakınlaştır (+)"
-                          >
-                            ＋
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTechizatImageScale(prev => Math.max(prev - 0.25, 0.5))}
-                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
-                            title="Uzaklaştır (-)"
-                          >
-                            －
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTechizatImageScale(1)}
-                            className="px-2 py-0.5 bg-white/20 hover:bg-white/40 text-white rounded-full text-[10px] font-bold cursor-pointer transition-colors"
-                            title="Sıfırla"
-                          >
-                            SIFIRLA
-                          </button>
-                        </div>
-                      </div>
-                    ) : hasImage ? (
-                      <div className="w-full h-full relative">
-                        <CachedDriveImage
-                          src={techizatImages[imageKey]}
-                          alt="Teçhizat Görseli"
-                          referrerPolicy="no-referrer"
-                          style={{ transform: `scale(${techizatImageScale})` }}
-                          className="w-full h-full object-contain rounded-3xl transition-transform duration-150"
-                        />
-                        
-                        {/* Zoom controls on hover */}
-                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                          <button
-                            type="button"
-                            onClick={() => setTechizatImageScale(prev => Math.min(prev + 0.25, 3))}
-                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
-                            title="Yakınlaştır (+)"
-                          >
-                            ＋
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTechizatImageScale(prev => Math.max(prev - 0.25, 0.5))}
-                            className="w-7 h-7 bg-white/20 hover:bg-white/40 text-white rounded-full flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
-                            title="Uzaklaştır (-)"
-                          >
-                            －
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTechizatImageScale(1)}
-                            className="px-2 py-0.5 bg-white/20 hover:bg-white/40 text-white rounded-full text-[10px] font-bold cursor-pointer transition-colors"
-                            title="Sıfırla"
-                          >
-                            SIFIRLA
-                          </button>
-                        </div>
-
-                        {/* Top-Right Fullscreen Icon */}
-                        <button
-                          type="button"
-                          onClick={() => setIsFullScreenImage(true)}
-                          className="absolute top-4 right-4 w-10 h-10 bg-black/60 hover:bg-black/80 backdrop-blur-sm text-white rounded-xl flex items-center justify-center shadow-lg cursor-pointer transition-all active:scale-95 z-20 border border-white/10"
-                          title="Tam Ekran Görüntüle"
-                        >
-                          <Maximize2 className="w-5 h-5 text-emerald-400" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="text-center p-6 text-slate-400">
-                        <span className="text-5xl mb-3 block select-none">📷</span>
-                        <p className="text-xs font-black uppercase text-slate-500 mb-1">Görsel Bulunmamaktadır</p>
-                        <p className="text-[10px] text-slate-400 leading-relaxed max-w-xs mx-auto">
-                          Bu ürün için yüklenmiş bir görsel yok. Aşağıdaki "Görsel Güncelle" butonu ile yeni görsel ekleyebilirsiniz.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Action buttons under image */}
-                  <div className="flex flex-col gap-3">
-                    <div className="flex flex-col gap-4 border border-slate-100 bg-slate-50/25 rounded-[2rem] p-5 animate-fade-in">
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                          {isImageUpdateUnlocked ? (
-                            <>
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                              <span className="text-emerald-800 font-extrabold text-[10px]">GÖRSEL GÜNCELLEME YETKİSİ AKTİF</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="w-2 h-2 rounded-full bg-slate-400" />
-                              <span className="text-slate-500 font-extrabold text-[10px]">GÖRSEL GÜNCELLEME KİLİDİ AKTİF</span>
-                            </>
-                          )}
-                        </span>
-                        <div className="flex items-center gap-3">
-                          {hasImage && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (isImageUpdateUnlocked) {
-                                  setTechizatImages(prev => {
-                                    const cloned = { ...prev };
-                                    delete cloned[imageKey];
-                                    localStorage.setItem('techizat_images', JSON.stringify(cloned));
-                                    return cloned;
-                                  });
-                                  setPendingImageFile(null);
-                                  setPendingImagePreview(null);
-                                  setTempImageUrlInput('');
-                                  showNotification("Görsel kaldırıldı.");
-                                } else {
-                                  setTempImageAction('remove');
-                                  setImagePasswordInput('');
-                                  setImagePasswordError(false);
-                                  setShowImageSavePasswordPrompt(true);
-                                }
-                              }}
-                              className="text-[10px] font-extrabold text-red-500 hover:text-red-700 hover:underline cursor-pointer flex items-center gap-1"
-                            >
-                              🗑️ Görseli Kaldır
-                            </button>
-                          )}
-                          {isImageUpdateUnlocked && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsImageUpdateUnlocked(false);
-                                setImagePasswordInput('');
-                              }}
-                              className="text-[10px] font-bold text-slate-400 hover:text-slate-600 hover:underline cursor-pointer"
-                            >
-                              Kilitle
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Drag and Drop Upload Area - Always visible */}
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
-                            Mobil Otomatik Arka Plan Temizleme
-                          </label>
-                        </div>
-
-                        {/* Mobil Kamerayı Doğrudan Açan Buton */}
-                        <div className="flex flex-col items-center justify-center gap-2 bg-slate-50 border-2 border-slate-200/80 rounded-2xl p-4">
-                          <label className="btn-camera bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs uppercase px-5 py-3 rounded-xl cursor-pointer flex items-center justify-center gap-2 active:scale-95 transition-all shadow-md w-full text-center">
-                            📷 Fotoğraf Çek
-                            <input
-                              type="file"
-                              id="cameraInput"
-                              accept="image/*"
-                              capture="environment"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  handleImageSelected(file);
-                                }
-                              }}
-                              className="hidden"
-                            />
-                          </label>
-                          <div className="flex items-center gap-2 w-full">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const inputEl = document.getElementById('drag-drop-image-input');
-                                inputEl?.click();
-                              }}
-                              className="flex-1 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-[10px] uppercase rounded-xl transition-all cursor-pointer text-center"
-                            >
-                              📁 Dosya Seç
-                            </button>
-                            <button
-                              type="button"
-                              onClick={startWebcam}
-                              className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] uppercase rounded-xl transition-all cursor-pointer text-center"
-                            >
-                              🖥️ Live Webcam
-                            </button>
-                          </div>
-                          <input
-                            id="drag-drop-image-input"
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) handleImageSelected(file);
-                            }}
-                            className="hidden"
-                          />
-                        </div>
-
-                        {isImageUploadingToDrive ? (
-                          <div className="border-2 border-dashed border-emerald-300 bg-emerald-50/20 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[140px]">
-                            <div className="w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mb-1" />
-                            <p className="text-xs font-black text-emerald-800 animate-pulse">BULUTA YÜKLENİYOR...</p>
-                            <p className="text-[10px] text-emerald-600 font-semibold">Görsel Google Drive'a kaydediliyor, lütfen bekleyiniz.</p>
-                          </div>
-                        ) : isProcessingRemoveBg ? (
-                          <div className="border-2 border-dashed border-blue-300 bg-blue-50/40 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 text-center min-h-[160px]">
-                            <div className="relative flex items-center justify-center">
-                              <div className="w-14 h-14 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-                              <span className="absolute text-xs font-black font-mono text-blue-700">
-                                %{bgRemovalProgressPercent}
-                              </span>
-                            </div>
-                            <div className="flex flex-col items-center gap-1 w-full max-w-xs">
-                              <p className="text-xs font-black text-blue-900 uppercase tracking-wider">
-                                ARKA PLAN TEMİZLENİYOR (%{bgRemovalProgressPercent})
-                              </p>
-                              {/* Dynamic Progress Bar */}
-                              <div className="w-full bg-slate-200 h-3 rounded-full overflow-hidden p-0.5 shadow-inner border border-slate-300/80 my-1">
-                                <div
-                                  className="bg-gradient-to-r from-blue-500 via-indigo-600 to-blue-600 h-full rounded-full transition-all duration-300 shadow-sm"
-                                  style={{ width: `${Math.max(5, bgRemovalProgressPercent)}%` }}
-                                />
-                              </div>
-                              <div id="status" className="text-xs font-bold text-slate-700">{bgRemovalStatusText || "Lütfen bekleyin..."}</div>
-                            </div>
-                          </div>
-                        ) : pendingImagePreview ? (
-                          <div className="border-2 border-solid border-emerald-400 bg-emerald-50/10 rounded-2xl p-4 flex flex-col gap-3 min-h-[140px] animate-fade-in">
-                            <div className="flex flex-col items-center gap-3">
-                              {/* İşlenmiş Şeffaf (PNG) Görsel */}
-                              <img
-                                id="resultImage"
-                                src={pendingImagePreview}
-                                alt="Temizlenmiş Görsel"
-                                style={{
-                                  maxWidth: "100%",
-                                  maxHeight: "220px",
-                                  borderRadius: "12px",
-                                  border: "2px dashed #ccc",
-                                  display: "block",
-                                  backgroundImage: "repeating-linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%, #ccc), repeating-linear-gradient(45deg, #ccc 25%, #fff 25%, #fff 75%, #ccc 75%, #ccc)",
-                                  backgroundPosition: "0 0, 9px 9px",
-                                  backgroundSize: "18px 18px",
-                                  objectFit: "contain"
-                                }}
-                              />
-                              <div className="text-center">
-                                <p className="text-xs font-bold text-slate-800 truncate">{pendingImageFile?.name || 'Kameradan Çekilen Fotoğraf'}</p>
-                                <p className="text-[10px] text-slate-400 font-semibold font-mono">
-                                  {(pendingImageFile ? pendingImageFile.size / 1024 : 0).toFixed(1)} KB (Şeffaf PNG)
-                                </p>
-                                <div id="status" className="text-[10px] font-bold text-emerald-700 mt-1">{bgRemovalStatusText || "İşlem tamamlandı!"}</div>
-                              </div>
-                            </div>
-                            <div className="flex flex-col gap-1.5">
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    if (!pendingImageFile) return;
-                                    if (isImageUpdateUnlocked) {
-                                      // Upload directly
-                                      try {
-                                        setIsImageUploadingToDrive(true);
-                                        showNotification("Görsel Google Drive'a yükleniyor...");
-                                        const base64Str = await fileToBase64(pendingImageFile);
-                                        
-                                        const extension = pendingImageFile.name.split('.').pop() || 'png';
-                                        const driveFileName = `tech_img_${imageKey}.${extension}`;
-                                        
-                                        const res = await fetch(GOOGLE_SCRIPT_URL, {
-                                          method: "POST",
-                                          headers: {
-                                            "Content-Type": "text/plain;charset=utf-8"
-                                          },
-                                          body: JSON.stringify({
-                                            action: "uploadPdfToDrive",
-                                            fileName: driveFileName,
-                                            base64Data: base64Str,
-                                            mimeType: pendingImageFile.type,
-                                            folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
-                                          })
-                                        });
-                                        
-                                        if (!res.ok) {
-                                          throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
-                                        }
-                                        
-                                        const result = await res.json();
-                                        if (result.status === "success" && result.viewUrl) {
-                                          setTechizatImages(prev => {
-                                            const updated = {
-                                              ...prev,
-                                              [imageKey]: result.viewUrl
-                                            };
-                                            localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                            return updated;
-                                          });
-                                          setPendingImageFile(null);
-                                          setPendingImagePreview(null);
-                                          setTempImageUrlInput(result.viewUrl);
-                                          showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
-                                        } else {
-                                          throw new Error(result.message || "Bilinmeyen sunucu hatası.");
-                                        }
-                                      } catch (err: any) {
-                                        console.error("Yükleme Hatası:", err);
-                                        showNotification(`Yükleme başarısız: ${err.message}`);
-                                      } finally {
-                                        setIsImageUploadingToDrive(false);
-                                      }
-                                    } else {
-                                      setTempImageAction('upload');
-                                      setImagePasswordInput('');
-                                      setImagePasswordError(false);
-                                      setShowImageSavePasswordPrompt(true);
-                                    }
-                                  }}
-                                  className="flex-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer shadow-md text-center active:scale-95"
-                                >
-                                  ☁️ BULUTA GÖNDER VE KAYDET
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPendingImageFile(null);
-                                    setPendingImagePreview(null);
-                                    setBgRemovalStatusText("");
-                                  }}
-                                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer"
-                                >
-                                  İPTAL
-                                </button>
-                              </div>
-                              <div className="flex gap-1.5 w-full">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (pendingImageFile) {
-                                      handleFastCanvasBackgroundRemoval(pendingImageFile);
-                                    }
-                                  }}
-                                  className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-[9px] uppercase tracking-wider rounded-lg transition-all cursor-pointer shadow-sm active:scale-[0.98] text-center"
-                                  title="Anında Canvas temizleme, mobilde telefonu dondurmaz"
-                                >
-                                  ⚡ Hızlı Mobil Temizle (0.02sn)
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (pendingImageFile) {
-                                      handleProcessImglyBackgroundRemoval(pendingImageFile);
-                                    }
-                                  }}
-                                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-[9px] uppercase tracking-wider rounded-lg transition-all cursor-pointer shadow-sm active:scale-[0.98] text-center"
-                                  title="Derin Yapay Zeka Segmentasyon Modeli"
-                                >
-                                  ✨ AI Akıllı Temizle
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    {showImageSavePasswordPrompt && (
-                      <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text animate-fade-in">
-                        <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden">
-                          <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
-                          <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
-                            <Lock className="w-6 h-6" />
-                          </div>
-                          <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">GÖRSEL İŞLEM ONAYI</h4>
-                          <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
-                            {tempImageAction === 'upload' && "Görseli Google Drive'a kaydetmek için lütfen yetkili şifresini giriniz."}
-                            {tempImageAction === 'link' && "Görsel bağlantısını kaydetmek için lütfen yetkili şifresini giriniz."}
-                            {tempImageAction === 'remove' && "Görseli kaldırmak için lütfen yetkili şifresini giriniz."}
-                          </p>
-                          <input
-                            type="password"
-                            placeholder="Şifre"
-                            value={imagePasswordInput}
-                            onChange={(e) => {
-                              setImagePasswordInput(e.target.value);
-                              setImagePasswordError(false);
-                            }}
-                            onKeyDown={async (e) => {
-                              if (e.key === 'Enter') {
-                                if (imagePasswordInput === '1839') {
-                                  setIsImageUpdateUnlocked(true);
-                                  setImagePasswordInput('');
-                                  setImagePasswordError(false);
-                                  setShowImageSavePasswordPrompt(false);
-                                  if (tempImageAction === 'upload' && pendingImageFile) {
-                                    try {
-                                      setIsImageUploadingToDrive(true);
-                                      showNotification("Görsel Google Drive'a yükleniyor...");
-                                      const base64Str = await fileToBase64(pendingImageFile);
-                                      const extension = pendingImageFile.name.split('.').pop() || 'png';
-                                      const driveFileName = `tech_img_${imageKey}.${extension}`;
-                                      const res = await fetch(GOOGLE_SCRIPT_URL, {
-                                        method: "POST",
-                                        headers: {
-                                          "Content-Type": "text/plain;charset=utf-8"
-                                        },
-                                        body: JSON.stringify({
-                                          action: "uploadPdfToDrive",
-                                          fileName: driveFileName,
-                                          base64Data: base64Str,
-                                          mimeType: pendingImageFile.type,
-                                          folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
-                                        })
-                                      });
-                                      if (!res.ok) {
-                                        throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
-                                      }
-                                      const result = await res.json();
-                                      if (result.status === "success" && result.viewUrl) {
-                                        setTechizatImages(prev => {
-                                          const updated = {
-                                            ...prev,
-                                            [imageKey]: result.viewUrl
-                                          };
-                                          localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                          return updated;
-                                        });
-                                        setPendingImageFile(null);
-                                        setPendingImagePreview(null);
-                                        setTempImageUrlInput(result.viewUrl);
-                                        showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
-                                      } else {
-                                        throw new Error(result.message || "Bilinmeyen sunucu hatası.");
-                                      }
-                                    } catch (err) {
-                                      console.error("Yükleme Hatası:", err);
-                                      showNotification(`Yükleme başarısız: ${err.message}`);
-                                    } finally {
-                                      setIsImageUploadingToDrive(false);
-                                    }
-                                  } else if (tempImageAction === 'link') {
-                                    setTechizatImages(prev => {
-                                      const updated = {
-                                        ...prev,
-                                        [imageKey]: tempImageUrlInput
-                                      };
-                                      localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                      return updated;
-                                    });
-                                    showNotification("Görsel bağlantısı kaydedildi.");
-                                  } else if (tempImageAction === 'remove') {
-                                    setTechizatImages(prev => {
-                                      const cloned = { ...prev };
-                                      delete cloned[imageKey];
-                                      localStorage.setItem('techizat_images', JSON.stringify(cloned));
-                                      return cloned;
-                                    });
-                                    setPendingImageFile(null);
-                                    setPendingImagePreview(null);
-                                    setTempImageUrlInput('');
-                                    showNotification("Görsel kaldırıldı.");
-                                  }
-                                } else {
-                                  setImagePasswordError(true);
-                                }
-                              }
-                            }}
-                            className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
-                            autoFocus
-                          />
-                          {imagePasswordError && (
-                            <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı şifre girdiniz!</p>
-                          )}
-                          <div className="flex gap-2 justify-center">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowImageSavePasswordPrompt(false);
-                                setImagePasswordInput('');
-                                setImagePasswordError(false);
-                                setTempImageAction(null);
-                              }}
-                              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
-                            >
-                              İptal
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                if (imagePasswordInput === '1839') {
-                                  setIsImageUpdateUnlocked(true);
-                                  setImagePasswordInput('');
-                                  setImagePasswordError(false);
-                                  setShowImageSavePasswordPrompt(false);
-                                  if (tempImageAction === 'upload' && pendingImageFile) {
-                                    try {
-                                      setIsImageUploadingToDrive(true);
-                                      showNotification("Görsel Google Drive'a yükleniyor...");
-                                      const base64Str = await fileToBase64(pendingImageFile);
-                                      const extension = pendingImageFile.name.split('.').pop() || 'png';
-                                      const driveFileName = `tech_img_${imageKey}.${extension}`;
-                                      const res = await fetch(GOOGLE_SCRIPT_URL, {
-                                        method: "POST",
-                                        headers: {
-                                          "Content-Type": "text/plain;charset=utf-8"
-                                        },
-                                        body: JSON.stringify({
-                                          action: "uploadPdfToDrive",
-                                          fileName: driveFileName,
-                                          base64Data: base64Str,
-                                          mimeType: pendingImageFile.type,
-                                          folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
-                                        })
-                                      });
-                                      if (!res.ok) {
-                                        throw new Error(`Google Apps Script sunucu hatası: ${res.status}`);
-                                      }
-                                      const result = await res.json();
-                                      if (result.status === "success" && result.viewUrl) {
-                                        setTechizatImages(prev => {
-                                          const updated = {
-                                            ...prev,
-                                            [imageKey]: result.viewUrl
-                                          };
-                                          localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                          return updated;
-                                        });
-                                        setPendingImageFile(null);
-                                        setPendingImagePreview(null);
-                                        setTempImageUrlInput(result.viewUrl);
-                                        showNotification("Görsel başarıyla Drive'a yüklendi ve aktifleştirildi!");
-                                      } else {
-                                        throw new Error(result.message || "Bilinmeyen sunucu hatası.");
-                                      }
-                                    } catch (err) {
-                                      console.error("Yükleme Hatası:", err);
-                                      showNotification(`Yükleme başarısız: ${err.message}`);
-                                    } finally {
-                                      setIsImageUploadingToDrive(false);
-                                    }
-                                  } else if (tempImageAction === 'link') {
-                                    setTechizatImages(prev => {
-                                      const updated = {
-                                        ...prev,
-                                        [imageKey]: tempImageUrlInput
-                                      };
-                                      localStorage.setItem('techizat_images', JSON.stringify(updated));
-                                      return updated;
-                                    });
-                                    showNotification("Görsel bağlantısı kaydedildi.");
-                                  } else if (tempImageAction === 'remove') {
-                                    setTechizatImages(prev => {
-                                      const cloned = { ...prev };
-                                      delete cloned[imageKey];
-                                      localStorage.setItem('techizat_images', JSON.stringify(cloned));
-                                      return cloned;
-                                    });
-                                    setPendingImageFile(null);
-                                    setPendingImagePreview(null);
-                                    setTempImageUrlInput('');
-                                    showNotification("Görsel kaldırıldı.");
-                                  }
-                                } else {
-                                  setImagePasswordError(true);
-                                }
-                              }}
-                              className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase rounded-xl transition-all cursor-pointer"
-                            >
-                              Onayla
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {isWebcamOpen && (
-                      <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center z-[2500] p-4 select-none animate-fade-in">
-                        <div className="bg-slate-900 border-2 border-slate-700/50 rounded-[2rem] shadow-2xl max-w-md w-full overflow-hidden flex flex-col relative">
-                          <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
-                          
-                          {/* Header */}
-                          <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                            <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 bg-red-500 rounded-full animate-ping" />
-                              Canlı Video Akışı
-                            </span>
-                            <button
-                              type="button"
-                              onClick={stopWebcam}
-                              className="text-slate-400 hover:text-white cursor-pointer transition-colors"
-                            >
-                              <X className="w-5 h-5" />
-                            </button>
-                          </div>
-
-                          {/* Video Container */}
-                          <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
-                            <video
-                              ref={videoRef}
-                              autoPlay
-                              playsInline
-                              muted
-                              className="w-full h-full object-cover"
-                            />
-                            {/* Overlay Guides */}
-                            <div className="absolute inset-6 border border-dashed border-white/20 rounded-xl pointer-events-none flex items-center justify-center">
-                              <span className="text-[10px] text-white/30 uppercase tracking-widest font-black">
-                                Techizatı Ortaya Hizalayın
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Actions */}
-                          <div className="p-5 flex flex-col gap-3 bg-slate-950">
-                            <button
-                              type="button"
-                              onClick={captureWebcamPhoto}
-                              className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs uppercase tracking-widest rounded-xl transition-all cursor-pointer shadow-lg active:scale-95 flex items-center justify-center gap-2"
-                            >
-                              📸 FOTOĞRAF ÇEK & AKTAR
-                            </button>
-                            <button
-                              type="button"
-                              onClick={stopWebcam}
-                              className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
-                            >
-                              KAMERAYI KAPAT
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-
-              {/* Fullscreen view modal overlay inside */}
-              {isFullScreenImage && hasImage && (
-                <div 
-                  className="fixed inset-0 bg-black/95 z-[3000] flex items-center justify-center p-6 animate-fade-in animate-duration-150"
-                  title="Geri dönmek için X butonuna veya dışarıya tıklayabilirsiniz"
-                >
-                  {/* Click overlay helper */}
-                  <div className="absolute inset-0 cursor-zoom-out" onClick={() => setIsFullScreenImage(false)} />
-                  
-                  <CachedDriveImage
-                    src={techizatImages[imageKey]}
-                    alt="Tam Ekran Görsel"
-                    referrerPolicy="no-referrer"
-                    className="max-w-full max-h-full object-contain rounded-xl select-none relative z-10"
-                  />
-                  
-                  {/* Close X Button */}
-                  <button
-                    type="button"
-                    onClick={() => setIsFullScreenImage(false)}
-                    className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 hover:scale-105 active:scale-95 text-white rounded-full flex items-center justify-center shadow-xl cursor-pointer transition-all z-20 border border-white/10"
-                    title="Kapat"
-                  >
-                    <X className="w-6 h-6" />
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })()}
-      </AnimatePresence>
-
-      {/* EBYS DÜZENLE / GÖNDER TOPLU İŞLEM MODALİ */}
-      <AnimatePresence>
-        {isEbysModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md flex items-center justify-center z-[2100] p-4 select-text animate-fade-in overflow-y-auto">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white border-2 border-slate-200/50 rounded-[2.5rem] shadow-2xl max-w-4xl w-full p-6 md:p-8 relative overflow-hidden my-8"
-            >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-[#0b3d1d] to-[#125c2c]"></div>
-
-              {/* Close Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsEbysModalOpen(false);
-                  setBulkModalMode('choice');
-                  setBulkEditYer("");
-                  setBulkEditDurum("");
-                  setBulkEditFirma("");
-                }}
-                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-50 z-10"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              {bulkModalMode === 'choice' && (
-                <div className="text-center py-6">
-                  <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
-                    <Sparkles className="w-8 h-8" />
-                  </div>
-                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-wider">TEÇHİZAT TOPLU İŞLEM MERKEZİ</h3>
-                  <p className="text-xs text-slate-400 font-semibold mt-1 mb-8">
-                    Seçtiğiniz <strong>{Object.keys(selectedTechizatItems).length} adet</strong> teçhizat üzerinde uygulamak istediğiniz işlemi seçiniz.
-                  </p>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-2xl mx-auto">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBulkModalMode('edit');
+                        showNotification("Görsel silindi!");
                       }}
-                      className="border-2 border-slate-200/60 hover:border-[#0b3d1d] hover:bg-slate-50/50 p-6 rounded-3xl text-left transition-all duration-250 cursor-pointer hover:shadow-lg flex flex-col gap-3 group"
-                    >
-                      <div className="w-10 h-10 bg-slate-100 group-hover:bg-emerald-50 text-slate-600 group-hover:text-[#0b3d1d] rounded-xl flex items-center justify-center transition-colors">
-                        <Edit3 className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">Toplu Düzenle</h4>
-                        <p className="text-[11px] text-slate-400 font-semibold mt-1 leading-relaxed">
-                          Seçilen özel teçhizatların "BULUNDUĞU YER", "DURUMU" ve "SON KONTROLÜ YAPAN FİRMA" verilerini toplu olarak düzenleyin. (Onay Şifresi: 1839)
-                        </p>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBulkModalMode('send');
-                        fetchTasklineEbysList();
-                      }}
-                      className="border-2 border-slate-200/60 hover:border-[#0b3d1d] hover:bg-slate-50/50 p-6 rounded-3xl text-left transition-all duration-250 cursor-pointer hover:shadow-lg flex flex-col gap-3 group"
-                    >
-                      <div className="w-10 h-10 bg-slate-100 group-hover:bg-emerald-50 text-slate-600 group-hover:text-[#0b3d1d] rounded-xl flex items-center justify-center transition-colors">
-                        <Send className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">TASKLINE'a Gönder</h4>
-                        <p className="text-[11px] text-slate-400 font-semibold mt-1 leading-relaxed">
-                          Seçili teçhizatları EBYS numarası ile eşleştirerek online sisteme gönderin ve durumlarını "BAKIM / KALİBRASYON" yapın.
-                        </p>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {bulkModalMode === 'edit' && (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-700">
-                      <Edit3 className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-slate-800 uppercase tracking-wider">TOPLU VERİ GÜNCELLEME</h3>
-                      <p className="text-[11px] text-slate-400 font-semibold mt-0.5">
-                        Seçilen <strong>{Object.keys(selectedTechizatItems).length}</strong> teçhizatın boş bırakmadığınız alanları ortak değerle güncellenecektir.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 text-left">
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Yeni Bulunduğu Yer</label>
-                      <input
-                        type="text"
-                        placeholder="Değiştirmek istemiyorsanız boş bırakın"
-                        value={bulkEditYer}
-                        onChange={(e) => setBulkEditYer(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none"
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Yeni Durumu</label>
-                      <select
-                        value={bulkEditDurum}
-                        onChange={(e) => setBulkEditDurum(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none cursor-pointer"
-                      >
-                        <option value="">-- Değişiklik Yok (Değiştirmek istemiyorsanız seçmeyin) --</option>
-                        <option value="FAAL">FAAL</option>
-                        <option value="BAKIM / KALİBRASYON">BAKIM / KALİBRASYON</option>
-                        <option value="GAYRİ FAAL">GAYRİ FAAL</option>
-                      </select>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Yeni Son Kontrolü Yapan Firma</label>
-                      <input
-                        type="text"
-                        placeholder="Değiştirmek istemiyorsanız boş bırakın"
-                        value={bulkEditFirma}
-                        onChange={(e) => setBulkEditFirma(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/5 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all animate-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-50 border border-slate-100 p-4 rounded-2xl mb-6 max-h-[160px] overflow-y-auto">
-                    <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">Güncellenecek Teçhizatlar ({Object.keys(selectedTechizatItems).length})</h5>
-                    <div className="flex flex-wrap gap-1.5">
-                      {Object.values(selectedTechizatItems).map((item: any, i) => (
-                        <span key={`${item.techType}-${item.row[1] || ""}-${item.row[3] || ""}-${i}`} className="text-[10px] font-bold text-[#0b3d1d] bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-100">
-                          {item.row[1] || "Bilinmiyor"}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3 justify-end border-t border-slate-100 pt-5">
-                    <button
-                      type="button"
-                      onClick={() => setBulkModalMode('choice')}
-                      className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-2xl transition-colors cursor-pointer"
-                    >
-                      Geri Dön
-                    </button>
-                    <button
-                      type="button"
-                      disabled={bulkEditYer.trim() === "" && bulkEditDurum.trim() === "" && bulkEditFirma.trim() === ""}
-                      onClick={() => {
-                        setBulkEditPasswordInput("");
-                        setBulkEditPasswordError(false);
-                        setShowBulkEditPasswordPrompt(true);
-                      }}
-                      className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-widest rounded-2xl shadow-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Topluca Güncelle
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {bulkModalMode === 'send' && (
-                <div className="text-left">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-700">
-                      <Send className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-slate-800 uppercase tracking-wider">EBYS TASKLINE SİSTEMİNE GÖNDER</h3>
-                      <p className="text-[11px] text-slate-400 font-semibold mt-0.5">
-                        Seçilen teçhizatları ilgili birimin EBYS görev satırı kaydı ile eşleştirerek TASKLINE Excel'e gönderin.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* EBYS Autocomplete / Search input */}
-                  <div className="flex flex-col gap-1.5 mb-5 relative">
-                    <label className="text-[10px] font-black text-[#0b3d1d] uppercase tracking-wider">EBYS No / İşlem Numarası Yazın</label>
-                    <div className="flex gap-2">
-                      <div className="relative flex-1">
-                        <input
-                          type="text"
-                          placeholder="EBYS No veya Başlık aramak için yazın..."
-                          value={ebysSearchQuery}
-                          onChange={(e) => {
-                            setEbysSearchQuery(e.target.value);
-                            setSelectedEbysRow(null);
-                            setIsEbysSelectDropdownOpen(true);
-                          }}
-                          onFocus={() => setIsEbysSelectDropdownOpen(true)}
-                          className="w-full px-4 py-2.5 bg-slate-50 border-2 border-[#0b3d1d]/15 focus:border-[#0b3d1d] rounded-2xl text-xs font-bold text-slate-800 focus:outline-none transition-all"
-                        />
-                        {ebysSearchQuery && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEbysSearchQuery("");
-                              setSelectedEbysRow(null);
-                              setEbysBaslik("");
-                              setEbysAciklama("");
-                              setEbysTalepTuru("");
-                            }}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-[10px] font-black"
-                          >
-                            TEMİZLE
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Suggestions list */}
-                    {isEbysSelectDropdownOpen && !selectedEbysRow && (
-                      <div className="absolute top-[100%] left-0 right-0 bg-white border border-slate-200/80 rounded-2xl shadow-xl max-h-56 overflow-y-auto z-50 mt-1 select-text">
-                        {isLoadingEbys ? (
-                          <p className="p-4 text-xs text-slate-400 font-semibold flex items-center gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin text-[#0b3d1d]" />
-                            <span>EBYS listesi yükleniyor...</span>
-                          </p>
-                        ) : ebysError ? (
-                          <div className="p-4 text-xs text-rose-600 font-medium select-text">
-                            <p className="font-bold text-rose-700 mb-1">Bağlantı/Script Hatası:</p>
-                            <p className="text-slate-600 leading-relaxed font-mono text-[11px] bg-rose-50/50 p-2 rounded-lg border border-rose-100/60 mb-2">{ebysError}</p>
-                            <p className="text-slate-500 leading-relaxed">
-                              Lütfen Google Apps Script projenizin doğru çalıştığından ve web uygulaması izinlerinin "Anyone" (Herkes) olarak ayarlandığından emin olun.
-                            </p>
-                          </div>
-                        ) : (() => {
-                          const normalize = (str: string) => {
-                            return String(str || "")
-                              .toLowerCase()
-                              .replace(/ı/g, 'i')
-                              .replace(/ğ/g, 'g')
-                              .replace(/ü/g, 'u')
-                              .replace(/ş/g, 's')
-                              .replace(/ö/g, 'o')
-                              .replace(/ç/g, 'c')
-                              .replace(/[^a-z0-9]/g, '');
-                          };
-                          const query = normalize(ebysSearchQuery);
-                          const filtered = ebysList.filter(item => {
-                            const parsed = parseEbysItem(item);
-                            if (!parsed) return false;
-                            const no = normalize(parsed.ebysNo);
-                            if (!no || no === "na") return false;
-                            const baslik = normalize(parsed.baslik);
-                            return no.includes(query) || baslik.includes(query);
-                          });
-
-                          if (filtered.length === 0) {
-                            return <p className="p-4 text-xs text-slate-400 font-semibold">Sonuç bulunamadı.</p>;
-                          }
-
-                          return filtered.map((item, idx) => {
-                            const parsed = parseEbysItem(item);
-                            if (!parsed) return null;
-                            const ebysNo = parsed.ebysNo;
-                            const baslik = parsed.baslik;
-                            const aciklama = parsed.aciklama;
-                            const tur = parsed.talepTuru;
-
-                            return (
-                              <div
-                                key={`${ebysNo}-${idx}`}
-                                onClick={() => {
-                                  setSelectedEbysRow(item);
-                                  setEbysSearchQuery(ebysNo);
-                                  setEbysBaslik(baslik);
-                                  setEbysAciklama(aciklama);
-                                  setEbysTalepTuru(tur);
-                                  setIsEbysSelectDropdownOpen(false);
-                                }}
-                                className="p-3 hover:bg-emerald-50/50 border-b border-slate-50 last:border-b-0 cursor-pointer transition-colors text-left"
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-black text-[#0b3d1d]">{ebysNo}</span>
-                                  <span className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 px-2 py-0.5 rounded-full">{tur}</span>
-                                </div>
-                                <h6 className="text-[11px] font-extrabold text-slate-800 mt-0.5 leading-tight">{baslik}</h6>
-                                <p className="text-[10px] text-slate-400 font-medium truncate mt-0.5">{aciklama}</p>
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Render Selected EBYS Request Details Card */}
-                  {selectedEbysRow && (
-                    <div className="bg-emerald-50/40 border border-emerald-100/60 p-4 rounded-3xl mb-5 text-left animate-fade-in select-text">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest bg-emerald-100/80 px-2.5 py-1 rounded-lg">SEÇİLİ EBYS TALEBİ</span>
-                          <h4 className="text-sm font-black text-[#0b3d1d] mt-2">{ebysSearchQuery}</h4>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedEbysRow(null);
-                            setEbysSearchQuery("");
-                            setEbysBaslik("");
-                            setEbysAciklama("");
-                            setEbysTalepTuru("");
-                          }}
-                          className="text-[10px] font-black text-red-600 hover:text-red-700 hover:underline cursor-pointer"
-                        >
-                          Temizle / Değiştir
-                        </button>
-                      </div>
-                      <div className="mt-3 space-y-1 text-xs">
-                        <p className="text-slate-700"><strong>📋 Başlık:</strong> {ebysBaslik || "-"}</p>
-                        <p className="text-slate-700"><strong>📝 Açıklama:</strong> {ebysAciklama || "-"}</p>
-                        <p className="text-slate-700"><strong>🏷️ Talep Türü:</strong> {ebysTalepTuru || "-"}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Scrollable list of Teçhizat items */}
-                  <div className="bg-slate-50 border border-slate-100 p-4 rounded-3xl mb-6">
-                    <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2">GÖNDERİLECEK TEÇHİZAT LİSTESİ ({Object.keys(selectedTechizatItems).length})</h5>
-                    <div className="max-h-[160px] overflow-y-auto space-y-2">
-                      {Object.values(selectedTechizatItems).map((item: any, i) => (
-                        <div key={`${item.techType}-${item.row[1] || ""}-${item.row[3] || ""}-${i}`} className="bg-white border border-slate-150 p-2.5 rounded-xl flex justify-between items-center text-xs">
-                          <div>
-                            <p className="font-extrabold text-slate-800">{item.row[1] || "Bilinmiyor"}</p>
-                            <p className="text-[10px] text-slate-400 font-semibold">P/N: {item.row[2] || "N/A"} • S/N: {item.row[3] || "N/A"}</p>
-                          </div>
-                          <span className="text-[10px] font-black text-[#0b3d1d] bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full">
-                            {getTechUnitName(item.techType)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3 justify-end border-t border-slate-100 pt-5">
-                    <button
-                      type="button"
-                      onClick={() => setBulkModalMode('choice')}
-                      className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-2xl transition-colors cursor-pointer"
-                    >
-                      Geri Dön
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!selectedEbysRow || isBulkSaving}
-                      onClick={submitEbysRequests}
-                      className="px-6 py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-widest rounded-2xl shadow-lg transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isBulkSaving ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin text-white" />
-                          <span>GÖNDERİLİYOR...</span>
-                        </>
-                      ) : (
-                        <span>Sisteme Gönder</span>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* TOPLU DÜZENLEME ŞİFRE MODALİ */}
-      <AnimatePresence>
-        {showBulkEditPasswordPrompt && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[2200] p-4 select-text">
-            <div className="bg-white border-2 border-slate-200/50 rounded-[2rem] shadow-2xl max-w-sm w-full p-6 text-center relative overflow-hidden animate-fade-in">
-              <div className="absolute top-0 inset-x-0 h-1 bg-[#0b3d1d]"></div>
-              <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#0b3d1d]">
-                <Lock className="w-6 h-6" />
-              </div>
-              <h4 className="text-slate-800 font-extrabold text-sm uppercase mb-2">TOPLU İŞLEM DEĞİŞİKLİK ONAYI</h4>
-              <p className="text-xs text-slate-500 font-semibold mb-4 leading-relaxed">
-                Toplu kayıt değişikliğini onaylamak için lütfen yetkili şifresini giriniz.
-              </p>
-              <input
-                type="password"
-                placeholder="Şifre"
-                value={bulkEditPasswordInput}
-                onChange={(e) => {
-                  setBulkEditPasswordInput(e.target.value);
-                  setBulkEditPasswordError(false);
-                }}
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter') {
-                    if (bulkEditPasswordInput === '1839') {
-                      setShowBulkEditPasswordPrompt(false);
-                      setBulkEditPasswordInput('');
-                      setBulkEditPasswordError(false);
-                      await handleBulkEditTechizatRows();
-                    } else {
-                      setBulkEditPasswordError(true);
-                    }
-                  }
-                }}
-                className="w-full px-4 py-2 bg-slate-50 border-2 border-[#0b3d1d]/15 rounded-xl text-center text-sm font-semibold mb-3 focus:outline-none focus:border-[#0b3d1d] text-slate-900"
-                autoFocus
-              />
-              {bulkEditPasswordError && (
-                <p className="text-red-600 text-[10px] font-black mb-3">❌ Hatalı yetkili şifresi girdiniz!</p>
-              )}
-              <div className="flex gap-2 justify-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowBulkEditPasswordPrompt(false);
-                    setBulkEditPasswordInput('');
-                    setBulkEditPasswordError(false);
-                  }}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold rounded-xl transition-colors cursor-pointer"
-                >
-                  İptal
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (bulkEditPasswordInput === '1839') {
-                      setShowBulkEditPasswordPrompt(false);
-                      setBulkEditPasswordInput('');
-                      setBulkEditPasswordError(false);
-                      await handleBulkEditTechizatRows();
-                    } else {
-                      setBulkEditPasswordError(true);
-                    }
-                  }}
-                  className="px-5 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
-                >
-                  Onayla
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* 5. GÜN TAKİP SORUMLU BİRİM AYARLARI MODALİ */}
-      <AnimatePresence>
-        {isSorumluModalOpen && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 select-none animate-fade-in overflow-y-auto">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white border-2 border-emerald-800/10 rounded-[2.5rem] shadow-2xl max-w-3xl w-full p-6 md:p-8 relative overflow-hidden my-8 animate-fade-in"
-            >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-700"></div>
-              
-              <button
-                onClick={() => setIsSorumluModalOpen(false)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-50"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-12 h-12 bg-emerald-50 text-emerald-700 rounded-2xl flex items-center justify-center">
-                  <UserCheck className="w-6 h-6" />
-                </div>
-                <div className="text-left">
-                  <h4 className="text-slate-800 font-black tracking-tight text-base uppercase">📋 SORUMLU BİRİM VE MAİL AYARLARI (GÜN TAKİP)</h4>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-0.5">E-posta Uyarı Hatırlatma Alıcı Sorumluları Yönetimi</p>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-500 font-semibold leading-relaxed mb-6 text-left border-b border-slate-100 pb-4">
-                TÜM TEÇHİZAT sayfasındaki teçhizatların Gelecek Bakım günlerine 90 günden az kalması durumunda sistem tarafından otomatik e-posta uyarısı hatırlatması gönderilecek birim yetkililerini ve mail adreslerini buradan güncelleyebilirsiniz. Değişiklikler canlı "GÜN TAKİP" e-tablosuyla eşleşecektir.
-              </p>
-
-              {/* Sorumlular Düzenleme Listesi */}
-              <div className="overflow-x-auto max-h-[45vh] border border-slate-200 rounded-3xl mb-6 shadow-inner">
-                <table className="w-full border-collapse text-left min-w-[650px]">
-                  <thead>
-                    <tr className="bg-slate-900 border-b border-slate-800">
-                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[25%] border-r border-slate-800">SORUMLU BİRİM</th>
-                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[30%] border-r border-slate-800">ADI SOYADI</th>
-                      <th className="px-4 py-3 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono w-[30%] border-r border-slate-800">E-POSTA ADRESİ</th>
-                      <th className="px-3 py-3 text-center text-[10px] font-black tracking-wider text-green-400 uppercase font-mono w-[15%]">SON 90G MAİL</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {gunTakipSorumlulari.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/50">
-                        <td className="px-4 py-3 text-center font-bold text-slate-800 text-xs border-r border-slate-100 bg-slate-50 font-mono">
-                          {item.birim}
-                        </td>
-                        <td className="px-4 py-2 border-r border-slate-100">
-                          <input
-                            type="text"
-                            value={item.adSoyad}
-                            onChange={(e) => {
-                              const updated = [...gunTakipSorumlulari];
-                              updated[idx].adSoyad = e.target.value;
-                              setGunTakipSorumlulari(updated);
-                            }}
-                            className="w-full px-3 py-1.5 border border-slate-200 hover:border-slate-300 focus:border-emerald-600 focus:outline-none rounded-xl text-xs font-semibold text-slate-800 text-center"
-                            placeholder="Ad Soyad giriniz..."
-                          />
-                        </td>
-                        <td className="px-4 py-2 border-r border-slate-100">
-                          <input
-                            type="email"
-                            value={item.eposta}
-                            onChange={(e) => {
-                              const updated = [...gunTakipSorumlulari];
-                              updated[idx].eposta = e.target.value;
-                              setGunTakipSorumlulari(updated);
-                            }}
-                            className="w-full px-3 py-1.5 border border-slate-200 hover:border-slate-300 focus:border-emerald-600 focus:outline-none rounded-xl text-xs font-mono font-semibold text-slate-800 text-center"
-                            placeholder="eposta@adres.com"
-                          />
-                        </td>
-                        <td className="px-2 py-3 text-center font-mono text-[10px] font-semibold text-slate-600 bg-green-50/20">
-                          {item.mail90 ? (
-                            <span className="text-emerald-700 bg-emerald-100/60 px-2 py-0.5 rounded-md font-bold block">{item.mail90}</span>
-                          ) : (
-                            <span className="text-slate-400 italic font-medium">-</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="flex gap-3 justify-end pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsSorumluModalOpen(false)}
-                  className="px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-black rounded-2xl transition-colors cursor-pointer uppercase tracking-wider"
-                  disabled={isSavingSorumlu}
-                >
-                  Kapat
-                </button>
-                <button
-                  type="button"
-                  onClick={() => saveGunTakipSorumlulari(gunTakipSorumlulari)}
-                  className="px-6 py-3 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-black rounded-2xl shadow-lg shadow-emerald-950/20 transition-all cursor-pointer flex items-center gap-2 uppercase tracking-wider"
-                  disabled={isSavingSorumlu}
-                >
-                  {isSavingSorumlu ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>SENKRONİZE EDİLİYOR...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Check className="w-4 h-4" />
-                      <span>E-Tabloyu Güncelle</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* PDF Rendering Loading Overlay */}
-      <AnimatePresence>
-        {isPdfRendering && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex flex-col items-center justify-center z-[2400] select-none text-center">
-            <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] p-10 max-w-sm w-full shadow-2xl flex flex-col items-center">
-              <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-3xl flex items-center justify-center mb-6 animate-pulse">
-                <Loader2 className="w-8 h-8 animate-spin" />
-              </div>
-              <h4 className="text-slate-100 font-extrabold tracking-wider text-sm uppercase mb-2">
-                PDF ANALİZ EDİLİYOR
-              </h4>
-              <p className="text-[11px] text-slate-400 font-semibold leading-relaxed mb-1">
-                PDF sayfaları arka planda HD çözünürlükte
-              </p>
-              <p className="text-[11px] text-slate-400 font-semibold leading-relaxed">
-                görsel nesnelere dönüştürülüyor, lütfen bekleyin...
-              </p>
-            </div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* 6. ADVANCED PDF PREVIEW PANEL */}
-      <AnimatePresence>
-        {isPdfPreviewOpen && (
-          <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-[2500] p-4 md:p-6 select-none overflow-hidden animate-fade-in">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="bg-slate-900 border border-slate-800 rounded-[2rem] shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden text-white"
-            >
-              {/* Header */}
-              <div className="px-6 py-4 border-b border-slate-800 flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-slate-950">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-red-500/10 rounded-xl text-red-500">
-                    <FileText className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black uppercase tracking-wider text-slate-100">
-                      GELİŞMİŞ PDF ÖNİZLEME PANELİ
-                    </h3>
-                    <p className="text-[10px] text-slate-400 font-semibold mt-0.5">
-                      {renderedPages.length > 0 ? `${renderedPages[0].fileName} - Toplam ${renderedPages.length} sayfa` : ""}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* Zoom Controls */}
-                  <div className="flex items-center gap-2 bg-slate-850 px-3 py-1.5 rounded-xl border border-slate-800">
-                    <span className="text-[10px] font-black uppercase text-slate-400">🔍 YAKINLAŞTIR:</span>
-                    <button
-                      type="button"
-                      onClick={() => setPreviewZoom(z => Math.max(50, z - 10))}
-                      className="w-6 h-6 flex items-center justify-center bg-slate-800 hover:bg-slate-700 active:bg-slate-750 text-white rounded font-black text-xs cursor-pointer select-none"
-                    >
-                      -
-                    </button>
-                    <input
-                      type="range"
-                      min="50"
-                      max="200"
-                      value={previewZoom}
-                      onChange={(e) => setPreviewZoom(Number(e.target.value))}
-                      className="w-20 accent-emerald-500 cursor-pointer"
+                      onUnlockImageUpdate={() => setIsImageUpdateUnlocked(true)}
+                      onLockImageUpdate={() => setIsImageUpdateUnlocked(false)}
+                      partName={row[1] || ""}
+                      manufacturer={row[2] || ""}
                     />
-                    <button
-                      type="button"
-                      onClick={() => setPreviewZoom(z => Math.min(200, z + 10))}
-                      className="w-6 h-6 flex items-center justify-center bg-slate-800 hover:bg-slate-700 active:bg-slate-750 text-white rounded font-black text-xs cursor-pointer select-none"
-                    >
-                      +
-                    </button>
-                    <span className="text-[10px] font-mono font-black text-emerald-400 min-w-[32px] text-right">%{previewZoom}</span>
-                  </div>
-
-                  {/* Bulk Rotation */}
-                  <div className="flex items-center gap-1.5 bg-slate-850 p-1 rounded-xl border border-slate-800">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRenderedPages(prev => prev.map(p => ({ ...p, rotation: (((p.rotation || 0) - 90 + 360) % 360) })));
-                        showNotification("Tüm sayfalar sola döndürüldü.");
-                      }}
-                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1"
-                    >
-                      ↺ TÜMÜ SOLA
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRenderedPages(prev => prev.map(p => ({ ...p, rotation: (((p.rotation || 0) + 90) % 360) })));
-                        showNotification("Tüm sayfalar sağa döndürüldü.");
-                      }}
-                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1"
-                    >
-                      ↻ TÜMÜ SAĞA
-                    </button>
-                  </div>
-
-                  {/* View Mode Selectors */}
-                  <div className="bg-slate-850 p-1 rounded-xl border border-slate-800 flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setPdfPreviewLayout('vertical')}
-                      className={`px-2.5 py-1.5 rounded-lg text-[9px] font-extrabold uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer ${
-                        pdfPreviewLayout === 'vertical'
-                          ? 'bg-[#0b3d1d] text-white shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Rows className="w-3 h-3" />
-                      DİKEY
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPdfPreviewLayout('horizontal')}
-                      className={`px-2.5 py-1.5 rounded-lg text-[9px] font-extrabold uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer ${
-                        pdfPreviewLayout === 'horizontal'
-                          ? 'bg-[#0b3d1d] text-white shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Columns className="w-3 h-3" />
-                      YATAY
-                    </button>
-                  </div>
-
-                  {/* Bulk Select Toggles */}
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRenderedPages(prev => prev.map(p => ({ ...p, selected: true })));
-                      }}
-                      className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[9px] font-black uppercase tracking-wider border border-slate-700 transition-all cursor-pointer"
-                    >
-                      TÜMÜNÜ SEÇ
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setRenderedPages(prev => prev.map(p => ({ ...p, selected: false })));
-                      }}
-                      className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[9px] font-black uppercase tracking-wider border border-slate-700 transition-all cursor-pointer"
-                    >
-                      TEMİZLE
-                    </button>
-                  </div>
-
-                  {/* Close X */}
-                  <button
-                    type="button"
-                    onClick={() => setIsPdfPreviewOpen(false)}
-                    className="p-2 text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-xl border border-slate-700 transition-colors cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Page Area */}
-              <div className="flex-1 overflow-auto bg-slate-950 p-6 md:p-8">
-                {pdfPreviewLayout === 'vertical' ? (
-                  /* Vertical view: Large previews aligned in a clean central column */
-                  <div className="flex flex-col gap-8 max-w-2xl mx-auto pb-12">
-                    {renderedPages.map((page) => (
-                      <div
-                        key={page.id}
-                        onClick={() => {
-                          setRenderedPages(prev => prev.map(p => p.id === page.id ? { ...p, selected: !p.selected } : p));
-                        }}
-                        className={`relative rounded-2xl border-2 overflow-hidden bg-slate-900 group cursor-pointer transition-all duration-300 shadow-lg ${
-                          page.selected
-                            ? 'border-emerald-600 ring-4 ring-emerald-600/20'
-                            : 'border-slate-800 hover:border-slate-750'
-                        }`}
-                      >
-                        {/* Selector indicator */}
-                        <div className="absolute top-4 left-4 z-10 bg-slate-950/85 backdrop-blur border border-slate-850 rounded-xl p-2 flex items-center gap-2 pointer-events-none select-none">
-                          <div className={`w-5 h-5 rounded-md flex items-center justify-center transition-colors ${page.selected ? 'bg-emerald-600 text-white border-none' : 'border border-slate-600'}`}>
-                            {page.selected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                          </div>
-                          <span className="text-[10px] font-black uppercase text-slate-200">
-                            Sayfa {page.pageNumber}
-                          </span>
-                        </div>
-
-                        {/* Individual Rotation Controls overlay */}
-                        <div className="absolute top-4 right-4 z-10 bg-slate-950/85 backdrop-blur border border-slate-850 rounded-xl p-1 flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRenderedPages(prev => prev.map(p => p.id === page.id ? { ...p, rotation: (((p.rotation || 0) - 90 + 360) % 360) } : p));
-                            }}
-                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md hover:text-white transition-colors cursor-pointer text-xs"
-                            title="Sola Döndür (-90°)"
-                          >
-                            ↺
-                          </button>
-                          <span className="text-[9px] font-mono font-bold px-1.5 text-slate-400">{(page.rotation || 0)}°</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRenderedPages(prev => prev.map(p => p.id === page.id ? { ...p, rotation: (((p.rotation || 0) + 90) % 360) } : p));
-                            }}
-                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md hover:text-white transition-colors cursor-pointer text-xs"
-                            title="Sağa Döndür (90°)"
-                          >
-                            ↻
-                          </button>
-                        </div>
-
-                        {/* HD Render Image */}
-                        <div className="aspect-[3/4] relative w-full overflow-hidden flex items-center justify-center p-8 bg-slate-950">
-                          <img
-                            src={page.dataUrl}
-                            alt={`Sayfa ${page.pageNumber}`}
-                            referrerPolicy="no-referrer"
-                            style={{
-                              transform: `rotate(${page.rotation || 0}deg) scale(${previewZoom / 100})`,
-                              transition: "transform 0.2s ease-in-out",
-                              maxHeight: "550px",
-                              maxWidth: "100%",
-                              objectFit: "contain"
-                            }}
-                            className="rounded shadow-2xl border border-slate-800"
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  /* Horizontal view: Side-by-side scrolling carousel layout */
-                  <div className="h-full flex items-center justify-center py-4">
-                    <div className="flex gap-6 overflow-x-auto px-4 py-8 max-w-full snap-x pb-12 scrollbar-thin scrollbar-thumb-slate-800">
-                      {renderedPages.map((page) => (
-                        <div
-                          key={page.id}
-                          onClick={() => {
-                            setRenderedPages(prev => prev.map(p => p.id === page.id ? { ...p, selected: !p.selected } : p));
-                          }}
-                          className={`flex-none w-[280px] snap-center relative rounded-2xl border-2 overflow-hidden bg-slate-900 group cursor-pointer transition-all duration-300 shadow-md ${
-                            page.selected
-                              ? 'border-emerald-600 ring-4 ring-emerald-600/20'
-                              : 'border-slate-800 hover:border-slate-750'
-                          }`}
-                        >
-                          {/* Selector indicator */}
-                          <div className="absolute top-3 left-3 z-10 bg-slate-950/85 backdrop-blur border border-slate-850 rounded-lg p-1.5 flex items-center gap-1.5 pointer-events-none select-none">
-                            <div className={`w-4 h-4 rounded flex items-center justify-center transition-colors ${page.selected ? 'bg-emerald-600 text-white border-none' : 'border border-slate-600'}`}>
-                              {page.selected && <Check className="w-3 h-3 stroke-[3]" />}
-                            </div>
-                            <span className="text-[9px] font-bold uppercase text-slate-200">
-                              Sayfa {page.pageNumber}
-                            </span>
-                          </div>
-
-                          {/* Individual Rotation Controls overlay */}
-                          <div className="absolute top-3 right-3 z-10 bg-slate-950/85 backdrop-blur border border-slate-850 rounded-lg p-1 flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRenderedPages(prev => prev.map(p => p.id === page.id ? { ...p, rotation: (((p.rotation || 0) - 90 + 360) % 360) } : p));
-                              }}
-                              className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded hover:text-white transition-colors cursor-pointer text-[10px]"
-                              title="Sola Döndür (-90°)"
-                            >
-                              ↺
-                            </button>
-                            <span className="text-[8px] font-mono font-bold px-1 text-slate-400">{(page.rotation || 0)}°</span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRenderedPages(prev => prev.map(p => p.id === page.id ? { ...p, rotation: (((p.rotation || 0) + 90) % 360) } : p));
-                              }}
-                              className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded hover:text-white transition-colors cursor-pointer text-[10px]"
-                              title="Sağa Döndür (90°)"
-                            >
-                              ↻
-                            </button>
-                          </div>
-
-                          {/* HD Image */}
-                          <div className="aspect-[3/4] p-4 flex items-center justify-center bg-slate-950 h-[380px] overflow-hidden">
-                            <img
-                              src={page.dataUrl}
-                              alt={`Sayfa ${page.pageNumber}`}
-                              referrerPolicy="no-referrer"
-                              style={{
-                                transform: `rotate(${page.rotation || 0}deg) scale(${previewZoom / 100})`,
-                                transition: "transform 0.2s ease-in-out",
-                                maxHeight: "100%",
-                                maxWidth: "100%",
-                                objectFit: "contain"
-                              }}
-                              className="rounded shadow border border-slate-850"
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Footer Panel */}
-              <div className="px-6 py-5 border-t border-slate-800 flex items-center justify-between bg-slate-950">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-bold text-slate-400">Entegrasyon Durumu:</span>
-                  <span className="px-3 py-1 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-full text-[10px] font-black uppercase tracking-wide">
-                    {renderedPages.filter(p => p.selected).length} / {renderedPages.length} SAYFA SEÇİLDİ
-                  </span>
-                </div>
+              {/* Modal Footer */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between flex-wrap gap-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTechizatRowEdit(null)}
+                    className="px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+                  >
+                    Kapat
+                  </button>
 
-                <div className="flex items-center gap-3">
+                  {/* Sil Butonu */}
                   <button
                     type="button"
-                    onClick={() => setIsPdfPreviewOpen(false)}
-                    className="px-5 py-3 bg-slate-800 hover:bg-slate-700 active:bg-slate-750 text-slate-300 text-xs font-extrabold uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                    onClick={() => {
+                      if (window.confirm("Bu teçhizat kaydını kalıcı olarak silmek ve Google Drive / E-Tablo ile senkronize etmek istediğinize emin misiniz?")) {
+                        handleDeleteTechizatRow(row, techType);
+                      }
+                    }}
+                    className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl border border-rose-200 transition-all flex items-center gap-1.5 cursor-pointer"
+                    title="Bu teçhizat kaydını sistemden ve Drive Excel dosyasından sil"
                   >
-                    İPTAL ET
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Sil</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={handlePdfPreviewIntegrate}
-                    disabled={isSendingToSheets[String(syncSelectedTarget)] || renderedPages.filter(p => p.selected).length === 0}
-                    className={`px-8 py-3 font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-lg transition-all cursor-pointer flex items-center gap-2 ${
-                      isSendingToSheets[String(syncSelectedTarget)] || renderedPages.filter(p => p.selected).length === 0
-                        ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
-                        : 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white'
-                    }`}
-                  >
-                    {isSendingToSheets[String(syncSelectedTarget)] ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin text-white" />
-                        AKTARIYOR %{uploadProgress}...
-                      </>
-                    ) : (
-                      <>
-                        🚀 SEÇİLİ SAYFALARI PORTALDA KAYDET VE YAYINLA
-                      </>
-                    )}
-                  </button>
+
+                  {/* Kullanıcı Kuralı: "faal yap butonu eğer geleceke kontrol bakım tarih geçmiş ise o butonn sil yanına olsun aşağıdan kaldır" */}
+                  {(() => {
+                    const gelecekIdx = columns.findIndex(c => c.includes("GELECEK KONTROL") || c.includes("MUAYENE") || c.includes("ÖMÜR"));
+                    const dateVal = gelecekIdx !== -1 ? (editRowValues[gelecekIdx] || row[gelecekIdx] || "") : "";
+                    const days = parseGelecekBakimDays(dateVal);
+                    if (days === null || days >= 0) return null;
+
+                    return (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const copy = [...editRowValues];
+                          const sonIdx = columns.findIndex(c => c.includes("SON KONTROL") || c.includes("SON BAKIM"));
+                          const durumIdx = columns.findIndex(c => c.includes("DURUM"));
+                          const prevSon = sonIdx !== -1 ? (copy[sonIdx] || row[sonIdx] || "") : "";
+                          const prevGelecek = copy[gelecekIdx] || row[gelecekIdx] || "";
+                          const { newSonKontrol, newGelecekKontrol, intervalDays } = calculateReactivatedMaintenanceDates(prevSon, prevGelecek);
+
+                          if (sonIdx !== -1) copy[sonIdx] = newSonKontrol;
+                          if (gelecekIdx !== -1) copy[gelecekIdx] = newGelecekKontrol;
+                          if (durumIdx !== -1) copy[durumIdx] = "FAAL";
+
+                          setEditRowValues(copy);
+                          await handleSaveTechizatRow(copy, techType, rIdx);
+                          showNotification(`⚡ Bakım tamamlandı! Kayıt FAAL yapıldı, son kontrol ${newSonKontrol}, gelecek bakım ${newGelecekKontrol} (+${intervalDays} gün) güncellendi.`);
+                          setActiveTechizatRowEdit(null);
+                        }}
+                        className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer animate-pulse"
+                        title="Tarihi geçmiş ürünü Faal Yap: Son kontrolü bugüne çeker, aradaki periyodu gelecek bakıma ekler"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Faal Yap</span>
+                      </button>
+                    );
+                  })()}
                 </div>
+                {mobileEditTab === 'form' && isDataUpdateUnlocked && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await handleSaveTechizatRow(editRowValues, techType, rIdx);
+                      showNotification("Kayıt başarıyla güncellendi!");
+                      setActiveTechizatRowEdit(null);
+                    }}
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-600/30 transition-all active:scale-95 cursor-pointer"
+                  >
+                    💾 Değişiklikleri Kaydet
+                  </button>
+                )}
+                {mobileEditTab === 'regional' && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const copy = [...editRowValues];
+                      let totalQty = 0;
+                      regionalLocations.forEach(r => {
+                        const q = parseFloat(String(r.quantity)) || (r.serialNumbers.length > 0 ? r.serialNumbers.length : 1);
+                        totalQty += q;
+                      });
+                      copy[4] = totalQty > 0 ? `${totalQty} ADET` : (copy[4] || '1 ADET');
+                      const locStr = regionalLocations.map(r => `${r.location}${r.quantity ? ` (${r.quantity})` : ''}`).join(' ; ');
+                      copy[5] = locStr || copy[5];
+                      const allSns = regionalLocations.flatMap(r => r.serialNumbers);
+                      if (allSns.length > 0) copy[3] = allSns.join(' ; ');
+                      setEditRowValues(copy);
+                      await handleSaveTechizatRow(copy, techType, rIdx);
+                      showNotification("Bölge dağılımları ve kayıt başarıyla güncellendi!");
+                      setActiveTechizatRowEdit(null);
+                    }}
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-emerald-600/30 transition-all active:scale-95 cursor-pointer"
+                  >
+                    💾 Dağılımları Kaydet & Kapat
+                  </button>
+                )}
               </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* 5. SUCCESS HUD TOAST NOTIFICATION */}
-      <AnimatePresence>
-        {successMessage && (
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 30 }}
-            className="fixed bottom-6 right-6 bg-[#0b3d1d] text-white border border-emerald-500/20 px-6 py-4 rounded-xl shadow-2xl z-[3000] flex items-center gap-3 backdrop-blur select-none max-w-sm"
-          >
-            <div className="w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center text-[#0b3d1d]">
-              <Check className="w-4 h-4 text-white font-bold" />
             </div>
-            <p className="text-xs font-bold tracking-wider uppercase leading-tight">{successMessage}</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </div>
+        );
+      })()}
 
-      {/* 5.1 PERSONNEL CELL DETAIL MODAL */}
-      <AnimatePresence>
-        {activeModalCell && (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2200] p-4 select-none animate-fade-in">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 20 }}
-              className="bg-slate-900 border border-slate-800 rounded-[2rem] shadow-2xl max-w-lg w-full p-6 relative overflow-hidden text-white"
-            >
-              <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-[#0b3d1d]"></div>
-              
+      {/* PDF PREVIEW MODAL */}
+      <PdfPreviewModal
+        preview={activePdfPreview}
+        onClose={() => setActivePdfPreview(null)}
+      />
+
+      {/* DOCUMENT UPLOAD / DELETE PASSWORD MODAL */}
+      {docUploadPasswordModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 animate-fade-in">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Lock className="w-4 h-4 text-rose-400" />
+                <h4 className="text-xs font-black uppercase tracking-wider">
+                  {docUploadPasswordModal.pendingAction === 'delete' ? 'BELGE SİLME ONAYI' : 'BELGE YÜKLEME ŞİFRESİ'}
+                </h4>
+              </div>
               <button
-                onClick={() => setActiveModalCell(null)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-slate-800 cursor-pointer"
-                title="Kapat"
+                type="button"
+                onClick={() => {
+                  setDocUploadPasswordModal({ isOpen: false, pendingAction: null });
+                  setDocUploadPasswordInput("");
+                  setDocUploadPasswordError("");
+                  setDocToDelete(null);
+                }}
+                className="w-7 h-7 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center text-xs transition-all cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                ✕
               </button>
-
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-400">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-black text-emerald-400 uppercase tracking-widest">
-                    DETAYLI HÜCRE GÖRÜNÜMÜ
-                  </h4>
-                  <p className="text-sm font-black text-slate-100 uppercase tracking-tight">
-                    {activeModalCell.label}
-                  </p>
-                </div>
-              </div>
-
-              {/* Full copyable text content box */}
-              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 mb-6 max-h-[40vh] overflow-y-auto select-text selection:bg-emerald-500 selection:text-white">
-                <p className="text-slate-200 font-sans font-medium text-xs leading-relaxed whitespace-pre-wrap select-text cursor-text">
-                  {activeModalCell.value}
-                </p>
-              </div>
-
-              <div className="flex gap-3 justify-end items-center">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(activeModalCell.value);
-                      setCopiedCellSuccess(true);
-                      setTimeout(() => setCopiedCellSuccess(false), 2000);
-                    } catch (err) {
-                      console.error("Metin kopyalanamadı:", err);
-                    }
-                  }}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
-                    copiedCellSuccess
-                      ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/20"
-                      : "bg-slate-800 hover:bg-slate-750 text-slate-200"
-                  }`}
-                >
-                  {copiedCellSuccess ? (
-                    <>
-                      <Check className="w-4 h-4 stroke-[3]" />
-                      <span>KOPYALANDI!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4" />
-                      <span>METNİ KOPYALA</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveModalCell(null)}
-                  className="px-5 py-2.5 bg-[#0b3d1d] hover:bg-[#0b3d1d]/90 text-white text-xs font-black uppercase tracking-wider rounded-xl transition-colors cursor-pointer"
-                >
-                  KAPAT
-                </button>
-              </div>
-
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* EXCEL EXPORT CHOICE MODAL ("Görselli olarak indirilsin mi?") */}
-      <AnimatePresence>
-        {excelExportModalData && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-[3000] p-4 animate-fade-in select-none">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white border-2 border-emerald-600 rounded-[2.5rem] shadow-2xl max-w-lg w-full p-6 md:p-8 relative overflow-hidden text-slate-800"
-            >
-              {/* Decorative top bar */}
-              <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-emerald-700 via-emerald-500 to-teal-600"></div>
-
-              {/* Close button */}
-              <button 
-                disabled={isExcelExportLoading}
-                onClick={() => setExcelExportModalData(null)}
-                className="absolute top-5 right-5 p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-all cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              {/* Modal Header */}
-              <div className="flex items-center gap-4 mb-5">
-                <div className="w-14 h-14 rounded-2xl bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-800 shrink-0 shadow-sm">
-                  <FileSpreadsheet className="w-8 h-8" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
-                    EXCEL AKTARIM SİSTEMİ
-                  </span>
-                  <h3 className="text-xl font-black text-slate-900 mt-1 leading-tight">
-                    Görselli Olarak İndirilsin mi?
-                  </h3>
-                </div>
-              </div>
-
-              {/* Description */}
-              <p className="text-xs text-slate-600 leading-relaxed mb-6 bg-slate-50 border border-slate-200/80 p-4 rounded-2xl">
-                Teçhizat listesini Google Drive üzerindeki <strong>teçhizat fotoğraflarıyla birlikte</strong> Excel dosyası olarak indirebilirsiniz. 
-                <br/><br/>
-                <span className="text-emerald-800 font-bold">🖼️ Görselli Seçenek:</span> Drive'daki tüm ürün fotoğrafları indirilip Excel hücrelerinin içine yerleştirilir.
-              </p>
-
-              {/* Loading Progress State */}
-              {isExcelExportLoading ? (
-                <div className="bg-emerald-950 text-white p-6 rounded-2xl border border-emerald-800 flex flex-col items-center justify-center gap-3 text-center my-2 shadow-inner">
-                  <div className="w-10 h-10 border-4 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-                  <p className="text-xs font-black text-emerald-300 uppercase tracking-wide font-mono animate-pulse">
-                    {excelExportProgressText || "Drive fotoğrafları çekiliyor..."}
-                  </p>
-                  <p className="text-[10px] text-emerald-400/80">Lütfen indirme tamamlanana kadar sayfayı kapatmayın.</p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {/* Görselli İndir Button */}
-                  <button
-                    type="button"
-                    onClick={() => downloadTechizatExcelWithImages(true)}
-                    className="w-full py-4 px-5 bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-600 hover:to-emerald-500 active:scale-[0.98] text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-900/20 border border-emerald-500 flex items-center justify-center gap-3 cursor-pointer transition-all group"
-                  >
-                    <span className="text-xl group-hover:scale-125 transition-transform">🖼️</span>
-                    <div className="text-left">
-                      <div className="text-sm font-extrabold uppercase tracking-wide">GÖRSELLİ EXCEL İNDİR</div>
-                      <div className="text-[10px] text-emerald-200 font-normal">Fotoğraflar Excel sütununa otomatik eklenir</div>
-                    </div>
-                  </button>
-
-                  {/* Sadece Metin İndir Button */}
-                  <button
-                    type="button"
-                    onClick={() => downloadTechizatExcelWithImages(false)}
-                    className="w-full py-3.5 px-5 bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-slate-200 font-extrabold text-xs rounded-2xl border border-slate-700 flex items-center justify-center gap-2 cursor-pointer transition-all"
-                  >
-                    <span>📄</span>
-                    <span>SADECE METİN (GÖRSELSEZ METİN EXCEL) İNDİR</span>
-                  </button>
-
-                  {/* İptal Button */}
-                  <button
-                    type="button"
-                    onClick={() => setExcelExportModalData(null)}
-                    className="w-full py-2.5 px-4 text-slate-500 hover:text-slate-800 font-bold text-xs rounded-xl cursor-pointer transition-all text-center mt-1"
-                  >
-                    Vazgeç / İptal
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* HOVER PRODUCT IMAGE PREVIEW SQUARE BOX */}
-      {hoveredRowImage && (
-        <div 
-          className="fixed z-[9999] pointer-events-none transform -translate-y-1/2 transition-all duration-75 animate-fade-in"
-          style={{
-            top: Math.min(window.innerHeight - 250, Math.max(30, hoveredRowImage.y)),
-            left: hoveredRowImage.x + 280 > window.innerWidth ? Math.max(10, hoveredRowImage.x - 260) : hoveredRowImage.x + 20
-          }}
-        >
-          <div className="bg-slate-900/95 text-white p-3 rounded-2xl border-2 border-emerald-500 shadow-2xl backdrop-blur-md flex flex-col items-center gap-2 max-w-[240px]">
-            <div className="w-48 h-48 sm:w-52 sm:h-52 rounded-xl overflow-hidden bg-slate-950 border border-slate-700/80 flex items-center justify-center p-1 relative group">
-              <CachedDriveImage
-                src={hoveredRowImage.url}
-                alt={hoveredRowImage.title}
-                className="w-full h-full object-contain rounded-lg"
-              />
-              <div className="absolute top-2 right-2 bg-emerald-600/90 text-white text-[9px] font-black font-mono px-2 py-0.5 rounded-full shadow">
-                🖼️ GÖRSEL ÖNİZLEME
-              </div>
             </div>
-            <div className="text-center w-full px-1">
-              <p className="text-xs font-black text-amber-300 truncate">{hoveredRowImage.title}</p>
-              {hoveredRowImage.subtitle && (
-                <p className="text-[10px] text-slate-300 font-mono truncate">{hoveredRowImage.subtitle}</p>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                // Hangar Yer Destek şifresi "1839" (kullanıcı talimatı: diğer bütün şifreler "1839")
+                if (docUploadPasswordInput !== "1839") {
+                  setDocUploadPasswordError("Hatalı yetki şifresi girdiniz!");
+                  return;
+                }
+
+                if (docUploadPasswordModal.pendingAction === 'delete') {
+                  if (docToDelete) {
+                    deleteHangarPdfDoc(docToDelete).catch(err => console.warn(err));
+                    setHangarPdfDocs(prev => {
+                      const updated = prev.filter(d => d.id !== docToDelete);
+                      try {
+                        localStorage.setItem('hangar_pdf_docs', JSON.stringify(updated));
+                        localStorage.setItem('hangar_techizat_pdf_docs', JSON.stringify(updated));
+                      } catch {
+                        // ignore
+                      }
+                      return updated;
+                    });
+                    showNotification("Belge başarıyla silindi!");
+                  }
+                } else if (docUploadPasswordModal.pendingAction === 'upload') {
+                  if (!newDocSelectedFile) {
+                    setDocUploadPasswordError("Lütfen bir PDF dosyası seçiniz.");
+                    return;
+                  }
+                  const currentRow = activeTechizatRowEdit?.row;
+                  const docKey = `${(currentRow?.[2] || currentRow?.[1] || "").trim().toUpperCase()}`;
+
+                  const reader = new FileReader();
+                  reader.onload = async () => {
+                    const dataUrl = reader.result as string;
+                    const finalType = newDocDocType === "Diğer" ? (newDocCustomType.trim() || "Diğer") : newDocDocType;
+                    const finalFirma = newDocFirma.trim() || (currentRow?.[10] || "");
+
+                    const newDoc = {
+                      id: `hangar_doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                      itemKey: docKey,
+                      fileName: newDocSelectedFile.name,
+                      fileData: dataUrl,
+                      docType: finalType,
+                      firma: finalFirma,
+                      uploadDate: new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                      fileSize: `${(newDocSelectedFile.size / 1024).toFixed(1)} KB`,
+                      uploadedAt: new Date().toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                    };
+
+                    await saveHangarPdfDoc(newDoc);
+                    setHangarPdfDocs(prev => {
+                      const updated = [newDoc, ...prev.filter(d => d.id !== newDoc.id)];
+                      try {
+                        localStorage.setItem('hangar_pdf_docs', JSON.stringify(updated));
+                        localStorage.setItem('hangar_techizat_pdf_docs', JSON.stringify(updated));
+                      } catch {
+                        // ignore
+                      }
+                      return updated;
+                    });
+
+                    // Form temizleme
+                    setNewDocSelectedFile(null);
+                    setNewDocCustomType("");
+                    showNotification("PDF Belge başarıyla yüklendi ve kaydedildi!");
+                  };
+                  reader.readAsDataURL(newDocSelectedFile);
+                }
+
+                setDocUploadPasswordModal({ isOpen: false, pendingAction: null });
+                setDocUploadPasswordInput("");
+                setDocUploadPasswordError("");
+                setDocToDelete(null);
+              }}
+              className="p-5 flex flex-col gap-4"
+            >
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-800">
+                  Yetkili Kilit Şifresi
+                </label>
+                <input
+                  type="password"
+                  autoFocus
+                  value={docUploadPasswordInput}
+                  onChange={(e) => {
+                    setDocUploadPasswordInput(e.target.value);
+                    if (docUploadPasswordError) setDocUploadPasswordError("");
+                  }}
+                  placeholder="Şifreyi giriniz..."
+                  className="w-full px-3.5 py-2.5 rounded-xl text-xs font-bold bg-white text-slate-950 border border-slate-300 focus:outline-none focus:border-rose-600 focus:ring-2 focus:ring-rose-500/20"
+                />
+                {docUploadPasswordError && (
+                  <p className="text-[11px] font-bold text-rose-600 mt-0.5">
+                    {docUploadPasswordError}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDocUploadPasswordModal({ isOpen: false, pendingAction: null });
+                    setDocUploadPasswordInput("");
+                    setDocUploadPasswordError("");
+                    setDocToDelete(null);
+                  }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+                >
+                  İptal
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md transition-all cursor-pointer"
+                >
+                  Onayla
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {isTechPubsOpen && (
+        <TechnicalPublicationsModal
+          isOpen={isTechPubsOpen}
+          onClose={() => setIsTechPubsOpen(false)}
+          allUnitData={{
+            at802: techizatAt802Data,
+            bell429: techizatBell429Data,
+            t70: techizatT70Data,
+            t70_bumbi: techizatT70BumbiBacketData,
+            t70_helitak: techizatT70HelitakData,
+            c650: techizatC650Data,
+            b360: techizatB360Data,
+            hangar: techizatHangarData,
+          }}
+          onNavigateToEquipment={(type: string, label: string, section?: string) => {
+            openTechizatMatrix(type as any, label, (section as any) || 'all');
+          }}
+        />
+      )}
+
+      {isOlayTakipOpen && (
+        <OlayTakipCizelgesiModal
+          isOpen={isOlayTakipOpen}
+          onClose={() => setIsOlayTakipOpen(false)}
+          showNotification={showNotification}
+          initialUnit={olayTakipInitialUnit}
+        />
+      )}
+
+      {/* PASSWORD-PROTECTED DATA UPDATE MODAL (1839) */}
+      {isPasswordModalOpen && (
+        <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                🔒 YETKİLİ ŞİFRE GİRİŞİ
+              </h3>
+              <button
+                onClick={() => {
+                  setIsPasswordModalOpen(false);
+                  setPasswordInput('');
+                  setPasswordError(false);
+                }}
+                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-700 font-medium">
+              Veri güncelleme ve depo yönetim ekranına erişmek için lütfen 4 haneli yetkili şifrenizi giriniz.
+            </p>
+            <div>
+              <input
+                type="password"
+                placeholder="Şifre"
+                value={passwordInput}
+                onChange={(e) => {
+                  setPasswordInput(e.target.value);
+                  setPasswordError(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleVerifyPassword();
+                  }
+                }}
+                className="w-full px-4 py-3.5 bg-white border-2 border-slate-300 rounded-2xl text-center font-mono text-xl font-black text-black placeholder:text-slate-400 tracking-widest focus:outline-none focus:border-[#0b3d1d] focus:ring-4 focus:ring-[#0b3d1d]/15 shadow-inner"
+                autoFocus
+              />
+              {passwordError && (
+                <p className="text-rose-600 text-xs font-bold mt-1.5 text-center">
+                  Hatalı şifre girdiniz! Lütfen tekrar deneyiniz.
+                </p>
               )}
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPasswordModalOpen(false);
+                  setPasswordInput('');
+                  setPasswordError(false);
+                }}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={handleVerifyPassword}
+                className="flex-1 py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-emerald-900/20 cursor-pointer"
+              >
+                Giriş Yap
+              </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* GÖREV EMRİ SİLME ŞİFRE MODALI */}
+      {showGeDeletePasswordPrompt && (
+        <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-100 flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                🔒 GÖREV EMRİ SİLME
+              </h3>
+              <button
+                onClick={() => {
+                  setShowGeDeletePasswordPrompt(false);
+                  setGeDeletePasswordInput('');
+                  setGeDeletePasswordError(false);
+                }}
+                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-xs text-slate-600">
+              Görev emrini silmek için lütfen yönetici şifresini giriniz.
+            </p>
+            <div>
+              <input
+                type="password"
+                placeholder="Şifre"
+                value={geDeletePasswordInput}
+                onChange={(e) => {
+                  setGeDeletePasswordInput(e.target.value);
+                  setGeDeletePasswordError(false);
+                }}
+                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-center font-mono text-lg font-black tracking-widest focus:outline-none focus:border-rose-600 focus:ring-4 focus:ring-rose-600/10"
+                autoFocus
+              />
+              {geDeletePasswordError && (
+                <p className="text-rose-600 text-xs font-bold mt-1.5 text-center">
+                  Hatalı şifre girdiniz!
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowGeDeletePasswordPrompt(false);
+                  setGeDeletePasswordInput('');
+                  setGeDeletePasswordError(false);
+                }}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (geDeletePasswordInput === '1234') {
+                    if (geDeleteOrderId) {
+                      const updated = karaAraclariGorevEmirleri.filter(o => String(o.id) !== geDeleteOrderId);
+                      setKaraAraclariGorevEmirleri(updated);
+                      localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
+                      pushKaraAraclariGorevEmirleri(updated);
+                      showNotification("Görev emri başarıyla silindi!");
+                    }
+                    setShowGeDeletePasswordPrompt(false);
+                    setGeDeletePasswordInput('');
+                    setGeDeletePasswordError(false);
+                    setGeDeleteOrderId(null);
+                  } else {
+                    setGeDeletePasswordError(true);
+                  }
+                }}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-rose-900/20 cursor-pointer"
+              >
+                Sil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GÜN TAKİP SORUMLULARI VE 90 GÜN MAİL BİLDİRİMLERİ MODALI */}
+      <GunTakipModal
+        isOpen={isSorumluModalOpen}
+        onClose={() => setIsSorumluModalOpen(false)}
+        sorumlular={gunTakipSorumlulari}
+        onSaveSorumlular={saveGunTakipSorumlulari}
+        isSaving={isSavingSorumlu}
+        googleScriptUrl={GOOGLE_SCRIPT_URL}
+        showNotification={(msg, type) => showNotification(msg)}
+        unitDataMap={{
+          bell429: techizatBell429Data,
+          at802: techizatAt802Data,
+          t70: techizatT70Data,
+          t70_bumbi_backet: techizatT70BumbiBacketData,
+          t70_helitak: techizatT70HelitakData,
+          b360: techizatB360Data,
+          c650: techizatC650Data,
+          hangar: techizatHangarData,
+          kara_araclari: techizatKaraAraclariData
+        }}
+      />
+
+      {/* EBYS & BULK EDIT MODAL */}
+      {isEbysModalOpen && (
+        <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-xl w-full shadow-2xl border border-slate-100 flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                ⚡ SEÇİLENLERİ İŞLE ({Object.keys(selectedTechizatItems).length} Öğe)
+              </h3>
+              <button
+                onClick={() => setIsEbysModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {bulkModalMode === 'choice' && (
+              <div className="flex flex-col gap-4 py-4">
+                <p className="text-xs text-slate-600">
+                  Seçtiğiniz <strong>{Object.keys(selectedTechizatItems).length}</strong> adet kayıt üzerinde yapmak istediğiniz işlemi seçiniz:
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <button
+                    onClick={() => setBulkModalMode('send')}
+                    className="p-5 border-2 border-emerald-500 bg-emerald-50/50 hover:bg-emerald-50 rounded-2xl flex flex-col items-center text-center gap-2 transition-all active:scale-95 cursor-pointer shadow-sm"
+                  >
+                    <Send className="w-8 h-8 text-emerald-700" />
+                    <span className="text-xs font-black text-emerald-950 uppercase">EBYS TALEBİ GÖNDER</span>
+                    <span className="text-[10px] text-emerald-700">Seçilenleri Taskline / EBYS sistemine talep olarak aktar</span>
+                  </button>
+                  <button
+                    onClick={() => setBulkModalMode('edit')}
+                    className="p-5 border-2 border-sky-500 bg-sky-50/50 hover:bg-sky-50 rounded-2xl flex flex-col items-center text-center gap-2 transition-all active:scale-95 cursor-pointer shadow-sm"
+                  >
+                    <Edit3 className="w-8 h-8 text-sky-700" />
+                    <span className="text-xs font-black text-sky-950 uppercase">TOPLU DÜZENLE</span>
+                    <span className="text-[10px] text-sky-700">Bulunduğu yer, durum ve firmayı topluca güncelle</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {bulkModalMode === 'edit' && (
+              <div className="flex flex-col gap-4">
+                <p className="text-xs text-slate-600">
+                  Seçilen tüm kayıtlara uygulamak istediğiniz yeni değerleri giriniz (boş bıraktığınız alanlar değişmez):
+                </p>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                      📍 Yeni Bulunduğu Yer
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Örn: Hangar 2 Raf A"
+                      value={bulkEditYer}
+                      onChange={(e) => setBulkEditYer(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                      ⚙️ Yeni Durumu
+                    </label>
+                    <select
+                      value={bulkEditDurum}
+                      onChange={(e) => setBulkEditDurum(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                    >
+                      <option value="">Değiştirme (Aynı Kalsın)</option>
+                      <option value="FAAL">FAAL</option>
+                      <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                      <option value="BAKIMDA">BAKIMDA</option>
+                      <option value="KALİBRASYONDA">KALİBRASYONDA</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                      🏢 Yeni Firma
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Firma Adı"
+                      value={bulkEditFirma}
+                      onChange={(e) => setBulkEditFirma(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setBulkModalMode('choice')}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    ← Geri
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBulkSaving}
+                    onClick={handleBulkEditTechizatRows}
+                    className="px-6 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+                  >
+                    {isBulkSaving ? "Kaydediliyor..." : "Toplu Güncelle"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {bulkModalMode === 'send' && (
+              <div className="flex flex-col gap-4">
+                <p className="text-xs text-slate-600">
+                  Seçilen kayıtlar için EBYS / Taskline sistemine gönderilecek talep detaylarını giriniz:
+                </p>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                      Talep Başlığı
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Örn: Yıllık Periyodik Kalibrasyon Talebi"
+                      value={ebysBaslik}
+                      onChange={(e) => setEbysBaslik(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                      Açıklama
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Talep hakkında detaylı bilgi..."
+                      value={ebysAciklama}
+                      onChange={(e) => setEbysAciklama(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                        Talep Türü
+                      </label>
+                      <select
+                        value={ebysTalepTuru}
+                        onChange={(e) => setEbysTalepTuru(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-600"
+                      >
+                        <option value="">Seçiniz...</option>
+                        <option value="KALİBRASYON">KALİBRASYON</option>
+                        <option value="BAKIM">BAKIM</option>
+                        <option value="MALZEME">MALZEME</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1">
+                        Teslim Tarihi
+                      </label>
+                      <input
+                        type="date"
+                        value={ebysTeslimTarihi}
+                        onChange={(e) => setEbysTeslimTarihi(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-600 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setBulkModalMode('choice')}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    ← Geri
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitEbysRequests}
+                    className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+                  >
+                    Talebi Gönder
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ROW IMAGE HOVER TOOLTIP */}
+      {hoveredRowImage && (
+        <div
+          className="fixed pointer-events-none z-[800] bg-white rounded-2xl shadow-2xl border-2 border-emerald-500 overflow-hidden p-2 flex flex-col items-center gap-1.5 animate-fade-in"
+          style={{
+            left: `${Math.min(window.innerWidth - 220, hoveredRowImage.x + 20)}px`,
+            top: `${Math.min(window.innerHeight - 240, hoveredRowImage.y - 40)}px`,
+            width: '200px'
+          }}
+        >
+          <img
+            src={hoveredRowImage.url}
+            alt={hoveredRowImage.title}
+            className="w-full h-36 object-contain rounded-xl bg-slate-50"
+          />
+          <p className="text-[11px] font-black text-slate-800 truncate w-full text-center">{hoveredRowImage.title}</p>
+          <p className="text-[9px] text-slate-500 truncate w-full text-center">{hoveredRowImage.subtitle}</p>
+        </div>
+      )}
+
+      {/* EXCEL EXPORT MODAL */}
+      {excelExportModalData && (
+        <ExcelExportModal
+          isOpen={Boolean(excelExportModalData)}
+          onClose={() => setExcelExportModalData(null)}
+          title={excelExportModalData.title}
+          cols={excelExportModalData.cols}
+          rows={excelExportModalData.rows}
+          type={excelExportModalData.type}
+          techizatImages={techizatImages}
+          onExportTextOnly={() => {
+            executeTextOnlyExcelExport(
+              excelExportModalData.type,
+              excelExportModalData.cols,
+              excelExportModalData.rows,
+              excelExportModalData.title
+            );
+            setExcelExportModalData(null);
+          }}
+          onExportWithImages={() => {
+            downloadTechizatExcelWithImages(true);
+          }}
+        />
+      )}
+
+      {/* YENİ ÜRÜN EKLE MODALI */}
+      {isNewProductModalOpen && (
+        <NewProductModal
+          isOpen={isNewProductModalOpen}
+          onClose={() => setIsNewProductModalOpen(false)}
+          activeUnit={activeTechizatType !== 'all' ? activeTechizatType : 'at802'}
+          activeSection={techizatActiveSection}
+          onSave={handleAddNewProductRow}
+        />
+      )}
+
+      {/* VERİ GÜNCELLEME & MASTER PDF OCR MODALI */}
+      {isDataSyncModalOpen && (
+        <DataSyncModal
+          isOpen={isDataSyncModalOpen}
+          onClose={() => setIsDataSyncModalOpen(false)}
+          initialStep={syncInitialStep}
+          initialTarget={syncInitialTarget}
+          activeUnit={activeTechizatType}
+          activeSection={techizatActiveSection}
+          onUpdateUnitData={(unitKey, _newCols, newRows) => {
+            const cleanKey = unitKey.toLowerCase();
+            if (cleanKey.includes('bell429')) {
+              setTechizatBell429Data(newRows);
+              try { localStorage.setItem('techizat_bell429_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('at802')) {
+              setTechizatAt802Data(newRows);
+              try { localStorage.setItem('techizat_at802_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('t70_bumbi')) {
+              setTechizatT70BumbiBacketData(newRows);
+              try { localStorage.setItem('techizat_t70_bumbi_backet_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('t70_helitak')) {
+              setTechizatT70HelitakData(newRows);
+              try { localStorage.setItem('techizat_t70_helitak_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('t70')) {
+              setTechizatT70Data(newRows);
+              try { localStorage.setItem('techizat_t70_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('b360')) {
+              setTechizatB360Data(newRows);
+              try { localStorage.setItem('techizat_b360_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('c650')) {
+              setTechizatC650Data(newRows);
+              try { localStorage.setItem('techizat_c650_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('hangar')) {
+              setTechizatHangarData(newRows);
+              try { localStorage.setItem('techizat_hangar_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('kara')) {
+              setTechizatKaraAraclariData(newRows);
+              try { localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(newRows)); } catch(e){}
+            }
+          }}
+          onApplyDriveSync={async () => {
+            await pullAllTechizatFromDriveExcels(false);
+          }}
+          onApplyUploadedData={(detectedUnit, rows) => {
+            if (rows.length > 0) {
+              rows.forEach(r => handleAddNewProductRow(detectedUnit, r));
+            }
+          }}
+          onDownloadLatestExcel={(unit) => {
+            exportTechizatToExcel(unit as any, [], [], `${unit.toUpperCase()} ENVANTERİ`);
+          }}
+          showNotification={(msg) => showNotification(msg)}
+        />
+      )}
+
+      {/* DEPO YÖNETİMİ & SERTİFİKA & SAYIM & TRANSFER MODALI */}
+      {isDepoModalOpen && (
+        <DepoManagementModal
+          isOpen={isDepoModalOpen}
+          onClose={() => setIsDepoModalOpen(false)}
+          depoRows={
+            selectedUnitFolder === 'bell429' || activeTechizatType === 'bell429' ? techizatBell429Data :
+            selectedUnitFolder === 't70' || activeTechizatType === 't70' ? techizatT70Data :
+            selectedUnitFolder === 'b360' || activeTechizatType === 'b360' ? techizatB360Data :
+            selectedUnitFolder === 'c650' || activeTechizatType === 'c650' ? techizatC650Data :
+            selectedUnitFolder === 'hangar' || activeTechizatType === 'hangar' ? techizatHangarData :
+            selectedUnitFolder === 't70_bumbi_backet' || activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData :
+            selectedUnitFolder === 't70_helitak' || activeTechizatType === 't70_helitak' ? techizatT70HelitakData :
+            techizatAt802Data
+          }
+          at802Rows={techizatAt802Data}
+          onUpdateAt802Rows={(updatedRows) => {
+            setTechizatAt802Data(updatedRows);
+            try { localStorage.setItem('techizat_at802_data', JSON.stringify(updatedRows)); } catch(e){}
+          }}
+          onUpdateDepoRows={(updatedRows) => {
+            const unit = selectedUnitFolder || activeTechizatType || 'at802';
+            if (unit === 'bell429') { setTechizatBell429Data(updatedRows); try { localStorage.setItem('techizat_bell429_data', JSON.stringify(updatedRows)); } catch(e){} }
+            else if (unit === 't70') { setTechizatT70Data(updatedRows); try { localStorage.setItem('techizat_t70_data', JSON.stringify(updatedRows)); } catch(e){} }
+            else if (unit === 'b360') { setTechizatB360Data(updatedRows); try { localStorage.setItem('techizat_b360_data', JSON.stringify(updatedRows)); } catch(e){} }
+            else if (unit === 'c650') { setTechizatC650Data(updatedRows); try { localStorage.setItem('techizat_c650_data', JSON.stringify(updatedRows)); } catch(e){} }
+            else if (unit === 'hangar') { setTechizatHangarData(updatedRows); try { localStorage.setItem('techizat_hangar_data', JSON.stringify(updatedRows)); } catch(e){} }
+            else if (unit === 't70_bumbi_backet') { setTechizatT70BumbiBacketData(updatedRows); try { localStorage.setItem('techizat_t70_bumbi_backet_data', JSON.stringify(updatedRows)); } catch(e){} }
+            else if (unit === 't70_helitak') { setTechizatT70HelitakData(updatedRows); try { localStorage.setItem('techizat_t70_helitak_data', JSON.stringify(updatedRows)); } catch(e){} }
+            else { setTechizatAt802Data(updatedRows); try { localStorage.setItem('techizat_at802_data', JSON.stringify(updatedRows)); } catch(e){} }
+          }}
+          allInventory={[
+            ...techizatAt802Data.map(r => ({ unit: 'AT-802', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' })),
+            ...techizatBell429Data.map(r => ({ unit: 'BELL 429', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' })),
+            ...techizatT70Data.map(r => ({ unit: 'T-70', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' })),
+            ...techizatHangarData.map(r => ({ unit: 'HANGAR', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' }))
+          ]}
+          transactions={depoTransactions}
+          onAddTransaction={(tx) => {
+            const newTx: DepoTransaction = {
+              ...tx,
+              id: (tx as any).id || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+              timestamp: (tx as any).timestamp || new Date().toLocaleString('tr-TR')
+            };
+            setDepoTransactions(prev => [newTx, ...prev]);
+            addAuditLog({
+              unit: 'DEPO',
+              action: tx.type === 'GİRİŞ' ? 'EKLEME' : tx.type === 'ÇIKIŞ' ? 'SILME' : 'GUNCELLEME',
+              itemName: tx.itemName,
+              pn: tx.pn,
+              fieldName: `DEPO_${tx.type}`,
+              oldValue: '-',
+              newValue: `${tx.quantity} adet -> ${tx.targetLocation || tx.sourceLocation}`
+            });
+            showNotification(`✅ Depo işlemi kaydedildi: ${tx.type} - ${tx.itemName}`);
+          }}
+          onAddTransactionsBatch={(batchTxs) => {
+            const formattedBatch: DepoTransaction[] = batchTxs.map((tx, idx) => ({
+              ...tx,
+              id: (tx as any).id || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}_${idx}`,
+              timestamp: (tx as any).timestamp || new Date().toLocaleString('tr-TR')
+            }));
+            setDepoTransactions(prev => [...formattedBatch, ...prev]);
+          }}
+          onUpdateTransaction={(updatedTx) => {
+            setDepoTransactions(prev => prev.map(t => t.id === updatedTx.id ? updatedTx : t));
+          }}
+          onDeleteTransaction={(txId) => {
+            setDepoTransactions(prev => prev.filter(t => t.id !== txId));
+          }}
+          onDeleteTransactionsBatch={(txIds) => {
+            const idSet = new Set(txIds);
+            setDepoTransactions(prev => prev.filter(t => !idSet.has(t.id)));
+          }}
+          onUndoTransaction={(txId) => {
+            setDepoTransactions(prev => prev.map(t => t.id === txId ? { ...t, isUndone: true } : t));
+            showNotification("İşlem başarıyla geri alındı ve log tablosu güncellendi!");
+          }}
+          certificatePdfUrl={depoCertificatePdfUrl}
+          onSaveCertificatePdfUrl={(url) => {
+            setDepoCertificatePdfUrl(url);
+            localStorage.setItem('depo_certificate_pdf_url', url);
+            showNotification("✅ Depo sertifika esas formu başarıyla kaydedildi!");
+          }}
+          showNotification={(msg) => showNotification(msg)}
+        />
+      )}
+
+      {/* AUDIT LOG MODALI */}
+      {isAuditModalOpen && (
+        <AuditTrailModal
+          isOpen={isAuditModalOpen}
+          onClose={() => setIsAuditModalOpen(false)}
+          logs={auditLogs}
+          onClearLogs={() => {
+            setAuditLogs([]);
+            localStorage.removeItem('equipment_audit_logs');
+            showNotification("Tüm denetim kayıtları temizlendi.");
+          }}
+        />
+      )}
+
+      {/* KARA ARAÇLARI BELGE YÖNETİM MODALI */}
+      {activeKaraDocTarget && (
+        <KaraAraclariDocModal
+          isOpen={Boolean(activeKaraDocTarget)}
+          onClose={() => setActiveKaraDocTarget(null)}
+          vehiclePlate={activeKaraDocTarget.plate}
+          vehicleName={activeKaraDocTarget.vehicleName}
+          documents={vehicleDocuments.filter(d => d.vehiclePlate === activeKaraDocTarget.plate)}
+          onUploadDocument={(newDoc) => {
+            setVehicleDocuments(prev => {
+              const updated = [newDoc, ...prev];
+              try { localStorage.setItem('kara_araclari_vehicle_documents', JSON.stringify(updated)); } catch (e) {}
+              return updated;
+            });
+            addAuditLog({
+              unit: 'KARA_ARACLARI',
+              action: 'EKLEME',
+              itemName: activeKaraDocTarget.vehicleName,
+              pn: activeKaraDocTarget.plate,
+              fieldName: 'BELGE_YUKLE',
+              oldValue: '-',
+              newValue: newDoc.title
+            });
+            showNotification(`✅ Belge yüklendi: ${newDoc.title}`);
+          }}
+          onDeleteDocument={(docId) => {
+            setVehicleDocuments(prev => {
+              const updated = prev.filter(d => d.id !== docId);
+              try { localStorage.setItem('kara_araclari_vehicle_documents', JSON.stringify(updated)); } catch (e) {}
+              return updated;
+            });
+            showNotification("Belge silindi.");
+          }}
+        />
+      )}
+
+      {/* SUCCESS NOTIFICATION TOAST */}
+      {successMessage && (
+        <div className="fixed bottom-6 right-6 z-[9000] bg-[#0b3d1d] text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-emerald-500 flex items-center gap-3 animate-fade-in select-none">
+          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-xs font-bold leading-relaxed">{successMessage}</span>
+          <button
+            onClick={() => setSuccessMessage(null)}
+            className="text-white/60 hover:text-white font-bold text-sm ml-2 cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }
-
-

@@ -20,10 +20,24 @@ body {
   -webkit-user-select: text;
 }
 
-/* Girdi alanlarında seçim ve yazma engellerini kaldır */
-input, select, textarea {
+/* Girdi alanlarında seçim ve yazma engellerini kaldır, yazı rengini SİYAH yap */
+/* Kullanıcı kuralı: "listden seçilen hiç bir yazı beyaz olmaz siyah olur aksinin ben demediğim sürece" */
+input, select, textarea, option, optgroup, [role="listbox"], [role="option"] {
   user-select: text !important;
   -webkit-user-select: text !important;
+  color: #000000 !important;
+  -webkit-text-fill-color: #000000 !important;
+  background-color: #ffffff;
+}
+
+/* Select elementlerinin açık/kapalı/seçili tüm durumlarında siyah yazı */
+select option,
+select option:checked,
+select option:hover,
+select option:focus {
+  color: #000000 !important;
+  -webkit-text-fill-color: #000000 !important;
+  background-color: #f1f5f9 !important;
 }
 
 /* Butonlar ve görseller sürüklenirken seçilmesin */
@@ -39,15 +53,15 @@ td, th, .select-text {
   cursor: text !important;
 }
 
-/* Özelleştirilmiş Seçim Vurgusu (Her arka planda görünecek şekilde) */
+/* Listeden veya fareyle seçilen tüm metinler SİYAH yazı rengi */
 ::selection {
-  background-color: rgba(16, 185, 129, 0.3) !important; /* Emerald-500 %30 şeffaflık */
-  color: inherit !important;
+  background-color: #a7f3d0 !important; /* Açık yeşil vurgu */
+  color: #000000 !important; /* Kesinlikle siyah yazı */
 }
 
 ::-moz-selection {
-  background-color: rgba(16, 185, 129, 0.3) !important;
-  color: inherit !important;
+  background-color: #a7f3d0 !important;
+  color: #000000 !important;
 }
 
 /* Cam Efekti Kartlar ve Butonlar */

@@ -1,31 +1,62 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 
-// Global error boundary to prevent cross-origin or third-party iframe errors ("Script error.") from crashing or being flagged as failures
+// Global error handler to prevent unhandled rejections and suppress benign WebSocket/WebAssembly warnings
 if (typeof window !== 'undefined') {
-  const handleGlobalError = (event: ErrorEvent) => {
-    // Suppress "Script error." which is a standard benign browser notification for cross-origin errors
-    if (event.message === 'Script error.' || event.message?.toLowerCase().includes('script error')) {
-      console.warn("Caught and handled cross-origin third-party script error gracefully:", event);
+  const isIgnoredMessage = (msg: any): boolean => {
+    if (!msg) return false;
+    const str = typeof msg === 'string' ? msg : (msg.message || msg.reason || String(msg));
+    const lower = String(str).toLowerCase();
+    return (
+      lower.includes('websocket') ||
+      lower.includes('webassembly') ||
+      lower.includes('iş parçacığı') ||
+      lower.includes('davet') ||
+      lower.includes('script error') ||
+      lower.includes('failed to connect to websocket') ||
+      lower.includes('açılmadan kapatıldı')
+    );
+  };
+
+  const origWarn = console.warn;
+  console.warn = (...args: any[]) => {
+    if (args.some(isIgnoredMessage)) return;
+    origWarn.apply(console, args);
+  };
+
+  const origError = console.error;
+  console.error = (...args: any[]) => {
+    if (args.some(isIgnoredMessage)) return;
+    origError.apply(console, args);
+  };
+
+  window.addEventListener('error', (event) => {
+    if (isIgnoredMessage(event.message) || isIgnoredMessage(event.error)) {
       event.preventDefault();
+      event.stopImmediatePropagation();
       return true;
     }
-  };
+  }, true);
 
-  const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-    console.warn("Caught unhandled promise rejection gracefully:", event.reason);
-    event.preventDefault();
-  };
-
-  window.addEventListener('error', handleGlobalError);
-  window.addEventListener('unhandledrejection', handleUnhandledRejection);
+  window.addEventListener('unhandledrejection', (event) => {
+    if (isIgnoredMessage(event.reason)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return true;
+    }
+  }, true);
 }
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );
+
+
 

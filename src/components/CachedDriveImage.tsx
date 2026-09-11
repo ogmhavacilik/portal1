@@ -5,21 +5,9 @@ export const getEmbeddableDriveUrl = (url: string | null | undefined): string | 
   if (!url) return null;
   if (url.startsWith('data:') || url.startsWith('blob:')) return url;
 
-  const dMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-  if (dMatch && dMatch[1]) {
-    return `https://drive.google.com/uc?export=download&id=${dMatch[1]}`;
-  }
-
-  const idMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  if (url.includes('drive.google.com') && idMatch && idMatch[1]) {
-    return `https://drive.google.com/uc?export=download&id=${idMatch[1]}`;
-  }
-
-  if (url.includes('drive.google.com/uc') && !url.includes('export=download')) {
-    const ucIdMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    if (ucIdMatch && ucIdMatch[1]) {
-      return `https://drive.google.com/uc?export=download&id=${ucIdMatch[1]}`;
-    }
+  const fileId = getDriveFileId(url);
+  if (fileId) {
+    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1200`;
   }
 
   return url;
@@ -34,6 +22,9 @@ const getDriveFileId = (url: string | null | undefined): string | null => {
 
   const idMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
   if (idMatch && idMatch[1]) return idMatch[1];
+
+  const lhMatch = url.match(/googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/);
+  if (lhMatch && lhMatch[1]) return lhMatch[1];
 
   return null;
 };
@@ -57,7 +48,7 @@ export const fetchDriveImageAsBase64 = async (src: string | null | undefined): P
   const fileId = getDriveFileId(src);
   if (fileId) {
     const cacheKey = `cached_drive_img_${fileId}`;
-    const cachedData = memoryCache.get(fileId) || sessionStorage.getItem(cacheKey) || localStorage.getItem(cacheKey);
+    const cachedData = memoryCache.get(fileId) || localStorage.getItem(cacheKey) || sessionStorage.getItem(cacheKey);
     if (cachedData && cachedData.startsWith('data:')) return cachedData;
 
     try {
@@ -70,8 +61,8 @@ export const fetchDriveImageAsBase64 = async (src: string | null | undefined): P
           const dataUrl = `data:${mimeType};base64,${data.base64}`;
           memoryCache.set(fileId, dataUrl);
           try {
-            sessionStorage.setItem(cacheKey, dataUrl);
             localStorage.setItem(cacheKey, dataUrl);
+            sessionStorage.setItem(cacheKey, dataUrl);
           } catch (e) {}
           return dataUrl;
         }
@@ -110,8 +101,8 @@ export const fetchDriveImageAsBase64 = async (src: string | null | undefined): P
           if (fileId) {
             memoryCache.set(fileId, dataUrl);
             try {
-              sessionStorage.setItem(`cached_drive_img_${fileId}`, dataUrl);
               localStorage.setItem(`cached_drive_img_${fileId}`, dataUrl);
+              sessionStorage.setItem(`cached_drive_img_${fileId}`, dataUrl);
             } catch (e) {}
           }
           resolve(dataUrl);
@@ -143,7 +134,18 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
   fallbackToDirect = true,
   ...props 
 }) => {
-  const [cachedUrl, setCachedUrl] = useState<string | null>(null);
+  const [cachedUrl, setCachedUrl] = useState<string | null>(() => {
+    if (!src) return null;
+    if (src.startsWith('data:') || src.startsWith('blob:')) return src;
+    const fileId = getDriveFileId(src);
+    if (fileId) {
+      const cacheKey = `cached_drive_img_${fileId}`;
+      const saved = memoryCache.get(fileId) || localStorage.getItem(cacheKey) || sessionStorage.getItem(cacheKey);
+      if (saved) return saved;
+      return `https://lh3.googleusercontent.com/d/${fileId}`;
+    }
+    return src;
+  });
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   useEffect(() => {
@@ -165,9 +167,9 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
       return;
     }
 
-    // Try memory and sessionStorage cache first
+    // Try memory, localStorage and sessionStorage cache first
     const cacheKey = `cached_drive_img_${fileId}`;
-    const cachedData = memoryCache.get(fileId) || sessionStorage.getItem(cacheKey);
+    const cachedData = memoryCache.get(fileId) || localStorage.getItem(cacheKey) || sessionStorage.getItem(cacheKey);
     if (cachedData) {
       if (!memoryCache.has(fileId)) {
         memoryCache.set(fileId, cachedData);
@@ -193,12 +195,13 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
           const mimeType = getMimeTypeFromName(data.name || "");
           const dataUrl = `data:${mimeType};base64,${data.base64}`;
           
-          // Cache in memory and sessionStorage
+          // Cache in memory and localStorage
           memoryCache.set(fileId, dataUrl);
           try {
+            localStorage.setItem(cacheKey, dataUrl);
             sessionStorage.setItem(cacheKey, dataUrl);
           } catch (e) {
-            console.warn("Could not save to sessionStorage:", e);
+            console.warn("Could not save to storage:", e);
           }
 
           setCachedUrl(dataUrl);
@@ -210,7 +213,7 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
       .catch(err => {
         console.warn("Background fetch from Apps Script failed, falling back to direct Drive link:", err);
         if (!active) return;
-        const embedUrl = getEmbeddableDriveUrl(src);
+        const embedUrl = `https://lh3.googleusercontent.com/d/${fileId}` || getEmbeddableDriveUrl(src);
         setCachedUrl(embedUrl);
         setIsLoading(false);
       });
@@ -236,6 +239,14 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
       className={className}
       style={style}
       referrerPolicy={referrerPolicy}
+      onError={(e) => {
+        const fileId = getDriveFileId(src);
+        if (fileId && cachedUrl?.includes('thumbnail')) {
+          setCachedUrl(`https://lh3.googleusercontent.com/d/${fileId}`);
+        } else if (fileId && cachedUrl?.includes('lh3.googleusercontent.com')) {
+          setCachedUrl(`https://drive.google.com/uc?export=view&id=${fileId}`);
+        }
+      }}
       {...props}
     />
   );
