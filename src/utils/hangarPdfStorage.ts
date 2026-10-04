@@ -14,6 +14,7 @@ export interface HangarPdfDoc {
   driveFileId?: string;
   driveUrl?: string;
   mimeType?: string;
+  ocrText?: string;
 }
 
 export function getFileCategory(fileName: string): 'pdf' | 'image' | 'archive' | 'other' {
@@ -310,21 +311,21 @@ export async function deleteHangarPdfDoc(
   const targetDriveId = cleanDriveId || (cleanId.startsWith('drive_doc_') ? cleanId.replace('drive_doc_', '') : '');
   if (targetDriveId || cleanFileName) {
     try {
-      fetch('/api/delete-drive-file', {
+      await fetch('/api/delete-drive-file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileId: targetDriveId,
           fileName: cleanFileName
         })
-      }).catch(err => console.warn('[deleteHangarPdfDoc] Backend trash warning:', err));
+      });
     } catch (e) {
       console.warn('[deleteHangarPdfDoc] Backend fetch warning:', e);
     }
 
     // Direct Google Apps Script fallback for trashing file in Drive
     const gasActions = ['deleteTechPublication', 'deleteDriveFile', 'deleteFile', 'trashFile', 'deleteTechizatDoc'];
-    gasActions.forEach(act => {
+    for (const act of gasActions) {
       try {
         fetch(DEFAULT_GOOGLE_SCRIPT_URL, {
           method: 'POST',
@@ -336,11 +337,11 @@ export async function deleteHangarPdfDoc(
             docId: targetDriveId,
             fileName: cleanFileName
           })
-        }).catch(err => console.warn('[deleteHangarPdfDoc] GAS trash warning:', err));
+        }).catch(() => {});
       } catch (e) {
-        console.warn('[deleteHangarPdfDoc] GAS fallback warning:', e);
+        // ignore
       }
-    });
+    }
   }
 }
 

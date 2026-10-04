@@ -38,6 +38,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { GOOGLE_SCRIPT_URL, fileToBase64 } from '../App';
 import { cachePdfBase64, getCachedPdfBlobUrl } from '../utils/pdfCache';
+import JSZip from 'jszip';
 
 export interface TechPublication {
   id: string;
@@ -73,6 +74,14 @@ export interface DepotItem {
   gelecekKontrol: string;
   firma: string;
   aciklama: string;
+  // Regional stock fields for AT-802
+  ankaraMevcut?: number;
+  milasMevcut?: number;
+  karainMevcut?: number;
+  canakkaleMevcut?: number;
+  bursaMevcut?: number;
+  toplamStok?: number;
+  isSarfItem?: boolean;
 }
 
 // Global in-memory cache for fast instant PDF loading
@@ -178,9 +187,12 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [uploadUnit, setUploadUnit] = useState<string>('at802');
   const [uploadCategory, setUploadCategory] = useState<string>('IPC');
-  const [uploadRevision, setUploadRevision] = useState<string>('Rev. 01');
+  const [uploadRevision, setUploadRevision] = useState<string>(`Rev. ${new Date().toLocaleDateString('tr-TR')}`);
   const [uploadSection, setUploadSection] = useState<string>('IPC - Parça Kataloğu (Illustrated Parts Catalog)');
   const [uploadCustomSection, setUploadCustomSection] = useState<string>('');
+  const [uploadRevisionDate, setUploadRevisionDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [successCount, setSuccessCount] = useState<number>(0);
+  const [failCount, setFailCount] = useState<number>(0);
   const [selectedFiles, setSelectedFiles] = useState<{
     file: File;
     customTitle: string;
@@ -188,6 +200,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     customUnit: string;
     customCategory: string;
     customRevision: string;
+    isZip?: boolean;
   }[]>([]);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
@@ -691,70 +704,70 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     return isNaN(num) ? 0 : num;
   };
 
-  // Extract all depot items from allUnitData
+  // Extract all depot items from allUnitData and merge with Sarf inventory
   const allDepotItems: DepotItem[] = useMemo(() => {
-    const items: DepotItem[] = [];
+    const itemsMap = new Map<string, DepotItem>();
+    const genericItems: DepotItem[] = [];
 
     const processUnit = (unitKey: string, unitTitle: string, dataArray?: any[]) => {
       if (!dataArray || !Array.isArray(dataArray)) return;
 
       dataArray.forEach((row, idx) => {
-        let adi = '';
-        let parcaNo = '';
-        let seriNo = '';
-        let miktar = '';
-        let yer = '';
-        let durumu = 'FAAL';
-        let sonKontrol = '';
-        let gelecekKontrol = '';
-        let firma = '';
-        let aciklama = '';
-        let section = 'YER DESTEK VE ÖZEL ALETLER';
-
-        if (Array.isArray(row)) {
-          adi = String(row[2] || row[3] || '');
-          parcaNo = String(row[3] || row[4] || '-');
-          seriNo = String(row[4] || row[6] || '-');
-          miktar = String(row[5] || row[7] || '1');
-          yer = String(row[6] || row[9] || '-');
-          durumu = String(row[7] || row[10] || 'FAAL');
-          sonKontrol = String(row[8] || row[11] || '');
-          gelecekKontrol = String(row[9] || row[12] || '');
-          firma = String(row[10] || row[13] || '');
-          aciklama = String(row[11] || row[14] || '');
-          section = String(row[12] || row[18] || 'YER DESTEK VE ÖZEL ALETLER');
-        } else if (typeof row === 'object' && row !== null) {
-          adi = row['TEÇHİZAT ADI'] || row['MALZEME ADI'] || row['adi'] || row['name'] || '';
-          parcaNo = row['PARÇA NO (P/N)'] || row['PARÇA NO'] || row['parcaNo'] || row['pn'] || '-';
-          seriNo = row['SERİ NO (S/N)'] || row['SERİ NO'] || row['seriNo'] || row['sn'] || '-';
-          miktar = String(row['MİKTAR / KAPASİTE'] || row['MİKTAR'] || row['miktar'] || '1');
-          yer = row['BULUNDUĞU YER'] || row['YER'] || row['yer'] || '-';
-          durumu = row['DURUMU'] || row['durum'] || 'FAAL';
-          sonKontrol = row['SON KONTROL / BAKIM'] || row['SON KONTROL'] || '';
-          gelecekKontrol = row['GELECEK KONTROL / BAKIM'] || row['GELECEK KONTROL'] || '';
-          firma = row['SON KONTROLÜ YAPAN FİRMA'] || row['FİRMA'] || '';
-          aciklama = row['AÇIKLAMA'] || row['aciklama'] || '';
-          section = row['BÖLÜM / KATEGORİ'] || row['BÖLÜM'] || row['section'] || 'YER DESTEK VE ÖZEL ALETLER';
-        }
-
-        if (adi.trim() !== '' || (parcaNo.trim() !== '' && parcaNo !== '-')) {
-          items.push({
+        let item: Partial<DepotItem> = {
             unitKey,
             unitTitle,
-            section,
             siraNo: String(idx + 1),
-            adi,
-            parcaNo,
-            seriNo,
-            miktar,
-            miktarNum: parseQuantityNumber(miktar),
-            yer,
-            durumu,
-            sonKontrol,
-            gelecekKontrol,
-            firma,
-            aciklama
-          });
+            durumu: 'FAAL',
+            miktarNum: 1,
+            parcaNo: '-',
+            seriNo: '-',
+            adi: '',
+            yer: '-',
+            section: 'YER DESTEK VE ÖZEL ALETLER'
+        };
+
+        if (Array.isArray(row)) {
+          item.adi = String(row[2] || row[3] || '');
+          item.parcaNo = String(row[3] || row[4] || '-');
+          item.seriNo = String(row[4] || row[6] || '-');
+          item.miktar = String(row[5] || row[7] || '1');
+          item.yer = String(row[6] || row[9] || '-');
+          item.durumu = String(row[7] || row[10] || 'FAAL');
+          item.sonKontrol = String(row[8] || row[11] || '');
+          item.gelecekKontrol = String(row[9] || row[12] || '');
+          item.firma = String(row[10] || row[13] || '');
+          item.aciklama = String(row[11] || row[14] || '');
+          item.section = String(row[12] || row[18] || 'YER DESTEK VE ÖZEL ALETLER');
+        } else if (typeof row === 'object' && row !== null) {
+          item.adi = row['TEÇHİZAT ADI'] || row['MALZEME ADI'] || row['adi'] || row['name'] || '';
+          item.parcaNo = row['PARÇA NO (P/N)'] || row['PARÇA NO'] || row['parcaNo'] || row['pn'] || '-';
+          item.seriNo = row['SERİ NO (S/N)'] || row['SERİ NO'] || row['seriNo'] || row['sn'] || '-';
+          item.miktar = String(row['MİKTAR / KAPASİTE'] || row['MİKTAR'] || row['miktar'] || '1');
+          item.yer = row['BULUNDUĞU YER'] || row['YER'] || row['yer'] || '-';
+          item.durumu = row['DURUMU'] || row['durum'] || 'FAAL';
+          item.sonKontrol = row['SON KONTROL / BAKIM'] || row['SON KONTROL'] || '';
+          item.gelecekKontrol = row['GELECEK KONTROL / BAKIM'] || row['GELECEK KONTROL'] || '';
+          item.firma = row['SON KONTROLÜ YAPAN FİRMA'] || row['FİRMA'] || '';
+          item.aciklama = row['AÇIKLAMA'] || row['aciklama'] || '';
+          item.section = row['BÖLÜM / KATEGORİ'] || row['BÖLÜM'] || row['section'] || 'YER DESTEK VE ÖZEL ALETLER';
+        }
+
+        item.miktarNum = parseQuantityNumber(item.miktar || '0');
+
+        if (item.adi?.trim() !== '' || (item.parcaNo?.trim() !== '' && item.parcaNo !== '-')) {
+          const pnKey = item.parcaNo && item.parcaNo !== '-' ? item.parcaNo.toLowerCase().replace(/[^a-z0-9]/g, '') : null;
+          if (pnKey) {
+            if (itemsMap.has(pnKey)) {
+                // Merge info if already exists (keep better name if possible)
+                const existing = itemsMap.get(pnKey)!;
+                if (!existing.adi && item.adi) existing.adi = item.adi;
+                if (existing.yer === '-' && item.yer !== '-') existing.yer = item.yer;
+            } else {
+                itemsMap.set(pnKey, item as DepotItem);
+            }
+          } else {
+            genericItems.push(item as DepotItem);
+          }
         }
       });
     };
@@ -769,7 +782,63 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     processUnit('b360', 'B-360', data.b360);
     processUnit('hangar', 'HANGAR YER DESTEK', data.hangar);
 
-    return items;
+    // Add AT-802 Sarf & Kimyasal inventory from storage (MERGE logic)
+    try {
+      const stored = localStorage.getItem('ogm_depo_inventory_v5');
+      if (stored) {
+        const sarfInventory = JSON.parse(stored);
+        if (Array.isArray(sarfInventory)) {
+          sarfInventory.forEach((item: any, idx: number) => {
+            const pn = item.partNumber || item.pn || '-';
+            const pnKey = pn !== '-' ? pn.toLowerCase().replace(/[^a-z0-9]/g, '') : null;
+            
+            const sarfItem: DepotItem = {
+              unitKey: item.unit || 'at802',
+              unitTitle: (item.unit || 'at802').toUpperCase() + ' DEPO',
+              section: (item.category || 'sarf').toUpperCase() + ' DEPOSU',
+              siraNo: String(idx + 1),
+              adi: item.description || item.name || '',
+              parcaNo: pn,
+              seriNo: item.serialAndNotes || item.sn || '-',
+              miktar: String(item.toplamStok || item.gelen || '0'),
+              miktarNum: Number(item.toplamStok || item.gelen || 0),
+              yer: item.lokasyonNo || item.location || '-',
+              durumu: 'FAAL',
+              sonKontrol: '',
+              gelecekKontrol: '',
+              firma: '',
+              aciklama: '',
+              ankaraMevcut: item.ankaraMevcut,
+              milasMevcut: item.milasMevcut,
+              karainMevcut: item.karainMevcut,
+              canakkaleMevcut: item.canakkaleMevcut,
+              bursaMevcut: item.bursaMevcut,
+              toplamStok: item.toplamStok,
+              isSarfItem: true
+            };
+
+            if (pnKey) {
+                if (itemsMap.has(pnKey)) {
+                    // Update existing item with sarf detailed info
+                    const existing = itemsMap.get(pnKey)!;
+                    itemsMap.set(pnKey, {
+                        ...existing,
+                        ...sarfItem,
+                        // Combine titles if they are different units
+                        unitTitle: existing.unitKey === sarfItem.unitKey ? sarfItem.unitTitle : `${existing.unitTitle} & ${sarfItem.unitTitle}`
+                    });
+                } else {
+                    itemsMap.set(pnKey, sarfItem);
+                }
+            } else {
+                genericItems.push(sarfItem);
+            }
+          });
+        }
+      }
+    } catch (e) {}
+
+    return [...Array.from(itemsMap.values()), ...genericItems];
   }, [allUnitData]);
 
   // Filtered depot items based on search query
@@ -862,29 +931,50 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     return '';
   }, [activePub, downloadedBlobUrl]);
 
-  // Handle Multi-file selection
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle Multi-file selection (Directly handle ZIP for server-side extraction speed)
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const files: File[] = Array.from(e.target.files);
     const initialSection = uploadCustomSection.trim() || uploadSection;
+    const todayStr = new Date().toLocaleDateString('tr-TR');
 
-    const newSelected = files.map((file: File) => {
-      let title = file.name.replace(/\.[^/.]+$/, '');
-      return {
-        file,
-        customTitle: title,
-        customSection: initialSection,
-        customUnit: uploadUnit,
-        customCategory: uploadCategory,
-        customRevision: uploadRevision
-      };
-    });
+    let newSelected: any[] = [];
 
-    setSelectedFiles(prev => [...prev, ...newSelected]);
+    for (const file of files) {
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        const zipName = file.name.replace(/\.[^/.]+$/, '');
+        setUploadSection('custom');
+        setUploadCustomSection(zipName);
+        
+        newSelected.push({
+          file,
+          customTitle: zipName,
+          customSection: zipName,
+          customUnit: uploadUnit,
+          customCategory: uploadCategory,
+          customRevision: uploadRevision || todayStr,
+          isZip: true
+        });
+      } else if (file.name.toLowerCase().endsWith('.pdf')) {
+        let title = file.name.replace(/\.[^/.]+$/, '');
+        newSelected.push({
+          file,
+          customTitle: title,
+          customSection: initialSection,
+          customUnit: uploadUnit,
+          customCategory: uploadCategory,
+          customRevision: uploadRevision || todayStr
+        });
+      }
+    }
+
+    if (newSelected.length > 0) {
+      setSelectedFiles(prev => [...prev, ...newSelected]);
+    }
     e.target.value = '';
   };
 
-  // Perform multi-file upload
+  // Perform multi-file upload with concurrency for speed
   const handlePerformUpload = async () => {
     if (selectedFiles.length === 0) {
       showNotification('Lütfen en az bir PDF dosyası seçiniz.', 'error');
@@ -892,17 +982,62 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     }
 
     setIsUploading(true);
+    setUploadProgress(`Başlatılıyor... 0/${selectedFiles.length}`);
+    
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const uploadDateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
     const newPubs: TechPublication[] = [];
-    let successCount = 0;
+    setSuccessCount(0);
+    setFailCount(0);
+    let sCount = 0;
+    let fCount = 0;
 
-    for (let i = 0; i < selectedFiles.length; i++) {
-      const item = selectedFiles[i];
-      setUploadProgress(`Yükleniyor (${i + 1}/${selectedFiles.length}): ${item.customTitle}...`);
+    const concurrency = 3;
+    const items = [...selectedFiles];
+    
+    // Case 1: ZIP Upload (Fast Server-side path)
+    const zipItem = items.find(it => it.isZip);
+    if (zipItem) {
+      setUploadProgress(`ZIP paketi hazırlanıyor ve sunucuya gönderiliyor...`);
+      try {
+        const base64Zip = await fileToBase64(zipItem.file);
+        const unitOption = UNIT_FOLDER_OPTIONS.find(u => u.key === zipItem.customUnit) || UNIT_FOLDER_OPTIONS[1];
+        
+        const resp = await fetch('/api/upload-tech-publication-zip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base64Zip,
+            unit: unitOption.label,
+            unitKey: zipItem.customUnit,
+            category: zipItem.customCategory,
+            revision: zipItem.customRevision,
+            section: zipItem.customSection.trim() || uploadSection
+          })
+        });
+        
+        const result = await resp.json();
+        if (result.status === 'success') {
+          showNotification(result.message || 'ZIP içeriği başarıyla Drive\'a aktarıldı.', 'success');
+          setSelectedFiles([]);
+          setIsUploadModalOpen(false);
+          setTimeout(() => fetchDrivePublications(true), 1500);
+        } else {
+          throw new Error(result.message || 'ZIP yükleme hatası');
+        }
+      } catch (err: any) {
+        showNotification(`ZIP Yükleme Hatası: ${err.message}`, 'error');
+      } finally {
+        setIsUploading(false);
+        setUploadProgress('');
+      }
+      return;
+    }
 
+    // Case 2: Standard PDF Upload (Existing parallelism)
+    const processItem = async (item: any, index: number) => {
       const unitOption = UNIT_FOLDER_OPTIONS.find(u => u.key === item.customUnit) || UNIT_FOLDER_OPTIONS[1];
       const sectionName = item.customSection.trim() || 'Genel Teknik Döküman';
       const cleanFileName = `pub_${unitOption.key}_${item.customTitle.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
@@ -929,40 +1064,41 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
               originalFileName: item.file.name
             })
           });
+          
           if (resp.ok) {
             const result = await resp.json();
             if (result.status === 'success' || result.fileId) {
               driveFileId = result.fileId || '';
               viewUrl = result.viewUrl || '';
+            } else {
+              throw new Error(result.message || 'Upload failed');
             }
+          } else {
+            throw new Error(`HTTP Error ${resp.status}`);
           }
         } catch (serverErr) {
-          console.warn('Proxy upload failed, attempting direct GAS upload:', serverErr);
-          try {
-            const resp = await fetch(GOOGLE_SCRIPT_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify({
-                action: 'uploadTechPublication',
-                fileName: cleanFileName,
-                base64Data: base64Data,
-                unit: unitOption.label,
-                unitKey: item.customUnit,
-                category: item.customCategory || 'IPC',
-                title: item.customTitle,
-                revision: item.customRevision || 'Rev. 01',
-                section: sectionName,
-                notes: '',
-                originalFileName: item.file.name
-              })
-            });
-            const result = await resp.json();
-            if (result.status === 'success' || result.fileId) {
-              driveFileId = result.fileId || '';
-              viewUrl = result.viewUrl || '';
-            }
-          } catch (scriptErr) {
-            console.warn('Drive upload offline/fallback:', scriptErr);
+          // Direct GAS Fallback
+          const gasResp = await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'uploadTechPublication',
+              fileName: cleanFileName,
+              base64Data: base64Data,
+              unit: unitOption.label,
+              unitKey: item.customUnit,
+              category: item.customCategory || 'IPC',
+              title: item.customTitle,
+              revision: item.customRevision || 'Rev. 01',
+              section: sectionName,
+              notes: '',
+              originalFileName: item.file.name
+            })
+          });
+          const result = await gasResp.json();
+          if (result.status === 'success' || result.fileId) {
+            driveFileId = result.fileId || '';
+            viewUrl = result.viewUrl || '';
           }
         }
 
@@ -984,25 +1120,40 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
         };
 
         newPubs.push(newPub);
-        successCount++;
+        sCount++;
+        setSuccessCount(sCount);
       } catch (err) {
         console.error(`Dosya yükleme hatası (${item.file.name}):`, err);
+        fCount++;
+        setFailCount(fCount);
+      } finally {
+        const completed = sCount + fCount;
+        setUploadProgress(`Yükleniyor (${completed}/${items.length}): ${item.customTitle}`);
       }
+    };
+
+    // Execute with concurrency
+    for (let i = 0; i < items.length; i += concurrency) {
+      const chunk = items.slice(i, i + concurrency);
+      await Promise.all(chunk.map((item, idx) => processItem(item, i + idx)));
     }
 
     if (newPubs.length > 0) {
       const updatedList = [...newPubs, ...publications];
       savePublications(updatedList);
-      showNotification(`${successCount} adet teknik yayın Drive'a başarıyla yüklendi ve kalıcı olarak kaydedildi.`, 'success');
+      
+      if (fCount === 0) {
+        showNotification(`${sCount} adet teknik yayın başarıyla Drive'a yüklendi.`, 'success');
+      } else {
+        showNotification(`${sCount} dosya yüklendi, ${fCount} dosya hata aldı.`, 'info');
+      }
+      
       setSelectedFiles([]);
       setIsUploadModalOpen(false);
-      if (newPubs.length > 0) {
-        setActivePub(newPubs[0]);
-      }
-      // Background sync from Drive
-      setTimeout(() => fetchDrivePublications(false), 800);
+      setActivePub(newPubs[0]);
+      setTimeout(() => fetchDrivePublications(false), 1000);
     } else {
-      showNotification('Dosyalar yüklenirken bir hata oluştu.', 'error');
+      showNotification('Dosyalar yüklenirken bir hata oluştu. Lütfen bağlantınızı kontrol edin.', 'error');
     }
 
     setIsUploading(false);
@@ -1320,39 +1471,37 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
 
             {/* Center / Right: Live Depo Search Bar in Top Section */}
             <div className="flex items-center gap-2.5 flex-1 max-w-2xl justify-end">
-              <div className="relative flex-1 max-w-lg">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  id="input-viewer-depo-search"
-                  type="text"
-                  value={depoSearchQuery}
-                  onChange={e => {
-                    setDepoSearchQuery(e.target.value);
-                  }}
-                  placeholder="Parça No (P/N), Seri No veya Malzeme Adı ile Canlı Depo Ara..."
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-16 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
-                />
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                  {depoSearchQuery ? (
-                    <button
-                      onClick={() => setDepoSearchQuery('')}
-                      className="p-1 text-slate-400 hover:text-white"
-                      title="Aramayı Temizle"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handlePasteFromClipboard}
-                      className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-emerald-300 rounded text-[10px] font-bold flex items-center gap-1 border border-slate-700 transition-colors"
-                      title="Panodan Kopyalanan Parça Numarasını Yapıştır ve Ara"
-                    >
-                      <Clipboard className="w-3 h-3 text-emerald-400" />
-                      <span>YAPIŞTIR</span>
-                    </button>
-                  )}
+              <div className="relative flex-1 max-w-lg flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    id="input-viewer-depo-search"
+                    type="text"
+                    value={depoSearchQuery}
+                    onChange={e => {
+                      setDepoSearchQuery(e.target.value);
+                    }}
+                    placeholder="Parça No (P/N), Seri No veya Malzeme Adı ile Canlı Depo Ara..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-16 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                    {depoSearchQuery && (
+                      <button
+                        onClick={() => setDepoSearchQuery('')}
+                        className="p-1 text-slate-400 hover:text-white"
+                        title="Aramayı Temizle"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase rounded-xl transition shadow-sm cursor-pointer active:scale-95 shrink-0"
+                >
+                  ARA
+                </button>
               </div>
 
               {/* Matched count indicator badge & drawer toggle (Green if in stock > 0, Orange if in stock == 0, Red if not found) */}
@@ -1536,9 +1685,9 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                             {item.unitTitle}
                           </span>
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                            item.durumu === 'FAAL' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'
+                            (item.toplamStok > 0 || item.miktarNum > 0) ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'
                           }`}>
-                            {item.durumu}
+                            {(item.toplamStok > 0 || item.miktarNum > 0) ? 'VAR' : 'YOK'}
                           </span>
                         </div>
                         <h4 className="text-xs font-bold text-white truncate mb-1">{item.adi}</h4>
@@ -1551,18 +1700,53 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                             <span className="text-slate-500">S/N:</span>
                             <span>{item.seriNo}</span>
                           </div>
-                          <div className="flex justify-between">
-                            <span className="text-slate-500">Yer / Raf:</span>
-                            <span className="text-amber-300">{item.yer}</span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-500">Miktar / Stok:</span>
-                            <span className={`font-bold px-1.5 py-0.5 rounded text-[11px] ${
-                              item.miktarNum > 0
-                                ? 'text-emerald-300 bg-emerald-950/80 border border-emerald-800/60'
-                                : 'text-amber-300 bg-amber-950/80 border border-amber-800/60'
-                            }`}>{item.miktar}</span>
-                          </div>
+                          
+                          {item.isSarfItem ? (
+                            <div className="mt-2 pt-2 border-t border-slate-800 space-y-1">
+                                <div className="flex flex-col bg-yellow-400 text-black px-1.5 py-1 rounded font-black text-center shadow-sm border border-yellow-500">
+                                    <div className="text-[10px] uppercase border-b border-black/10 pb-0.5 mb-1">ANKARA MEVCUT</div>
+                                    <div className="text-sm">{item.ankaraMevcut || 0}</div>
+                                    <div className="text-[9px] mt-1 pt-1 border-t border-black/10 font-bold italic">
+                                      {item.yer || '-'}
+                                    </div>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>MİLAS MEVCUT:</span>
+                                    <span>{item.milasMevcut || 0}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>KARAİN MEVCUT:</span>
+                                    <span>{item.karainMevcut || 0}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>ÇANAKKALE MEVCUT:</span>
+                                    <span>{item.canakkaleMevcut || 0}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>BURSA MEVCUT:</span>
+                                    <span>{item.bursaMevcut || 0}</span>
+                                </div>
+                                <div className="flex justify-between items-center pt-1 border-t border-slate-800 text-cyan-300 font-black">
+                                    <span>TOPLAM STOK:</span>
+                                    <span>{item.toplamStok || 0}</span>
+                                </div>
+                            </div>
+                          ) : (
+                            <>
+                                <div className="flex justify-between">
+                                    <span className="text-slate-500">Yer / Raf:</span>
+                                    <span className="text-amber-300">{item.yer}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-slate-500">Miktar / Stok:</span>
+                                    <span className={`font-bold px-1.5 py-0.5 rounded text-[11px] ${
+                                    item.miktarNum > 0
+                                        ? 'text-emerald-300 bg-emerald-950/80 border border-emerald-800/60'
+                                        : 'text-amber-300 bg-amber-950/80 border border-amber-800/60'
+                                    }`}>{item.miktar}</span>
+                                </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -2034,7 +2218,33 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                       <div className="text-[11px] text-slate-400 space-y-0.5">
                         <div><strong className="text-slate-300">P/N:</strong> {item.parcaNo}</div>
                         <div><strong className="text-slate-300">S/N:</strong> {item.seriNo}</div>
-                        <div><strong className="text-slate-300">Konum:</strong> {item.yer}</div>
+                        
+                        {item.isSarfItem ? (
+                          <div className="mt-2 pt-2 border-t border-slate-800 space-y-1">
+                            <div className="flex justify-between items-center text-orange-300 font-bold">
+                                <span>ANKARA:</span>
+                                <span>{item.ankaraMevcut || 0} ({item.yer})</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span>MİLAS:</span>
+                                <span>{item.milasMevcut || 0}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span>KARAİN:</span>
+                                <span>{item.karainMevcut || 0}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span>ÇANAKKALE:</span>
+                                <span>{item.canakkaleMevcut || 0}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <span>BURSA:</span>
+                                <span>{item.bursaMevcut || 0}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div><strong className="text-slate-300">Konum:</strong> {item.yer}</div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -2069,142 +2279,199 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto space-y-4 flex-1">
-              {/* Unit & Category Selector */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Hedef Hava Aracı</label>
-                  <select
-                    value={uploadUnit}
-                    onChange={e => setUploadUnit(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
-                  >
-                    {UNIT_FOLDER_OPTIONS.filter(u => u.key !== 'all').map(u => (
-                      <option key={u.key} value={u.key}>{u.label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Yayın Türü / Kategori</label>
-                  <select
-                    value={uploadCategory}
-                    onChange={e => setUploadCategory(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
-                  >
-                    <option value="IPC">IPC (Parça Kataloğu)</option>
-                    <option value="AMM">AMM (Bakım El Kitabı)</option>
-                    <option value="CMM">CMM (Komponent Bakım)</option>
-                    <option value="ŞEMA">ŞEMA / WDM</option>
-                    <option value="EL KİTABI">EL KİTABI</option>
-                    <option value="STANDART">STANDART</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Revizyon</label>
-                  <input
-                    type="text"
-                    value={uploadRevision}
-                    onChange={e => setUploadRevision(e.target.value)}
-                    placeholder="Rev. 01"
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Section selector */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Bölüm / Tanım</label>
-                <select
-                  value={uploadSection}
-                  onChange={e => {
-                    setUploadSection(e.target.value);
-                    setUploadCustomSection('');
-                  }}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
-                >
-                  {SECTION_SUGGESTIONS.map(sec => (
-                    <option key={sec} value={sec}>{sec}</option>
-                  ))}
-                  <option value="custom">+ Özel Bölüm Adı Girin</option>
-                </select>
-              </div>
-
-              {uploadSection === 'custom' && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Özel Bölüm Adı</label>
-                  <input
-                    type="text"
-                    value={uploadCustomSection}
-                    onChange={e => setUploadCustomSection(e.target.value)}
-                    placeholder="Örn: Bölüm 6 - Yakıt ve İkmal Sistemi"
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none"
-                  />
-                </div>
-              )}
-
-              {/* File Dropzone */}
-              <div className="border-2 border-dashed border-slate-700/80 hover:border-emerald-500/60 rounded-2xl p-6 text-center bg-slate-950/40 transition-colors relative cursor-pointer group">
-                <input
-                  type="file"
-                  multiple
-                  accept=".pdf,application/pdf"
-                  onChange={handleFileInputChange}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                />
-                <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 mx-auto mb-2 group-hover:scale-105 transition-transform">
-                  <FileText className="w-6 h-6" />
-                </div>
-                <h4 className="text-xs font-bold text-white mb-1">PDF Dökümanlarını Seçiniz veya Sürükleyiniz</h4>
-                <p className="text-[11px] text-slate-400">Tek veya çoklu PDF seçimi yapabilirsiniz</p>
-              </div>
-
-              {/* Selected files list */}
-              {selectedFiles.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-                    <span>Seçilen Yayınlar ({selectedFiles.length})</span>
-                    <button
-                      onClick={() => setSelectedFiles([])}
-                      className="text-rose-400 hover:text-rose-300 text-[11px]"
-                    >
-                      Listeyi Temizle
-                    </button>
+            <div className="p-6 overflow-y-auto space-y-5 flex-1">
+              {isUploading ? (
+                /* HIPZHILI MODERN LOADING VIEW */
+                <div className="flex flex-col items-center justify-center py-12 space-y-6">
+                  <div className="relative">
+                    <div className="w-24 h-24 rounded-full border-4 border-slate-800 border-t-emerald-500 animate-spin"></div>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Cloud className="w-8 h-8 text-emerald-400 animate-pulse" />
+                    </div>
                   </div>
-                  <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-                    {selectedFiles.map((item, idx) => (
-                      <div key={idx} className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl flex items-center gap-3">
-                        <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <input
-                            type="text"
-                            value={item.customTitle}
-                            onChange={e => {
-                              const val = e.target.value;
-                              setSelectedFiles(prev => prev.map((f, i) => i === idx ? { ...f, customTitle: val } : f));
-                            }}
-                            placeholder="Yayın Adı"
-                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white focus:border-emerald-500 outline-none truncate"
-                          />
-                        </div>
+                  
+                  <div className="text-center space-y-2">
+                    <h4 className="text-lg font-black text-white uppercase tracking-widest">DOSYALAR YÜKLENİYOR</h4>
+                    <p className="text-sm text-emerald-400 font-mono font-bold">{uploadProgress}</p>
+                    <div className="w-64 h-1.5 bg-slate-800 rounded-full mt-4 overflow-hidden mx-auto">
+                      <motion.div 
+                        className="h-full bg-emerald-500"
+                        initial={{ width: "0%" }}
+                        animate={{ 
+                          width: `${((successCount + failCount) / selectedFiles.length) * 100}%` 
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-2">Hızlandırmak için paralel (3'lü) yükleme yapılıyor...</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Unit & Category Selector */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Hedef Hava Aracı</label>
+                      <select
+                        value={uploadUnit}
+                        onChange={e => setUploadUnit(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
+                      >
+                        {UNIT_FOLDER_OPTIONS.filter(u => u.key !== 'all').map(u => (
+                          <option key={u.key} value={u.key}>{u.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Yayın Türü / Kategori</label>
+                      <select
+                        value={uploadCategory}
+                        onChange={e => setUploadCategory(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
+                      >
+                        <option value="IPC">IPC (Parça Kataloğu)</option>
+                        <option value="AMM">AMM (Bakım El Kitabı)</option>
+                        <option value="CMM">CMM (Komponent Bakım)</option>
+                        <option value="ŞEMA">ŞEMA / WDM</option>
+                        <option value="EL KİTABI">EL KİTABI</option>
+                        <option value="STANDART">STANDART</option>
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">Rev. Tarihi</label>
+                        <input
+                          type="date"
+                          value={uploadRevisionDate}
+                          onChange={e => {
+                            const date = e.target.value;
+                            setUploadRevisionDate(date);
+                            if (date) {
+                              const d = new Date(date);
+                              const revLabel = `Rev. ${d.toLocaleDateString('tr-TR')}`;
+                              setUploadRevision(revLabel);
+                              setSelectedFiles(prev => prev.map(f => ({ ...f, customRevision: revLabel })));
+                            }
+                          }}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-[10px] text-white outline-none cursor-pointer"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">Etiket</label>
+                        <input
+                          type="text"
+                          value={uploadRevision}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setUploadRevision(val);
+                            setSelectedFiles(prev => prev.map(f => ({ ...f, customRevision: val })));
+                          }}
+                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-[10px] text-white outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Section selector (Folder Name) */}
+                  <div className="p-4 bg-slate-950/50 border border-slate-800 rounded-2xl space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-emerald-400 mb-1.5 uppercase tracking-wider flex items-center gap-2">
+                        <Layers className="w-3.5 h-3.5" />
+                        Klasör / Bölüm Adı
+                      </label>
+                      <select
+                        value={uploadSection}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setUploadSection(val);
+                          if (val !== 'custom') {
+                            setUploadCustomSection('');
+                            setSelectedFiles(prev => prev.map(f => ({ ...f, customSection: val })));
+                          }
+                        }}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
+                      >
+                        {SECTION_SUGGESTIONS.map(sec => (
+                          <option key={sec} value={sec}>{sec}</option>
+                        ))}
+                        <option value="custom">+ Yeni Klasör / Özel Bölüm</option>
+                      </select>
+                    </div>
+
+                    {(uploadSection === 'custom' || uploadSection === '') && (
+                      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1">Klasör Adı Girin</label>
+                        <input
+                          type="text"
+                          value={uploadCustomSection}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setUploadCustomSection(val);
+                            setSelectedFiles(prev => prev.map(f => ({ ...f, customSection: val })));
+                          }}
+                          placeholder="Örn: PART CATALOG OCAK 2026"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none"
+                        />
+                      </motion.div>
+                    )}
+                  </div>
+
+                  {/* File Dropzone */}
+                  <div className="border-2 border-dashed border-slate-700/80 hover:border-emerald-500/60 rounded-2xl p-6 text-center bg-slate-950/40 transition-colors relative cursor-pointer group">
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,application/pdf"
+                      onChange={handleFileInputChange}
+                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                    />
+                    <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 mx-auto mb-2 group-hover:scale-105 transition-transform">
+                      <FileText className="w-6 h-6" />
+                    </div>
+                    <h4 className="text-xs font-bold text-white mb-1">PDF Dökümanlarını Seçiniz veya Sürükleyiniz</h4>
+                    <p className="text-[11px] text-slate-400">Tek veya çoklu PDF seçimi yapabilirsiniz</p>
+                  </div>
+
+                  {/* Selected files list */}
+                  {selectedFiles.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+                        <span>Seçilen Yayınlar ({selectedFiles.length})</span>
                         <button
-                          onClick={() => setSelectedFiles(prev => prev.filter((_, i) => i !== idx))}
-                          className="p-1 rounded-lg text-slate-400 hover:text-rose-400"
+                          onClick={() => setSelectedFiles([])}
+                          className="text-rose-400 hover:text-rose-300 text-[11px]"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          Listeyi Temizle
                         </button>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {uploadProgress && (
-                <div className="p-3 bg-emerald-950/30 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 animate-spin text-emerald-400 shrink-0" />
-                  <span>{uploadProgress}</span>
-                </div>
+                      <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                        {selectedFiles.map((item, idx) => (
+                          <div key={idx} className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl flex items-center gap-3">
+                            <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <input
+                                type="text"
+                                value={item.customTitle}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setSelectedFiles(prev => prev.map((f, i) => i === idx ? { ...f, customTitle: val } : f));
+                                }}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white outline-none truncate"
+                              />
+                            </div>
+                            <button
+                              onClick={() => setSelectedFiles(prev => prev.filter((_, i) => i !== idx))}
+                              className="p-1 rounded-lg text-slate-400 hover:text-rose-400"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

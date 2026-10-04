@@ -235,6 +235,7 @@ import {
   MapPin,
   Save,
   Bell,
+  Barcode,
   Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -256,9 +257,11 @@ import { unmergeAndFillWorksheet, groupMultiLocationRowsHelper, cleanAndFormatDa
 import { getAllHangarPdfDocs, saveHangarPdfDoc, deleteHangarPdfDoc, getHangarPdfDocById, syncHangarPdfDocsFromDrive, findMatchingDocs, isDocMatchingRow, normalizeDocKey, HangarPdfDoc, getFileCategory, getDocMimeType } from './utils/hangarPdfStorage';
 import { PdfPreviewModal } from './components/PdfPreviewModal';
 import { OlayTakipCizelgesiModal } from './components/OlayTakipCizelgesiModal';
+import { BarkodOkuyucuModal } from './components/BarkodOkuyucuModal';
 import { GunTakipModal } from './components/GunTakipModal';
+import { DepoSlipPrintModal } from './components/DepoSlipPrintModal';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyeo_j2XWkNwCaKXAPZn3I6jsMeM8K_KjZ7MkvD9Lcqx0EOhj_JfecVjfMmZ5HI88557Q/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzhXYZBlJvYarhEYpSK_UdceV-pQwGRIHTjWAVN_UTumI7_qla7vZnAZofdJGeK0e-ZVQ/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
 export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
@@ -833,6 +836,23 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { Adi_Soyadi: "Zeynep Elmas", Memuriyet_Baslangici: "2014-06-01", Toplam_Hizmet_Yili: "12", Toplam_Ucus_Saati: "680", Ucus_Tazminati_Durumu: "Aktif / Ödeniyor" },
       { Adi_Soyadi: "Kemal Sun", Memuriyet_Baslangici: "2019-10-10", Toplam_Hizmet_Yili: "7", Toplam_Ucus_Saati: "320", Ucus_Tazminati_Durumu: "Beklemede" }
     ]
+  },
+  7: {
+    title: 'DEPO SAYIM KAYITLARI',
+    sheetName: '7-Sayimlar',
+    storageKey: 'form_7_sayimlar',
+    columns: [
+      { key: 'Tarih', label: 'Tarih / Saat' },
+      { key: 'Malzeme', label: 'Malzeme Adı' },
+      { key: 'PN', label: 'P/N' },
+      { key: 'SN', label: 'S/N' },
+      { key: 'Bolge', label: 'Depo Bölgesi' },
+      { key: 'Sistem_Stok', label: 'Sistem Mevcut' },
+      { key: 'Sayilan_Adet', label: 'Fiziksel Sayılan' },
+      { key: 'Fark', label: 'Fark (+/-)' },
+      { key: 'Personel', label: 'Sayan Personel' }
+    ],
+    defaultRows: []
   }
 };
 
@@ -851,32 +871,46 @@ export const getAirframeSuffix = (id: number | null): string => {
   return '';
 };
 
+// Isolated Live Clock component so 1-second interval does NOT re-render the entire App component
+const LiveClock = React.memo(() => {
+  const [time, setTime] = useState(() => new Date().toLocaleTimeString('tr-TR'));
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTime(new Date().toLocaleTimeString('tr-TR'));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+  return <span className="font-mono text-white/70">SAAT: {time}</span>;
+});
+
 export default function App() {
   // Splash screen state
   const [splashVisible, setSplashVisible] = useState(true);
 
-  // Mobile detection
+  // Mobile detection with debounced listener
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   useEffect(() => {
-    // Preload lightweight mobile AI model for ultra fast background removal
-    try {
-      preload({ model: 'isnet_fp16' }).catch(() => {});
-    } catch (e) {
-      // Ignore
-    }
-
+    let resizeTimer: any;
     const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        setIsMobile(window.innerWidth < 768);
+      }, 150);
     };
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      clearTimeout(resizeTimer);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   // Modal active state
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState('SİSTEM');
   const [modalType, setModalType] = useState<'iframe' | 'design' | 'category' | 'form_table' | 'excel_sync' | 'techizat_matrix' | 'denetleme'>('iframe');
+  const [isTechizatSlipModalOpen, setIsTechizatSlipModalOpen] = useState<boolean>(false);
+  const [techizatModalList, setTechizatModalList] = useState<any[]>([]);
   const [modalUrl, setModalUrl] = useState('');
   const [iframeLoading, setIframeLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<CategoryType>(null);
@@ -2057,7 +2091,7 @@ export default function App() {
   const [activeExcelMatchIdx, setActiveExcelMatchIdx] = useState<number>(0);
 
   // Teçhizat Takip Matrix States
-  const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all' | null>(null);
+  const [activeTechizatType, setActiveTechizatType] = useState<'bell429' | 'at802' | 'at802_ozel_alet' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all' | null>(null);
   const [selectedUnitFolder, setSelectedUnitFolder] = useState<string | null>(null);
   const [techizatActiveSection, setTechizatActiveSection] = useState<'all' | 'techizat_all' | 'depo_all' | 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal'>('all');
   const [isPullingTechizat, setIsPullingTechizat] = useState<boolean>(false);
@@ -2068,9 +2102,19 @@ export default function App() {
   const [techizatColorFilter, setTechizatColorFilter] = useState<string>("ALL");
   const [isTechizatDriveLoading, setIsTechizatDriveLoading] = useState<boolean>(false);
   const [activeTechizatMatchIdx, setActiveTechizatMatchIdx] = useState<number>(0);
+  const [techizatPage, setTechizatPage] = useState<number>(1);
+  const [techizatPageSize, setTechizatPageSize] = useState<number>(50);
+  const [isTechizatFilterOpen, setIsTechizatFilterOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    setTechizatPage(1);
+  }, [activeTechizatType, techizatActiveSection, techizatSearchQuery, techizatFirmaFilter, techizatDurumFilter, techizatColorFilter]);
+
   const [isTechPubsOpen, setIsTechPubsOpen] = useState<boolean>(false);
   const [isOlayTakipOpen, setIsOlayTakipOpen] = useState<boolean>(false);
   const [olayTakipInitialUnit, setOlayTakipInitialUnit] = useState<string>('at802');
+  const [isBarkodOkuyucuOpen, setIsBarkodOkuyucuOpen] = useState<boolean>(false);
+  const [barkodOkuyucuInitialUnit, setBarkodOkuyucuInitialUnit] = useState<string>('at802');
 
   // Akıllı Teçhizat Görsel Eşleştirici: AT-802, Hangar ve tüm birimler için seri no, parça no veya isimle tam uyumlu görseli bulur
   const findRowImageUrl = (techType: string, row: string[], images: Record<string, string>): string | null => {
@@ -2189,23 +2233,9 @@ export default function App() {
     if (combined.includes("##OZEL_ALET##") || combined.includes("[OZEL ALET]") || combined.includes("OZEL BAKIM VE TEST ALETLERI") || combined.includes("OZEL BAKIM ALETLERI") || combined.includes("OZEL ALETLER")) return 'ozel_alet';
     if (combined.includes("##YER_DESTEK##") || combined.includes("[YER DESTEK]") || combined.includes("YER DESTEK TECHIZATLARI")) return 'yer_destek';
 
-    // 3. Heuristics based on item name (row[1]) or part number (row[2]) or description (row[11])
-    const itemName = normalizeTurkishStr(String(row[1] || "") + " " + String(row[2] || "") + " " + String(row[11] || "")).toUpperCase();
-
-    // Check for chemical depo: Yalnızca açıkça kimyasal depo Excel'inden yüklenmişse veya etiketlenmişse geçerli olur.
-    // Kullanıcı kuralı: Drive'da kimyasal depo Excel'i yoksa kimyasal depo her zaman BOŞ kalacaktır.
-    // Otomatik isim heuristiği kaldırıldı.
-
-    // Check for sarf depo
-    if (itemName.includes("FILTRE") || itemName.includes("FILTER") || itemName.includes("CONTA") || itemName.includes("O-RING") || itemName.includes("BALATA") || itemName.includes("KECE") || itemName.includes("SEAL") || itemName.includes("SARF") || itemName.includes("CIVATA") || itemName.includes("SOMUN") || itemName.includes("PUL") || itemName.includes("RIVET") || itemName.includes("PERCIN")) {
-      return 'depo_sarf';
-    }
-
-    // Check for special maintenance and test tools (Özel Aletler)
-    if (itemName.includes("OZEL ALET") || itemName.includes("TEST ADAPTOR") || itemName.includes("TORK ADAPTOR") || itemName.includes("KOMPRESOR YIKAMA") || itemName.includes("AYAR MASTAR") || itemName.includes("BOSALTMA KAPAK TEST") || itemName.includes("CALIBRATION") || itemName.includes("TEST RIG") || itemName.includes("FIREGATE") || itemName.includes("OZEL BAKIM") || itemName.includes("ACHIOLCER") || itemName.includes("ACIOLCER") || itemName.includes("KALIBRASYON KIT") || itemName.includes("HAT BAKIM VE KALIBRASYON") || itemName.includes("TORQUE") || itemName.includes("MASTAR") || itemName.includes("ADAPTOR") || itemName.includes("TEST KIT") || itemName.includes("TORK ANAHTAR") || itemName.includes("MOTOR TEST") || itemName.includes("TORQ") || itemName.includes("WRENCH") || itemName.includes("PULLER") || itemName.includes("SOCKET") || itemName.includes("VOLTMETRE") || itemName.includes("MULTIMETRE") || itemName.includes("MANOMETRE")) {
-      return 'ozel_alet';
-    }
-
+    // 3. Kullanıcı kuralı: Heuristik anahtar kelime eşleştirmesi KESİNLİKLE YASAKTIR.
+    // Veriler doğrudan Google Drive üzerindeki ilgili Excel dosyasından (String/Name matching) okunur;
+    // hiçbir birimin tablosuna başka bir birimin verisi veya Özel Aletler verisi çekilemez.
     return 'yer_destek';
   };
 
@@ -2420,47 +2450,166 @@ export default function App() {
     }
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>([]);
+  const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_bell429_data') || localStorage.getItem('excel_techizat_bell429_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatAt802Columns, setTechizatAt802Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>([]);
+  const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_at802_data') || localStorage.getItem('excel_techizat_at802_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
+
+  const [techizatAt802OzelAletColumns, setTechizatAt802OzelAletColumns] = useState<string[]>(() => {
+    return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
+  });
+  const [techizatAt802OzelAletData, setTechizatAt802OzelAletData] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_at802_ozel_alet_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatT70Columns, setTechizatT70Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70Data, setTechizatT70Data] = useState<string[][]>([]);
+  const [techizatT70Data, setTechizatT70Data] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_t70_data') || localStorage.getItem('excel_techizat_t70_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatT70BumbiBacketColumns, setTechizatT70BumbiBacketColumns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>([]);
+  const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_t70_bumbi_backet_data') || localStorage.getItem('excel_techizat_t70_bumbi_backet_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatT70HelitakColumns, setTechizatT70HelitakColumns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70HelitakData, setTechizatT70HelitakData] = useState<string[][]>([]);
+  const [techizatT70HelitakData, setTechizatT70HelitakData] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_t70_helitak_data') || localStorage.getItem('excel_techizat_t70_helitak_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatB360Columns, setTechizatB360Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatB360Data, setTechizatB360Data] = useState<string[][]>([]);
+  const [techizatB360Data, setTechizatB360Data] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_b360_data') || localStorage.getItem('excel_techizat_b360_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatC650Columns, setTechizatC650Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatC650Data, setTechizatC650Data] = useState<string[][]>([]);
+  const [techizatC650Data, setTechizatC650Data] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_c650_data') || localStorage.getItem('excel_techizat_c650_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatHangarColumns, setTechizatHangarColumns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "BAKIMA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ", "BELGE YÜKLE"];
   });
-  const [techizatHangarData, setTechizatHangarData] = useState<string[][]>([]);
+  const [techizatHangarData, setTechizatHangarData] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('techizat_hangar_data') || localStorage.getItem('excel_techizat_hangar_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  });
 
   const [techizatKaraAraclariColumns, setTechizatKaraAraclariColumns] = useState<string[]>(() => {
-    return ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "MARKA", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "BAKIMA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"];
+    return [
+      "SIRA NO", 
+      "ARAÇ PLAKASI / TANIMI", 
+      "MARKA", 
+      "MODEL", 
+      "YAKIT TÜRÜ", 
+      "BULUNDUĞU YER", 
+      "SON KM Sİ", 
+      "DURUMU", 
+      "BAKIMA TABİ", 
+      "SON KONTROL / KALİBRASYON / BAKIM", 
+      "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+      "SON KONTROLÜ YAPAN FİRMA", 
+      "AÇIKLAMA", 
+      "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+    ];
   });
-  const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>([]);
+  const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>(() => {
+    try {
+      const stored = localStorage.getItem('excel_techizat_kara_araclari_data') || localStorage.getItem('techizat_kara_araclari_data');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) { console.error(e); }
+    return [
+      ["1", "06 CUK 695", "FORD", "RANGER 4x4", "Dizel", "ANKARA", "124500", "FAAL", "EVET", "15.01.2025", "15.01.2026", "FORD YETKİLİ SERVİS", "Periyodik bakım yapıldı", ""],
+      ["2", "06 FV 2359", "TOYOTA", "HILUX 4x4", "Dizel", "ANTALYA", "158200", "FAAL", "EVET", "10.02.2025", "10.02.2026", "TOYOTA PLAZA", "Genel kontrol ve periyodik servis", ""],
+      ["3", "06 OGM 1001", "ISUZU", "D-MAX", "Dizel", "İZMİR", "4500", "FAAL", "EVET", "05.03.2025", "05.03.2026", "ISUZU SERVİS", "Rutin muayene", ""],
+      ["4", "06 OGM 1002", "FORD", "TRANSIT CUSTOM", "Dizel", "MUĞLA", "18200", "FAAL", "EVET", "20.01.2025", "20.01.2026", "FORD OTO", "Yağ filtre bakımı", ""],
+      ["5", "06 OGM 1003", "MERCEDES-BENZ", "SPRINTER", "Dizel", "ADANA", "9400", "FAAL", "EVET", "18.02.2025", "18.02.2026", "MERCEDES HAS", "10.000 KM periyodik servis", ""],
+      ["6", "06 OGM 1004", "RENAULT", "DUSTER 4x4", "Benzin", "ANKARA", "3200", "FAAL", "EVET", "12.04.2025", "12.04.2026", "MAİS ANKARA", "İlk rodaj muayene", ""]
+    ];
+  });
 
   const convertOldKaraAraclariRowToNew = (row: string[]): string[] => {
     const isOldFormat = row.length >= 11 && (row[6] === "FAAL" || row[6] === "ARIZALI" || row[6] === "FAAL DEĞİL" || row[6] === "GAYRİ FAAL");
@@ -2530,19 +2679,28 @@ export default function App() {
 
   // Helper method to open Teçhizat Takip Matrix
   const openTechizatMatrix = (
-    type: 'bell429' | 'at802' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all',
+    type: 'bell429' | 'at802' | 'at802_ozel_alet' | 't70' | 't70_bumbi_backet' | 't70_helitak' | 'b360' | 'c650' | 'hangar' | 'kara_araclari' | 'all',
     title: string,
     sectionFilter: 'all' | 'techizat_all' | 'depo_all' | 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal' = 'all'
   ) => {
-    setActiveTechizatType(type);
+    const actualType = (type === 'at802' && sectionFilter === 'ozel_alet') ? 'at802_ozel_alet' : type;
+    setActiveTechizatType(actualType);
     setTechizatActiveSection(sectionFilter);
     setModalType('techizat_matrix');
     setModalTitle(title);
     setModalOpen(true);
     setTechizatSearchQuery('');
     setActiveTechizatMatchIdx(0);
-    // Background check for the selected unit only, preserving fast instant UI opening
-    pullTechizatUnitFromDrive(type, true);
+    // Google Drive'dan tam dosya adı eşleştirmesi ile canlı senkronizasyon
+    pullTechizatUnitFromDrive(actualType, true);
+  };
+
+  // Open Depo Management Modal directly in the main system
+  const openStandaloneDepo = (unitKey?: string) => {
+    if (unitKey) {
+      setSelectedUnitFolder(unitKey);
+    }
+    setIsDepoModalOpen(true);
   };
 
   // State for "Yeni Ürün / Teçhizat Ekle" Modal
@@ -2561,7 +2719,44 @@ export default function App() {
     return [];
   });
 
-  const [depoTransactions, setDepoTransactions] = useState<DepoTransaction[]>([]);
+  const [depoTransactions, setDepoTransactions] = useState<DepoTransaction[]>(() => {
+    try {
+      const saved = localStorage.getItem('ogm_depo_transfers_v5') || localStorage.getItem('form_7_sayimlar_txs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+
+  useEffect(() => {
+    if (depoTransactions.length > 0) {
+      try {
+        localStorage.setItem('ogm_depo_transfers_v5', JSON.stringify(depoTransactions));
+      } catch (e) {}
+    }
+  }, [depoTransactions]);
+
+  useEffect(() => {
+    fetch('/api/get-depo-transfers')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.status === 'success' && Array.isArray(data.transactions) && data.transactions.length > 0) {
+          setDepoTransactions(prev => {
+            const map = new Map<string, DepoTransaction>();
+            const getTxKey = (t: DepoTransaction) => t.id || `${t.timestamp || t.date}_${t.itemName || t.pn}_${t.type || t.islemTuru}`;
+            prev.forEach(t => map.set(getTxKey(t), t));
+            data.transactions.forEach((t: DepoTransaction) => {
+              const k = getTxKey(t);
+              if (!map.has(k)) map.set(k, t);
+            });
+            return Array.from(map.values());
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() => {
     try {
@@ -2592,6 +2787,7 @@ export default function App() {
     const formattedRow = newRow.map(c => cleanAndFormatDateString(c));
     const setterMap: Record<string, React.Dispatch<React.SetStateAction<string[][]>>> = {
       'at802': setTechizatAt802Data,
+      'at802_ozel_alet': setTechizatAt802OzelAletData,
       'bell429': setTechizatBell429Data,
       't70': setTechizatT70Data,
       't70_bumbi_backet': setTechizatT70BumbiBacketData,
@@ -2604,6 +2800,7 @@ export default function App() {
 
     const storageKeyMap: Record<string, string> = {
       'at802': 'excel_techizat_at802_data',
+      'at802_ozel_alet': 'techizat_at802_ozel_alet_data',
       'bell429': 'excel_techizat_bell429_data',
       't70': 'excel_techizat_t70_data',
       't70_bumbi_backet': 'excel_techizat_t70_bumbi_backet_data',
@@ -3215,6 +3412,10 @@ export default function App() {
 
       // Populate Rows with native embedded binary images inside the .xlsx package
       for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+        if (rIdx % 10 === 0) {
+          setExcelExportProgressText(`Excel oluşturuluyor (%${Math.round((rIdx / Math.max(1, rows.length)) * 100)})...`);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
         const row = rows[rIdx];
         const b64Data = resolvedRowImagesMap[rIdx];
         const rowNum = rIdx + 3; // row 1 title, row 2 header
@@ -4869,9 +5070,6 @@ export default function App() {
     return TABLE_CONFIGS[formId].columns.map(col => col.label);
   };
 
-  // Real-time HUD Clock state
-  const [timeString, setTimeString] = useState('14:45:21');
-
   // Year reference
   const currentYear = new Date().getFullYear();
 
@@ -4881,17 +5079,6 @@ export default function App() {
       setSplashVisible(false);
     }, 5000);
     return () => clearTimeout(timer);
-  }, []);
-
-  // Live HUD Clock logic
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setTimeString(now.toLocaleTimeString('tr-TR'));
-    };
-    updateTime();
-    const intervalId = setInterval(updateTime, 1000);
-    return () => clearInterval(intervalId);
   }, []);
 
   // Set page's title
@@ -5160,7 +5347,31 @@ export default function App() {
 
   const formatDepoRow = (row: string[]) => {
     const r = [...row];
-    while (r.length < 13) {
+    if (activeTechizatType === 'at802') {
+      while (r.length < 18) r.push("");
+      return [
+        r[0] || "", // SIRA
+        r[1] || "", // NAME
+        r[2] || "", // PN
+        r[3] || "", // SN
+        r[4] || "1", // MİKTAR
+        r[5] || "", // YER
+        r[6] || "", // LOKASYON NO
+        r[7] || "0", // TOPLAM STOK
+        r[8] || "0", // ANKARA
+        r[9] || "0", // MİLAS
+        r[10] || "0", // KARAİN
+        r[11] || "0", // ÇANAKKALE
+        r[12] || "0", // BURSA
+        r[13] || "FAAL", // DURUMU
+        r[14] || "HAYIR", // ÖMÜRLÜ
+        r[15] || "-", // ÖMÜR BİTİŞ
+        r[16] || "-", // FİRMA
+        r[17] || ""   // AÇIKLAMA
+      ];
+    }
+
+    while (r.length < 11) {
       r.push("");
     }
     const sira = r[0] || "";
@@ -5847,13 +6058,34 @@ export default function App() {
       const matchedList = allOnlineSheets.filter(s => s.name === config.sheetName || s.name.startsWith(config.sheetName + "-"));
       const activeSheetName = customSheetName || (matchedList.length > 0 ? matchedList[0].name : config.sheetName);
       
-      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent(activeSheetName)}`;
-      
-      const response = await fetch(targetUrl);
-      if (!response.ok) {
-        throw new Error(`HTTP Hata: ${response.status}`);
+      const scriptUrls = [
+        GOOGLE_SCRIPT_URL,
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec",
+        "https://script.google.com/macros/s/AKfycbP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec"
+      ];
+
+      let response: Response | null = null;
+      let lastError: any = null;
+
+      for (const url of scriptUrls) {
+        try {
+          const targetUrl = `${url}?action=readSheet&sheetName=${encodeURIComponent(activeSheetName)}`;
+          const res = await fetch(targetUrl);
+          if (res.ok) {
+            response = res;
+            break;
+          } else {
+            lastError = new Error(`HTTP Hata: ${res.status}`);
+          }
+        } catch (err: any) {
+          lastError = err;
+        }
       }
-      
+
+      if (!response || !response.ok) {
+        throw lastError || new Error("Hiçbir bulut sunucusuna erişilemedi.");
+      }
+
       const result = await response.json();
       if (result.status === "success" && Array.isArray(result.data)) {
         // We received the data successfully!
@@ -5908,10 +6140,7 @@ export default function App() {
         throw new Error(result.message || "Geçersiz veri biçimi alındı.");
       }
     } catch (e: any) {
-      console.error("Bulut okuma hatası:", e);
-      if (!silentNotify) {
-        alert(`Birim Uyarı Penceresi: Canlı e-tablodan veri çekilemedi.\nLütfen 'komut.gs' kodunu e-tablonuzun Apps Script alanına yapıştırıp "Web Uygulaması" (Herkes için erişilebilir) olarak yayınladığınızdan emin olun.\nHata Detayı: ${e.message || e}`);
-      }
+      console.warn("Bulut okuma hatası (arka plan/çevrimdışı):", e.message || e);
       return null;
     } finally {
       setIsPullingFromSheets(prev => ({ ...prev, [formId]: false }));
@@ -6468,7 +6697,9 @@ export default function App() {
       };
     }
 
-    if (techType === 'bell429') {
+    if (techType === 'at802_ozel_alet' || (techType === 'at802' && subSection === 'ozel_alet')) {
+      setTechizatAt802OzelAletData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_at802_ozel_alet_data', JSON.stringify(res)); } catch(e){} return res; });
+    } else if (techType === 'bell429') {
       setTechizatBell429Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_bell429_data', JSON.stringify(res)); } catch(e){} return res; });
     } else if (techType === 'at802') {
       setTechizatAt802Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_at802_data', JSON.stringify(res)); } catch(e){} return res; });
@@ -6489,97 +6720,92 @@ export default function App() {
     }
   };
 
-  // Google Drive Klasöründen (1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP) Excel Tablolarını Hızlı ve Arka Planda Okuyan Fonksiyon
+  // Google Drive Klasöründen (1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP) Birime Özel Excel Tablolarını Dinamik ve Canlı Okuyan Fonksiyon
   const pullTechizatUnitFromDrive = async (targetUnitKey?: string | null, silent = true) => {
     setIsTechizatDriveLoading(true);
     try {
-      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=listTechizatExcelsFromDrive&folderId=1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP`;
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 7000);
-      
-      const response = await fetch(targetUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP Hata: ${response.status}`);
-      }
-      const result = await response.json();
-      if (result.status === "success" && Array.isArray(result.excels) && result.excels.length > 0) {
-        const excels = result.excels;
-        let totalLoadedCount = 0;
+      const UNIT_EXCEL_MAP: Record<string, string> = {
+        at802: 'hava_araçları_yer_destek_at-802.xlsx',
+        at802_ozel_alet: 'at-802_ozel_bakim_aletleri.xlsx',
+        bell429: 'hava_araçları_yer_destek_bell-429.xlsx',
+        t70: 'hava_araçları_yer_destek_t-70.xlsx',
+        t70_bumbi_backet: 'hava_araçları_yer_destek_t-70_bumbi_backet.xlsx',
+        t70_helitak: 'hava_araçları_yer_destek_t-70_helitak.xlsx',
+        b360: 'hava_araçları_yer_destek_b-360.xlsx',
+        c650: 'hava_araçları_yer_destek_c-650.xlsx',
+        hangar: 'hava_araçları_yer_destek_hangar.xlsx',
+        kara_araclari: 'kara_araclari_servis_cizelgesi.xlsx'
+      };
 
-        // Hedef birim belirtilmişse SADECE o birime ait dosyayı filtreleyip hızlıca çek
-        const targetClean = targetUnitKey ? targetUnitKey.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-        const filesToProcess = (targetUnitKey && targetUnitKey !== 'all')
-          ? excels.filter((f: any) => {
-              const fn = (f.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-              const detected = detectUnitAndSectionFromNames(f.name || '', "").techType;
-              return detected === targetUnitKey || (targetClean && fn.includes(targetClean));
+      const keysToFetch: string[] = (targetUnitKey && targetUnitKey !== 'all')
+        ? [targetUnitKey]
+        : Object.keys(UNIT_EXCEL_MAP);
+
+      let totalLoadedCount = 0;
+
+      await Promise.all(keysToFetch.map(async (uKey) => {
+        const targetFileName = UNIT_EXCEL_MAP[uKey] || `hava_araçları_yer_destek_${uKey}.xlsx`;
+        try {
+          const res = await fetch('/api/read-excel-from-drive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: targetFileName,
+              folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
             })
-          : excels;
-
-        const filesToUse = filesToProcess.length > 0 ? filesToProcess : excels;
-
-        await Promise.all(filesToUse.map(async (file: any) => {
-          try {
-            const fileTechType = detectUnitAndSectionFromNames(file.name || '', "").techType;
-            if (fileTechType && file.lastUpdated) {
+          });
+          if (!res.ok) return;
+          const result = await res.json();
+          if (result && result.status === 'success' && result.base64) {
+            if (result.updated) {
               setFormUpdateDates(prev => {
-                const up = { ...prev, [`techizat_${fileTechType}`]: file.lastUpdated };
+                const up = { ...prev, [`techizat_${uKey}`]: result.updated };
                 localStorage.setItem("form_update_dates", JSON.stringify(up));
                 return up;
               });
             }
 
-            const fileController = new AbortController();
-            const fileTimeoutId = setTimeout(() => fileController.abort(), 6000);
+            const binaryString = atob(result.base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            const workbook = XLSX.read(bytes, { type: 'array' });
 
-            const fileRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileId=${file.id}`, { signal: fileController.signal });
-            clearTimeout(fileTimeoutId);
-            
-            if (!fileRes.ok) return;
-            const fileData = await fileRes.json();
-            if (!fileData || !fileData.base64) return;
-
-            const workbook = XLSX.read(fileData.base64, { type: 'base64' });
-            
-            // Excel içerisindeki her sayfayı tara ve sayfa/dosya adıyla hedef tabloya yerleştir
             for (const sName of workbook.SheetNames) {
               const worksheet = workbook.Sheets[sName];
               if (!worksheet) continue;
+              unmergeAndFillWorksheet(worksheet);
 
-              const detected = detectUnitAndSectionFromNames(file.name || '', sName);
-              if (detected.techType) {
-                // Kaydedilirken kendi orijinal adını koruması için state'e yaz
-                setTechizatFileNames(prev => ({ ...prev, [`${detected.techType}_${detected.subSection}`]: file.name || "" }));
-                
-                // Eğer spesifik bir sayfa hedefleniyorsa ve eşleşmiyorsa atla
-                if (targetUnitKey && targetUnitKey !== 'all' && detected.techType !== targetUnitKey) {
-                  continue;
-                }
-                const parsed = parseExcelWorksheetToRows(worksheet, detected.techType, detected.subSection);
-                if (parsed.length > 0) {
-                  applyParsedRowsToUnit(detected.techType, detected.subSection, parsed);
-                  totalLoadedCount += parsed.length;
-                }
+              const detected = detectUnitAndSectionFromNames(targetFileName, sName);
+              const effectiveTechType = uKey === 'at802_ozel_alet' ? 'at802_ozel_alet' : (uKey === 'at802' ? 'at802' : (detected.techType || uKey));
+              const effectiveSubSection = uKey === 'at802_ozel_alet' ? 'ozel_alet' : (uKey === 'at802' ? 'yer_destek' : (detected.subSection || 'all'));
+
+              setTechizatFileNames(prev => ({
+                ...prev,
+                [`${effectiveTechType}_${effectiveSubSection}`]: targetFileName
+              }));
+
+              const parsed = parseExcelWorksheetToRows(worksheet, effectiveTechType, effectiveSubSection);
+              if (parsed.length > 0) {
+                applyParsedRowsToUnit(effectiveTechType, effectiveSubSection, parsed);
+                totalLoadedCount += parsed.length;
               }
             }
-          } catch (err) {
-            console.warn("Drive Excel okuma:", file.name, err);
           }
-        }));
-
-        if (!silent) {
-          if (totalLoadedCount > 0) {
-            const unitLabel = targetUnitKey && targetUnitKey !== 'all' ? targetUnitKey.toUpperCase() : 'Birimler';
-            showNotification(`Google Drive'dan [${unitLabel}] için (${totalLoadedCount} kayıt) Excel verileri başarıyla yüklendi!`);
-          } else {
-            showNotification("Drive klasöründe işlenecek geçerli teçhizat kaydı içeren Excel dosyası bulunamadı.");
-          }
+        } catch (err) {
+          console.warn("Drive Excel okuma hatası (" + targetFileName + "):", err);
         }
-      } else if (!silent) {
-        showNotification("Drive klasöründe yüklü herhangi bir Excel dosyası bulunamadı.");
+      }));
+
+      if (!silent) {
+        if (totalLoadedCount > 0) {
+          const unitLabel = targetUnitKey && targetUnitKey !== 'all' ? targetUnitKey.toUpperCase() : 'Birimler';
+          showNotification(`Google Drive'dan [${unitLabel}] için (${totalLoadedCount} kayıt) Excel verileri başarıyla yüklendi!`);
+        } else {
+          showNotification("Google Drive'dan güncel veriler kontrol edildi.");
+        }
       }
     } catch (err) {
       console.warn("Drive Excels kontrolü tamamlandı/zaman aşımı:", err);
@@ -6803,7 +7029,7 @@ export default function App() {
       }
 
       if (passwordActionType === 'depo_management') {
-        setIsDepoModalOpen(true);
+        openStandaloneDepo(selectedUnitFolder);
         return;
       }
 
@@ -7553,17 +7779,15 @@ export default function App() {
 
               const prettyUnitName = getCleanSyncTargetTitle(String(syncSelectedTarget));
 
-              const res = await fetch(GOOGLE_SCRIPT_URL, {
+              const res = await fetch("/api/upload-techizat-excel", {
                 method: "POST",
                 headers: {
-                  "Content-Type": "text/plain;charset=utf-8"
+                  "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                  action: "uploadTechizatExcel",
                   fileName: driveFileName,
                   targetKey: syncSelectedTarget,
                   base64Data: base64Data,
-                  unitName: prettyUnitName,
                   folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
                 })
               });
@@ -8250,7 +8474,7 @@ export default function App() {
                 type="button"
                 onClick={openGunTakipWithPassword}
                 className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 text-[11px] font-mono tracking-normal cursor-pointer transition-all shadow-md active:scale-95 group"
-                title="Gün Takip ve Otomatik 90 Gün E-Posta Bildirim Sistemi (Şifre: 1839)"
+                title="Gün Takip ve Otomatik 90 Gün E-Posta Bildirim Sistemi "
               >
                 <span className="relative flex h-2 w-2">
                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${autoReminderStatus.items90DaysCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'} opacity-75`}></span>
@@ -8264,12 +8488,12 @@ export default function App() {
                     : 'Tüm Bakımlar Güncel'}
                 </span>
                 <span className="text-[9px] text-emerald-400/60 font-normal pl-1 border-l border-emerald-500/20 hidden sm:inline">
-                  (Şifre: 1839)
+                  
                 </span>
               </button>
             </div>
             <div className="flex items-center gap-4">
-              <span className="font-mono text-white/70">SAAT: {timeString}</span>
+              <LiveClock />
             </div>
           </div>
 
@@ -8451,17 +8675,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* EXCEL İNDİR Button */}
-              {modalType !== 'iframe' && (
-                <button
-                  onClick={exportCurrentActiveTableToExcel}
-                  className="flex items-center gap-2 bg-emerald-700/90 hover:bg-emerald-600 active:scale-95 text-white text-xs font-black uppercase tracking-wider px-4 py-2.5 rounded-full shadow-lg backdrop-blur-md transition-all cursor-pointer border border-emerald-500/50"
-                  title="Tabloyu Web Tasarımı ve Formatıyla Birebir Excel Olarak İndir"
-                >
-                  <Download className="w-4 h-4 text-emerald-200" />
-                  <span>EXCEL İNDİR</span>
-                </button>
-              )}
+              {/* Top-right Excel İndir removed per user request */}
 
               {/* Show Veri Güncelle button on Form/Teçhizat views */}
               {modalType !== 'denetleme' && modalType !== 'iframe' && (selectedCategory === 'FORM KAYITLARI' || selectedCategory === 'HA_YER_DESTEK' || selectedCategory === 'T70_DETAY' || selectedCategory === 'KARA_ARACLARI_MENU' || selectedFormId !== null || modalType === 'form_table' || modalType === 'techizat_matrix' || modalType === 'excel_sync') && (
@@ -8566,8 +8780,8 @@ export default function App() {
                       <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm">
                         <Plane className="w-8 h-8 text-[#0b3d1d]" />
                       </div>
-                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HAVA ARAÇLARI YER DESTEK, ÖZEL ALETLER VE DEPO</span>
-                      <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">BİRİMLER, YER DESTEK & DEPOLAR</span>
+                      <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">HAVA ARAÇLARI YER DESTEK VE ÖZEL ALETLER</span>
+                      <span className="text-[10px] text-[#0b3d1d]/60 uppercase tracking-widest font-semibold font-mono">YER DESTEK TEÇHİZATLARI VE ÖZEL ALETLER</span>
                     </button>
 
                     <button
@@ -8641,7 +8855,7 @@ export default function App() {
                         B429
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">BELL 429</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek Teçhizatları</span>
                     </button>
 
                     <button
@@ -8655,7 +8869,7 @@ export default function App() {
                         AT-802F
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">AT-802F</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek, Özel Alet & Depo</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Özel Aletler</span>
                     </button>
 
                     <button
@@ -8669,7 +8883,7 @@ export default function App() {
                         T-70
                       </div>
                       <span className="text-emerald-900 font-extrabold tracking-widest text-sm mb-2 uppercase">T-70</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek Teçhizatları</span>
                     </button>
 
                     <button
@@ -8683,7 +8897,7 @@ export default function App() {
                         C650
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">C-650</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek Teçhizatları</span>
                     </button>
 
                     <button
@@ -8697,7 +8911,7 @@ export default function App() {
                         B360
                       </div>
                       <span className="text-[#0b3d1d] font-bold tracking-widest text-sm mb-2 uppercase">B-360</span>
-                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek & Depolar</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Yer Destek Teçhizatları</span>
                     </button>
 
                     {/* 1. TÜM BİRİMLERDE TEÇHİZAT ARA */}
@@ -8716,18 +8930,18 @@ export default function App() {
                       </div>
                     </button>
 
-                    {/* 2. TÜM BİRİMLERDE DEPO ARA */}
+                    {/* 2. TÜM BİRİMLERDE DEPO YÖNETİMİ */}
                     <button
-                      onClick={() => openTechizatMatrix('all', 'TÜM BİRİMLER ORTAK DEPO ARAMA (SARF/PARÇA & KİMYASAL)', 'depo_all')}
+                      onClick={() => openStandaloneDepo()}
                       className="bg-amber-50 hover:bg-amber-100/80 border-2 border-amber-600/30 shadow-sm rounded-[2rem] p-6 flex flex-col sm:flex-row items-center gap-5 text-left transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer group sm:col-span-2 lg:col-span-3"
                     >
                       <div className="w-14 h-14 bg-amber-800 text-white rounded-2xl flex items-center justify-center shrink-0 shadow-md group-hover:bg-amber-900 transition-all">
                         <Boxes className="w-7 h-7 text-amber-200" />
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-amber-900 font-black tracking-widest text-base uppercase">📦 TÜM BİRİMLERDE DEPO ARA</span>
+                        <span className="text-amber-900 font-black tracking-widest text-base uppercase">📦 DEPO YÖNETİM VE TAKİP SİSTEMİ</span>
                         <span className="text-xs text-amber-800 tracking-wide font-mono font-bold">
-                          Bütün Hava Araçlarının Sarf/Parça ve Kimyasal Depolarını Tek Ortak Listede Arayın & Excel Olarak İndirin
+                          Bütün Hava Araçlarının Sarf/Parça ve Kimyasal Depolarını Ayrı Sistem Portalı İçinde Yönetin
                         </span>
                       </div>
                     </button>
@@ -8754,7 +8968,7 @@ export default function App() {
                         </button>
 
                         <button
-                          onClick={() => openTechizatMatrix('at802', 'AT-802F - ÖZEL ALETLER', 'ozel_alet')}
+                          onClick={() => openTechizatMatrix('at802_ozel_alet', 'AT-802F - ÖZEL ALETLER', 'ozel_alet')}
                           className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                         >
                           <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
@@ -8767,15 +8981,15 @@ export default function App() {
                         </button>
 
                         <button
-                          onClick={() => navigateToSubCategory('UNIT_DEPO_MENU')}
+                          onClick={() => openStandaloneDepo(selectedUnitFolder)}
                           className="bg-white hover:bg-amber-50/50 border-2 border-amber-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                         >
                           <div className="w-16 h-16 bg-amber-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-amber-200 transition-all shadow-sm text-amber-800">
                             <Boxes className="w-8 h-8 text-amber-800" />
                           </div>
-                          <span className="text-amber-900 font-black tracking-widest text-base mb-2 uppercase">DEPO</span>
+                          <span className="text-amber-900 font-black tracking-widest text-base mb-2 uppercase">DEPO SİSTEMİ</span>
                           <span className="text-[10px] text-amber-700/80 uppercase tracking-widest font-mono font-bold">
-                            Sarf/Parça Deposu & Kimyasal Depo
+                            Sarf/Parça Deposu & Kimyasal Depo Yönetim Portalı
                           </span>
                         </button>
 
@@ -8793,6 +9007,23 @@ export default function App() {
                           <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">OLAY TAKİP ÇİZELGESİ</span>
                           <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
                             AT-802 Kaza-Kırım & Limit Aşımları
+                          </span>
+                        </button>
+
+                        <button
+                          id="btn-unit-barkod-at802"
+                          onClick={() => {
+                            setBarkodOkuyucuInitialUnit('at802');
+                            setIsBarkodOkuyucuOpen(true);
+                          }}
+                          className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
+                            <Barcode className="w-8 h-8 text-[#0b3d1d]" />
+                          </div>
+                          <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">BARKOD OKUYUCU</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
+                            Kamera ile Barkod Okuma & Sayım
                           </span>
                         </button>
                       </>
@@ -8815,15 +9046,15 @@ export default function App() {
                         </button>
 
                         <button
-                          onClick={() => navigateToSubCategory('UNIT_DEPO_MENU')}
+                          onClick={() => openStandaloneDepo(selectedUnitFolder)}
                           className="bg-white hover:bg-amber-50/50 border-2 border-amber-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                         >
                           <div className="w-16 h-16 bg-amber-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-amber-200 transition-all shadow-sm text-amber-800">
                             <Boxes className="w-8 h-8 text-amber-800" />
                           </div>
-                          <span className="text-amber-900 font-black tracking-widest text-base mb-2 uppercase">DEPO</span>
+                          <span className="text-amber-900 font-black tracking-widest text-base mb-2 uppercase">DEPO SİSTEMİ</span>
                           <span className="text-[10px] text-amber-700/80 uppercase tracking-widest font-mono font-bold">
-                            Sarf ve Parça Depo & Kimyasal Depo (2 Alt Klasör)
+                            Sarf ve Parça Depo & Kimyasal Depo Yönetim Portalı
                           </span>
                         </button>
 
@@ -8841,6 +9072,23 @@ export default function App() {
                           <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">OLAY TAKİP ÇİZELGESİ</span>
                           <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
                             {getUnitDisplayName(selectedUnitFolder)} Olay & Limit Çizelgeleri
+                          </span>
+                        </button>
+
+                        <button
+                          id="btn-unit-barkod-general"
+                          onClick={() => {
+                            setBarkodOkuyucuInitialUnit(selectedUnitFolder);
+                            setIsBarkodOkuyucuOpen(true);
+                          }}
+                          className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                        >
+                          <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d]">
+                            <Barcode className="w-8 h-8 text-[#0b3d1d]" />
+                          </div>
+                          <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">BARKOD OKUYUCU</span>
+                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
+                            {getUnitDisplayName(selectedUnitFolder)} Barkod & Sayım
                           </span>
                         </button>
                       </>
@@ -8926,12 +9174,7 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={() => {
-                        setPasswordActionType('depo_management');
-                        setPasswordInput('');
-                        setPasswordError(false);
-                        setIsPasswordModalOpen(true);
-                      }}
+                      onClick={() => openStandaloneDepo(selectedUnitFolder)}
                       className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/40 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
                       <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-emerald-800">
@@ -9048,6 +9291,8 @@ export default function App() {
                         </span>
                       </div>
                     </button>
+
+
  
                     <a
                       href="https://bulut.ogm.gov.tr/MMEL"
@@ -9211,6 +9456,23 @@ export default function App() {
                       <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">OLAY TAKİP ÇİZELGESİ</span>
                       <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold font-mono text-center">
                         AT-802 Kaza/Kırım, Limit Aşımları & Çizelgeler
+                      </span>
+                    </button>
+
+                    <button
+                      id="btn-form-barkod-okuyucu"
+                      onClick={() => {
+                        setBarkodOkuyucuInitialUnit('at802');
+                        setIsBarkodOkuyucuOpen(true);
+                      }}
+                      className="bg-white hover:bg-emerald-50/50 border border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group relative"
+                    >
+                      <div className="w-16 h-16 bg-emerald-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-200 transition-all shadow-sm text-[#0b3d1d] relative">
+                        <Barcode className="w-8 h-8 text-[#0b3d1d]" />
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">BARKOD OKUYUCU</span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold font-mono text-center">
+                        Mobil Barkod & Karekod Okuma, Stok ve Depo Sayım Terminali
                       </span>
                     </button>
                   </>
@@ -10171,7 +10433,26 @@ export default function App() {
               "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
             ];
 
-            const depoColumns = [
+            const depoColumns = activeTechizatType === 'at802' ? [
+              "SIRA NO", 
+              "MALZEME / PARÇA ADI", 
+              "PARÇA NO (P/N)", 
+              "SERİ NO (S/N)", 
+              "MİKTAR", 
+              "BULUNDUĞU YER / RAF", 
+              "LOKASYON NO",
+              "TOPLAM STOK",
+              "ANKARA MEVCUT",
+              "MİLAS MEVCUT",
+              "KARAİN MEVCUT",
+              "ÇANAKKALE MEVCUT",
+              "BURSA MEVCUT",
+              "DURUMU", 
+              "ÖMÜRLÜ PARÇA MI?", 
+              "ÖMÜR BİTİŞ TARİHİ", 
+              "TEDARİK EDİLEN FİRMA", 
+              "AÇIKLAMA"
+            ] : [
               "SIRA NO", 
               "MALZEME / PARÇA ADI", 
               "PARÇA NO (P/N)", 
@@ -10229,6 +10510,7 @@ export default function App() {
                   ...(!isDepo ? techizatKaraAraclariData.map(r => ["KARA ARAÇLARI", ...r]) : [])
                 ]
               : activeTechizatType === 'bell429' ? techizatBell429Data
+              : (activeTechizatType === 'at802_ozel_alet' || (activeTechizatType === 'at802' && techizatActiveSection === 'ozel_alet')) ? techizatAt802OzelAletData
               : activeTechizatType === 'at802' ? techizatAt802Data
               : activeTechizatType === 't70' ? techizatT70Data
               : activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData
@@ -10240,6 +10522,8 @@ export default function App() {
 
             const sectionFilterRow = (r: string[]) => {
               if (techizatActiveSection === 'all') return true;
+              if (activeTechizatType === 'at802' && techizatActiveSection === 'yer_destek') return true;
+              if (activeTechizatType === 'at802_ozel_alet' || (activeTechizatType === 'at802' && techizatActiveSection === 'ozel_alet')) return true;
               const isAll = activeTechizatType === 'all';
               const targetRow = isAll ? r.slice(1) : r;
               const unitHint = isAll ? (r[0] || "").toLowerCase() : activeTechizatType || undefined;
@@ -10286,7 +10570,7 @@ export default function App() {
 
             const firmaColIdx = isDepo ? cols.indexOf("TEDARİK EDİLEN FİRMA") : cols.indexOf("SON KONTROLÜ YAPAN FİRMA");
             const durumColIdx = cols.indexOf("DURUMU");
-            const kalibrasyonTabiColIdx = cols.findIndex(c => c === "BAKIMA TABİ" || c === "KALİBRASYONA TABİ" || c.includes("TABİ"));
+            const kalibrasyonTabiColIdx = cols.findIndex(c => (c || '') === "BAKIMA TABİ" || (c || '') === "KALİBRASYONA TABİ" || (c || '').includes("TABİ"));
             const omurluTabiColIdx = cols.indexOf("ÖMÜRLÜ PARÇA MI?");
             const omurBitisColIdx = cols.indexOf("ÖMÜR BİTİŞ TARİHİ");
             const gelecekBakimColIdx = cols.indexOf("GELECEK KONTROL / KALİBRASYON / BAKIM");
@@ -10299,14 +10583,31 @@ export default function App() {
               )
             ).sort((a, b) => a.localeCompare(b, 'tr-TR'));
 
-            const uniqueDurumlar = Array.from<string>(
-              new Set(
-                rows
-                  .map(r => (r[durumColIdx] || "").trim())
-                  .filter(d => d && d !== "-" && d !== "--")
-                  .map(d => d.toLocaleUpperCase('tr-TR'))
-              )
-            ).sort((a, b) => a.localeCompare(b, 'tr-TR'));
+            const getStandardizedStatusTokens = (cellVal: string): string[] => {
+              const str = String(cellVal || "").trim();
+              if (!str || str === "-" || str === "--") return [];
+              const rawTokens = str.split(/\r?\n|\/|,|;/);
+              const tokens: string[] = [];
+              for (let t of rawTokens) {
+                t = t.trim().toLocaleUpperCase('tr-TR');
+                if (!t || t === "-" || t === "--") continue;
+                if (t.includes("GAYRİ") || t.includes("GAYRI") || t.includes("DEĞİL") || t.includes("DEĞIL") || t.includes("ARIZA") || t.includes("G.FAAL") || t.includes("G. FAAL")) {
+                  tokens.push("GAYRİ FAAL");
+                } else if (t.includes("FAAL")) {
+                  tokens.push("FAAL");
+                } else {
+                  tokens.push(t);
+                }
+              }
+              return Array.from(new Set(tokens));
+            };
+
+            const uniqueDurumlarSet = new Set<string>();
+            rows.forEach(r => {
+              const tokens = getStandardizedStatusTokens(r[durumColIdx]);
+              tokens.forEach(tok => uniqueDurumlarSet.add(tok));
+            });
+            const uniqueDurumlar = Array.from(uniqueDurumlarSet).sort((a, b) => a.localeCompare(b, 'tr-TR'));
 
             const q = techizatSearchQuery.toLowerCase().trim();
             const firmaFilter = techizatFirmaFilter.trim().toLocaleLowerCase('tr-TR');
@@ -10326,24 +10627,18 @@ export default function App() {
               // 3. Durum filtresi (Dinamik ve büyük/küçük harf duyarsız Türkçe normalizasyon)
               if (techizatDurumFilter && techizatDurumFilter !== "TÜM DURUMLAR") {
                 const selectedDurum = techizatDurumFilter.trim().toLocaleUpperCase('tr-TR');
-                const rowDurum = (row[durumColIdx] || "").trim().toLocaleUpperCase('tr-TR');
+                const rowTokens = getStandardizedStatusTokens(row[durumColIdx]);
 
-                if (selectedDurum === "FAAL") {
-                  // Sadece net 'FAAL' olanlar; GAYRİ FAAL, KISMEN FAAL, ARIZALI elenir
-                  if (rowDurum.includes("GAYRİ") || rowDurum.includes("GAYRI") || rowDurum.includes("DEĞİL") || rowDurum.includes("KISMEN") || rowDurum.includes("ARIZA")) {
-                    return false;
-                  }
-                  if (!rowDurum.includes("FAAL")) {
-                    return false;
-                  }
-                } else if (selectedDurum === "GAYRİ FAAL" || selectedDurum === "GAYRI FAAL") {
-                  const isGayri = rowDurum.includes("GAYRİ") || rowDurum.includes("GAYRI") || rowDurum.includes("DEĞİL") || rowDurum.includes("ARIZA");
-                  if (!isGayri) return false;
+                if (selectedDurum === "GAYRİ FAAL" || selectedDurum === "GAYRI FAAL") {
+                  // User rule: if any single item inside a PN is gayrı faal, show it in GAYRİ FAAL filter
+                  const hasGayri = rowTokens.includes("GAYRİ FAAL");
+                  if (!hasGayri) return false;
+                } else if (selectedDurum === "FAAL") {
+                  // Sadece net 'FAAL' olanlar; GAYRİ FAAL elenir
+                  if (rowTokens.includes("GAYRİ FAAL")) return false;
+                  if (!rowTokens.includes("FAAL")) return false;
                 } else {
-                  // Tablodaki her bir dinamik durum (KISMEN FAAL, ARIZALI, RAF ÖMRÜ DOLDU vb.)
-                  if (rowDurum !== selectedDurum && !rowDurum.includes(selectedDurum)) {
-                    return false;
-                  }
+                  if (!rowTokens.includes(selectedDurum)) return false;
                 }
               }
               // 4. Renk Kodu Doğrudan Seçim Filtresi
@@ -10425,7 +10720,7 @@ export default function App() {
                 }
 
                 if (isBakimMuaf) return selectedColorFilter === 'neutral';
-                const targetColIdx = gelecekBakimColIdx !== -1 ? gelecekBakimColIdx : cols.findIndex(c => c.includes("GELECEK") || c.includes("MUAYENE"));
+                const targetColIdx = gelecekBakimColIdx !== -1 ? gelecekBakimColIdx : cols.findIndex(c => (c || '').includes("GELECEK") || (c || '').includes("MUAYENE"));
                 if (targetColIdx === -1) return selectedColorFilter === 'neutral';
                 const cell = row[targetColIdx];
                 if (!cell || cell === "-" || cell === "--") return selectedColorFilter === 'neutral';
@@ -10498,6 +10793,11 @@ export default function App() {
               }
             }
 
+            const paginatedTechizatRows = techizatPageSize > 0 
+              ? processedRows.slice((techizatPage - 1) * techizatPageSize, techizatPage * techizatPageSize)
+              : processedRows;
+            const totalTechizatPages = techizatPageSize > 0 ? Math.max(1, Math.ceil(processedRows.length / techizatPageSize)) : 1;
+
             return (
               <div className="absolute inset-0 flex flex-col bg-slate-50 p-2 sm:p-4 md:p-6 animate-fade-in overflow-y-auto">
                 <div className="w-full max-w-[1920px] mx-auto flex flex-col h-full">
@@ -10555,248 +10855,324 @@ export default function App() {
 
                       {!isKaraAraci || karaAraclariSubTab === 'list' ? (
                     <>
-                      {/* Search and Utility Controls */}
-                  <div className="bg-slate-900 text-slate-200 rounded-3xl p-5 mb-6 flex flex-col xl:flex-row gap-4 items-center justify-between shadow-xl border border-slate-800 print:hidden select-none">
-                    <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
-                      <div className="bg-slate-800 p-2.5 rounded-2xl border border-slate-700">
-                        <Search className="w-5 h-5 text-emerald-400" />
-                      </div>
-                      
-                      {/* Metin Arama Input */}
-                      <div className="relative flex-1 sm:flex-initial">
-                        <input
-                          type="text"
-                          placeholder={isDepo ? "Malzeme, P/N veya seri no..." : "Teçhizat veya seri no..."}
-                          value={techizatSearchQuery}
-                          onChange={(e) => {
-                            setTechizatSearchQuery(e.target.value);
-                            setActiveTechizatMatchIdx(0);
-                          }}
-                          className="bg-slate-800 text-white font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-48 border border-slate-700 placeholder-slate-400"
-                        />
-                      </div>
-
-                      {/* Firma Filtreleme Dropdown (Dinamik) */}
-                      <div className="relative flex-1 sm:flex-initial">
-                        <select
-                          value={techizatFirmaFilter}
-                          onChange={(e) => {
-                            setTechizatFirmaFilter(e.target.value);
-                            setActiveTechizatMatchIdx(0);
-                          }}
-                          className="bg-slate-800 text-emerald-300 font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-52 border border-slate-700 cursor-pointer shadow-sm"
-                        >
-                          <option value="">{isDepo ? "🏢 TÜM TEDARİKÇİLER" : "🏢 TÜM FİRMALAR"} ({uniqueFirmalar.length})</option>
-                          {uniqueFirmalar.map((f, i) => (
-                            <option key={i} value={f}>{f}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Durum Filtreleme Dropdown (Dinamik Tablodaki Değerlere Göre) */}
-                      <div className="relative flex-1 sm:flex-initial">
-                        <select
-                          value={techizatDurumFilter}
-                          onChange={(e) => {
-                            setTechizatDurumFilter(e.target.value);
-                            setActiveTechizatMatchIdx(0);
-                          }}
-                          className="bg-slate-800 text-amber-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-48 border border-slate-700 cursor-pointer shadow-sm"
-                        >
-                          <option value="">⚡ TÜM DURUMLAR ({uniqueDurumlar.length})</option>
-                          {uniqueDurumlar.length > 0 ? (
-                            uniqueDurumlar.map((d, i) => (
-                              <option key={i} value={d}>{d}</option>
-                            ))
-                          ) : (
-                            <>
-                              <option value="FAAL">FAAL</option>
-                              <option value="GAYRİ FAAL">GAYRİ FAAL</option>
-                            </>
-                          )}
-                        </select>
-                      </div>
-
-                      {/* Renk Koduna Seç Doğrudan Filtreleme Dropdown */}
-                      <div className="relative flex-1 sm:flex-initial">
-                        <select
-                          value={techizatColorFilter}
-                          onChange={(e) => {
-                            setTechizatColorFilter(e.target.value);
-                            setActiveTechizatMatchIdx(0);
-                          }}
-                          className="bg-slate-800 text-cyan-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-56 border border-slate-700 cursor-pointer shadow-sm"
-                          title="Renk Koduna Göre Seç / Filtrele"
-                        >
-                          <option value="ALL">🎨 RENK KODUNA SEÇ (TÜMÜ)</option>
-                          <option value="RED">🔴 KIRMIZI (SÜRESİ DOLAN / ACİL)</option>
-                          <option value="ORANGE">🟠 TURUNCU (&lt; 90 GÜN KALANLAR)</option>
-                          <option value="GREEN">🟢 YEŞİL (SÜRESİ UYGUN / FAAL)</option>
-                          <option value="GRAY">⚪ GRİ (BAKIMA TABİ DEĞİL / MUAF)</option>
-                        </select>
-                      </div>
-
-                      {(techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter || techizatColorFilter !== "ALL") && (
+                      {/* Collapsible Search and Utility Controls Drawer */}
+                      <div className="mb-6 select-none print:hidden">
                         <button
-                          onClick={() => {
-                            setTechizatSearchQuery("");
-                            setTechizatFirmaFilter("");
-                            setTechizatDurumFilter("");
-                            setTechizatColorFilter("ALL");
-                            setActiveTechizatMatchIdx(0);
-                          }}
-                          className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-700"
-                          title="Filtreleri Temizle"
+                          type="button"
+                          onClick={() => setIsTechizatFilterOpen(prev => !prev)}
+                          className="w-full flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 hover:from-slate-800 hover:to-slate-850 text-white rounded-2xl border border-slate-700/80 shadow-md transition-all cursor-pointer group"
                         >
-                          ✕ Temizle
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30 group-hover:scale-105 transition-transform">
+                              <Search className="w-4 h-4" />
+                            </div>
+                            <div className="text-left">
+                              <div className="text-xs font-black tracking-wider uppercase text-slate-100 flex items-center gap-2">
+                                <span>🔍 FİLTRELEME VE DETAYLI ARAMA PANELİ</span>
+                                {(techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter || techizatColorFilter !== 'ALL' || selectedColorFilter !== 'all' || sortByColor) && (
+                                  <span className="px-2 py-0.5 bg-amber-500 text-slate-950 font-black text-[10px] rounded-full animate-pulse">
+                                    FİLTRE AKTİF
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-400 font-medium">
+                                {isTechizatFilterOpen 
+                                  ? "Filtre ve arama seçeneklerini gizlemek için tıklayın (▲ Kapat)" 
+                                  : "Malzeme arama, firma, durum, renk kodu filtrelerini açmak için tıklayın (▼ Alta Doğru Aç)"}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            <span className={`text-xs font-black px-3.5 py-1.5 rounded-xl border transition-all ${
+                              isTechizatFilterOpen ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'
+                            }`}>
+                              {isTechizatFilterOpen ? '▲ KAPAT' : '▼ FİLTRELERİ GÖSTER'}
+                            </span>
+                          </div>
                         </button>
-                      )}
 
-                      {techizatSearchQuery && (
-                        <span className="text-[10px] font-mono font-black text-emerald-400 px-3 py-1.5 bg-emerald-950/50 rounded-xl border border-emerald-900 shrink-0">
-                          {matchesList.length} EŞLEŞME
-                        </span>
-                      )}
+                        {isTechizatFilterOpen && (
+                          <div className="mt-3 bg-slate-900 text-slate-200 rounded-3xl p-5 flex flex-col xl:flex-row gap-4 items-center justify-between shadow-xl border border-slate-800 transition-all">
+                            <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
+                              <div className="bg-slate-800 p-2.5 rounded-2xl border border-slate-700">
+                                <Search className="w-5 h-5 text-emerald-400" />
+                              </div>
+                              
+                              {/* Metin Arama Input */}
+                              <div className="relative flex-1 sm:flex-initial">
+                                <input
+                                  type="text"
+                                  placeholder={isDepo ? "Malzeme, P/N veya seri no..." : "Teçhizat veya seri no..."}
+                                  value={techizatSearchQuery}
+                                  onChange={(e) => {
+                                    setTechizatSearchQuery(e.target.value);
+                                    setActiveTechizatMatchIdx(0);
+                                  }}
+                                  className="bg-slate-800 text-white font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-48 border border-slate-700 placeholder-slate-400"
+                                />
+                              </div>
 
-                      {/* YUKARDAKİ FİLTER KISMINA RENK KODU SEÇ SEÇENEĞİ */}
-                      <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-700/80 rounded-2xl px-3 py-2 shrink-0 shadow-md">
-                        <span className="text-[11px] font-black font-mono text-slate-300 uppercase flex items-center gap-1">
-                          <span>🎨</span>
-                          <span className="hidden sm:inline">RENK KODU:</span>
-                        </span>
-                        <select
-                          value={selectedColorFilter}
-                          onChange={(e) => setSelectedColorFilter(e.target.value as any)}
-                          className="bg-slate-800 text-white font-bold text-xs rounded-xl px-2.5 py-1.5 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
-                        >
-                          <option value="all">TÜMÜ (Renk Filtresi Yok)</option>
-                          <option value="red">🔴 KIRMIZI (Günü Geçmiş / Süresi Dolan)</option>
-                          <option value="orange">🟠 TURUNCU (90 Gün Altı / Yaklaşan)</option>
-                          <option value="green">🟢 YEŞİL (Faal / Güvenli)</option>
-                          <option value="neutral">⚪ NÖTR (Muaf / Süresiz)</option>
-                        </select>
-                        {selectedColorFilter !== 'all' && (
-                          <button
-                            onClick={() => setSelectedColorFilter('all')}
-                            className="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold transition-all"
-                            title="Renk filtresini temizle"
-                          >
-                            ✕
-                          </button>
+                              {/* Firma Filtreleme Dropdown (Dinamik) */}
+                              <div className="relative flex-1 sm:flex-initial">
+                                <select
+                                  value={techizatFirmaFilter}
+                                  onChange={(e) => {
+                                    setTechizatFirmaFilter(e.target.value);
+                                    setActiveTechizatMatchIdx(0);
+                                  }}
+                                  className="bg-slate-800 text-emerald-300 font-extrabold text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-52 border border-slate-700 cursor-pointer shadow-sm"
+                                >
+                                  <option value="">{isDepo ? "🏢 TÜM TEDARİKÇİLER" : "🏢 TÜM FİRMALAR"} ({uniqueFirmalar.length})</option>
+                                  {uniqueFirmalar.map((f, i) => (
+                                    <option key={i} value={f}>{f}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              {/* Durum Filtreleme Dropdown (Dinamik Tablodaki Değerlere Göre) */}
+                              <div className="relative flex-1 sm:flex-initial">
+                                <select
+                                  value={techizatDurumFilter}
+                                  onChange={(e) => {
+                                    setTechizatDurumFilter(e.target.value);
+                                    setActiveTechizatMatchIdx(0);
+                                  }}
+                                  className="bg-slate-800 text-amber-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-48 border border-slate-700 cursor-pointer shadow-sm"
+                                >
+                                  <option value="">⚡ TÜM DURUMLAR ({uniqueDurumlar.length})</option>
+                                  {uniqueDurumlar.length > 0 ? (
+                                    uniqueDurumlar.map((d, i) => (
+                                      <option key={i} value={d}>{d}</option>
+                                    ))
+                                  ) : (
+                                    <>
+                                      <option value="FAAL">FAAL</option>
+                                      <option value="GAYRİ FAAL">GAYRİ FAAL</option>
+                                    </>
+                                  )}
+                                </select>
+                              </div>
+
+                              {/* Renk Koduna Seç Doğrudan Filtreleme Dropdown */}
+                              <div className="relative flex-1 sm:flex-initial">
+                                <select
+                                  value={techizatColorFilter}
+                                  onChange={(e) => {
+                                    setTechizatColorFilter(e.target.value);
+                                    setActiveTechizatMatchIdx(0);
+                                  }}
+                                  className="bg-slate-800 text-cyan-300 font-black text-xs px-4 py-3 rounded-2xl focus:outline-none focus:ring-4 focus:ring-emerald-500/20 w-full sm:w-56 border border-slate-700 cursor-pointer shadow-sm"
+                                  title="Renk Koduna Göre Seç / Filtrele"
+                                >
+                                  <option value="ALL">🎨 RENK KODUNA SEÇ (TÜMÜ)</option>
+                                  <option value="RED">🔴 KIRMIZI (SÜRESİ DOLAN / ACİL)</option>
+                                  <option value="ORANGE">🟠 TURUNCU (&lt; 90 GÜN KALANLAR)</option>
+                                  <option value="GREEN">🟢 YEŞİL (SÜRESİ UYGUN / FAAL)</option>
+                                  <option value="GRAY">⚪ GRİ (BAKIMA TABİ DEĞİL / MUAF)</option>
+                                </select>
+                              </div>
+
+                              {(techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter || techizatColorFilter !== "ALL") && (
+                                <button
+                                  onClick={() => {
+                                    setTechizatSearchQuery("");
+                                    setTechizatFirmaFilter("");
+                                    setTechizatDurumFilter("");
+                                    setTechizatColorFilter("ALL");
+                                    setActiveTechizatMatchIdx(0);
+                                  }}
+                                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-all border border-slate-700 cursor-pointer"
+                                  title="Filtreleri Temizle"
+                                >
+                                  ✕ Temizle
+                                </button>
+                              )}
+
+                              {techizatSearchQuery && (
+                                <span className="text-[10px] font-mono font-black text-emerald-400 px-3 py-1.5 bg-emerald-950/50 rounded-xl border border-emerald-900 shrink-0">
+                                  {matchesList.length} EŞLEŞME
+                                </span>
+                              )}
+
+                              {/* YUKARDAKİ FİLTER KISMINA RENK KODU SEÇ SEÇENEĞİ */}
+                              <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-700/80 rounded-2xl px-3 py-2 shrink-0 shadow-md">
+                                <span className="text-[11px] font-black font-mono text-slate-300 uppercase flex items-center gap-1">
+                                  <span>🎨</span>
+                                  <span className="hidden sm:inline">RENK KODU:</span>
+                                </span>
+                                <select
+                                  value={selectedColorFilter}
+                                  onChange={(e) => setSelectedColorFilter(e.target.value as any)}
+                                  className="bg-slate-800 text-white font-bold text-xs rounded-xl px-2.5 py-1.5 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                                >
+                                  <option value="all">TÜMÜ (Renk Filtresi Yok)</option>
+                                  <option value="red">🔴 KIRMIZI (Günü Geçmiş / Süresi Dolan)</option>
+                                  <option value="orange">🟠 TURUNCU (90 Gün Altı / Yaklaşan)</option>
+                                  <option value="green">🟢 YEŞİL (Faal / Güvenli)</option>
+                                  <option value="neutral">⚪ NÖTR (Muaf / Süresiz)</option>
+                                </select>
+                                {selectedColorFilter !== 'all' && (
+                                  <button
+                                    onClick={() => setSelectedColorFilter('all')}
+                                    className="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 font-bold transition-all cursor-pointer"
+                                    title="Renk filtresini temizle"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* YER DESTEK VE ÖZEL BAKIM ALETLERİ ETİKET BAS BUTONU */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (cols && processedRows && processedRows.length > 0) {
+                                    const findColIdx = (keywords: string[]) => 
+                                      cols.findIndex(c => keywords.some(k => (c || '').toUpperCase().includes(k)));
+
+                                    const nameIdx = findColIdx(["ALET", "TANIM", "AD", "ISIM", "İSİM"]);
+                                    const pnIdx = findColIdx(["PARÇA", "PARCA", "P/N", "MODEL", "KOD"]);
+                                    const snIdx = findColIdx(["SERİ", "SERI", "S/N"]);
+                                    const locIdx = findColIdx(["LOKASYON", "HANGAR", "YER", "DEPO"]);
+                                    const imgIdx = findColIdx(["GÖRSEL", "GORSEL", "FOTO", "DRIVE", "DRİVE", "RESİM", "RESIM", "LINK", "LİNK"]);
+                                    const qtyIdx = findColIdx(["MİKTAR", "MIKTAR", "MEVCUT", "ADET"]);
+
+                                    const mapped = processedRows.map((row: string[]) => {
+                                      return {
+                                        description: nameIdx !== -1 && row[nameIdx] ? row[nameIdx] : (row[1] || row[0] || ''),
+                                        partNumber: pnIdx !== -1 && row[pnIdx] ? row[pnIdx] : (row[2] || '-'),
+                                        serialAndNotes: snIdx !== -1 && row[snIdx] ? row[snIdx] : (row[3] || '-'),
+                                        lokasyonNo: locIdx !== -1 && row[locIdx] ? row[locIdx] : 'ANKARA HANGAR',
+                                        ankaraMevcut: qtyIdx !== -1 && row[qtyIdx] ? row[qtyIdx] : 1,
+                                        imageUrl: imgIdx !== -1 && row[imgIdx] ? row[imgIdx] : '',
+                                      };
+                                    });
+                                    setTechizatModalList(mapped);
+                                  }
+                                  setIsTechizatSlipModalOpen(true);
+                                }}
+                                className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-2xl transition-all shadow-md cursor-pointer flex items-center gap-1.5 shrink-0 font-sans"
+                                title="Yer Destek ve Özel Alet Teçhizat Etiketi Bas (Çerçeveli Görsel & Karekodlu)"
+                              >
+                                <Wrench className="w-4 h-4 text-slate-950" />
+                                <span>ETİKET BAS</span>
+                              </button>
+
+                              <button
+                                onClick={() => setSortByColor(!sortByColor)}
+                                className={`px-4 py-3 active:scale-95 font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border shrink-0 ${
+                                  sortByColor 
+                                    ? 'bg-red-600 hover:bg-red-700 text-white border-red-500 animate-pulse' 
+                                    : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
+                                }`}
+                                title={isDepo ? "Raf ömrü kalan gün sayısına göre (Kırmızı ➜ Turuncu ➜ Yeşil) sıralar" : "Bakım gün sayısına göre (Kırmızı ➜ Turuncu ➜ Sarı ➜ Yeşil) sıralar"}
+                              >
+                                <SlidersHorizontal className="w-4 h-4 text-amber-400" />
+                                <span>
+                                  {sortByColor 
+                                    ? (isDepo ? "🔴 RAF ÖMRÜ SIRALAMASI AKTİF" : "🔴 RENK SIRALAMASI AKTİF") 
+                                    : (isDepo ? "⏳ RAF ÖMRÜNE GÖRE SIRALA" : "⏳ RENK KODUNA GÖRE SIRALA")}
+                                </span>
+                              </button>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto justify-end">
+                              {matchesList.length > 0 && (
+                                <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-2xl border border-slate-700">
+                                  <button
+                                    onClick={() => {
+                                      setActiveTechizatMatchIdx(prev => (prev - 1 + matchesList.length) % matchesList.length);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
+                                    title="Önceki"
+                                  >
+                                    ◀
+                                  </button>
+                                  <span className="text-[10px] font-mono font-black text-slate-300">
+                                    {activeTechizatMatchIdx + 1} / {matchesList.length}
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      setActiveTechizatMatchIdx(prev => (prev + 1) % matchesList.length);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
+                                    title="Sonraki"
+                                  >
+                                    ▶
+                                  </button>
+                                </div>
+                              )}
+
+                              <button
+                                onClick={async () => {
+                                  showNotification("Google Drive'dan bu sayfaya ait güncel veriler senkronize ediliyor...");
+                                  await pullTechizatUnitFromDrive(activeTechizatType, false);
+                                }}
+                                disabled={isTechizatDriveLoading}
+                                className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] disabled:opacity-50 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
+                                title="Google Drive klasöründeki güncel Excel dosyasından sadece bu sayfanın verilerini yeniler"
+                              >
+                                <RefreshCw className={`w-4 h-4 text-emerald-300 ${isTechizatDriveLoading ? 'animate-spin' : ''}`} />
+                                <span>{isTechizatDriveLoading ? 'DRİVE BAĞLANIYOR...' : 'DRİVE İLE SENKRONİZE ET'}</span>
+                              </button>
+
+                              {activeTechizatType !== 'all' && (
+                                <button
+                                  onClick={() => {
+                                    setPasswordActionType('filter_sync');
+                                    setPasswordInput('');
+                                    setPasswordError(false);
+                                    setIsPasswordModalOpen(true);
+                                  }}
+                                  className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
+                                >
+                                  <RefreshCw className="w-4 h-4 text-emerald-300 animate-spin-slow" />
+                                  <span>VERİ GÜNCELLE</span>
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => {
+                                  setPasswordActionType('new_product');
+                                  setPasswordInput('');
+                                  setPasswordError(false);
+                                  setIsPasswordModalOpen(true);
+                                }}
+                                className="px-4 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-950/20 border border-emerald-500 shrink-0"
+                                title="Yetkili şifresi ile yeni ürün veya teçhizat kaydı ekle"
+                              >
+                                <PlusCircle className="w-4 h-4 text-white" />
+                                <span>YENİ ÜRÜN EKLE</span>
+                              </button>
+
+                              {isDepo && (
+                                <button
+                                  onClick={() => {
+                                    setPasswordActionType('depo_management');
+                                    setPasswordInput('');
+                                    setPasswordError(false);
+                                    setIsPasswordModalOpen(true);
+                                  }}
+                                  className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
+                                  title="Depo Giriş/Çıkış, Kit Montajı ve Transfer Yönetimi"
+                                >
+                                  <Boxes className="w-4 h-4 text-emerald-400" />
+                                  <span>DEPO YÖNETİM</span>
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => exportTechizatToExcel(activeTechizatType, cols, rows, modalTitle)}
+                                className="px-4 py-3 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-900/10 border border-emerald-600 shrink-0"
+                              >
+                                <Download className="w-4 h-4" />
+                                <span>EXCEL İNDİR</span>
+                              </button>
+                            </div>
+                          </div>
                         )}
                       </div>
-
-                      <button
-                        onClick={() => setSortByColor(!sortByColor)}
-                        className={`px-4 py-3 active:scale-95 font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border shrink-0 ${
-                          sortByColor 
-                            ? 'bg-red-600 hover:bg-red-700 text-white border-red-500 animate-pulse' 
-                            : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
-                        }`}
-                        title={isDepo ? "Raf ömrü kalan gün sayısına göre (Kırmızı ➜ Turuncu ➜ Yeşil) sıralar" : "Bakım gün sayısına göre (Kırmızı ➜ Turuncu ➜ Sarı ➜ Yeşil) sıralar"}
-                      >
-                        <SlidersHorizontal className="w-4 h-4 text-amber-400" />
-                        <span>
-                          {sortByColor 
-                            ? (isDepo ? "🔴 RAF ÖMRÜ SIRALAMASI AKTİF" : "🔴 RENK SIRALAMASI AKTİF") 
-                            : (isDepo ? "⏳ RAF ÖMRÜNE GÖRE SIRALA" : "⏳ RENK KODUNA GÖRE SIRALA")}
-                        </span>
-                      </button>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto justify-end">
-                      {matchesList.length > 0 && (
-                        <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-2xl border border-slate-700">
-                          <button
-                            onClick={() => {
-                              setActiveTechizatMatchIdx(prev => (prev - 1 + matchesList.length) % matchesList.length);
-                            }}
-                            className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
-                            title="Önceki"
-                          >
-                            ◀
-                          </button>
-                          <span className="text-[10px] font-mono font-black text-slate-300">
-                            {activeTechizatMatchIdx + 1} / {matchesList.length}
-                          </span>
-                          <button
-                            onClick={() => {
-                              setActiveTechizatMatchIdx(prev => (prev + 1) % matchesList.length);
-                            }}
-                            className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
-                            title="Sonraki"
-                          >
-                            ▶
-                          </button>
-                        </div>
-                      )}
-
-                      <button
-                        onClick={async () => {
-                          showNotification("Google Drive'dan bu sayfaya ait güncel veriler doğrudan alınıyor...");
-                          await pullTechizatUnitFromDrive(activeTechizatType, false);
-                        }}
-                        className="px-4 py-3 bg-sky-800 hover:bg-sky-700 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-sky-600 shrink-0"
-                        title="Google Drive klasöründeki güncel Excel dosyasından sadece bu sayfanın verilerini yeniler"
-                      >
-                        <RefreshCw className="w-4 h-4 text-sky-300" />
-                        <span>DRİVE İLE YENİLE</span>
-                      </button>
-
-                      {activeTechizatType !== 'all' && (
-                        <button
-                          onClick={() => {
-                            setPasswordActionType('filter_sync');
-                            setPasswordInput('');
-                            setPasswordError(false);
-                            setIsPasswordModalOpen(true);
-                          }}
-                          className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
-                        >
-                          <RefreshCw className="w-4 h-4 text-emerald-300 animate-spin-slow" />
-                          <span>VERİ GÜNCELLE</span>
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => {
-                          setPasswordActionType('new_product');
-                          setPasswordInput('');
-                          setPasswordError(false);
-                          setIsPasswordModalOpen(true);
-                        }}
-                        className="px-4 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-950/20 border border-emerald-500 shrink-0"
-                        title="Yetkili şifresi ile yeni ürün veya teçhizat kaydı ekle"
-                      >
-                        <PlusCircle className="w-4 h-4 text-white" />
-                        <span>YENİ ÜRÜN EKLE</span>
-                      </button>
-
-                      {isDepo && (
-                        <button
-                          onClick={() => {
-                            setPasswordActionType('depo_management');
-                            setPasswordInput('');
-                            setPasswordError(false);
-                            setIsPasswordModalOpen(true);
-                          }}
-                          className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
-                          title="Depo Giriş/Çıkış, Kit Montajı ve Transfer Yönetimi"
-                        >
-                          <Boxes className="w-4 h-4 text-emerald-400" />
-                          <span>DEPO YÖNETİM</span>
-                        </button>
-                      )}
-
-                      <button
-                        onClick={() => exportTechizatToExcel(activeTechizatType, cols, rows, modalTitle)}
-                        className="px-4 py-3 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-900/10 border border-emerald-600 shrink-0"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>EXCEL İNDİR</span>
-                      </button>
-                    </div>
-                  </div>
 
                   {/* Dynamic Interactive Grid Container */}
                   <div className="flex-1 bg-white border-2 border-slate-200/60 rounded-[2.5rem] shadow-xl overflow-hidden flex flex-col print:border-none print:shadow-none min-h-[400px]">
@@ -10849,36 +11225,34 @@ export default function App() {
                           VERİ KONTROL EDİLİYOR...
                         </span>
                       )}
-                      <span className="text-[10px] font-mono font-black text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
-                        {processedRows.length} KALEM {isDepo ? 'MALZEME LİSTELENDİ' : 'TEÇHİZAT LİSTELENDİ'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono font-black text-slate-400 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                          {processedRows.length} KALEM {isDepo ? 'MALZEME LİSTELENDİ' : 'TEÇHİZAT LİSTELENDİ'}
+                        </span>
+                        {processedRows.length > 50 && (
+                          <div className="flex items-center gap-1.5 text-[11px] bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700 text-slate-300">
+                            <span>Göster:</span>
+                            <select
+                              value={techizatPageSize}
+                              onChange={(e) => {
+                                setTechizatPageSize(Number(e.target.value));
+                                setTechizatPage(1);
+                              }}
+                              className="bg-slate-900 text-emerald-400 font-bold px-1.5 py-0.5 rounded border border-slate-700 text-[10px] cursor-pointer"
+                            >
+                              <option value={50}>50</option>
+                              <option value={100}>100</option>
+                              <option value={200}>200</option>
+                              <option value={-1}>Tümü</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Table Grid Scroll Wrapper */}
                     <div className="flex-1 overflow-auto max-h-[85vh] print:max-h-none print:overflow-visible relative">
-                      {(isPullingTechizat || isTechizatDriveLoading) && processedRows.length === 0 && (
-                        <div className="absolute inset-0 z-30 backdrop-blur-md bg-slate-900/70 flex flex-col items-center justify-center gap-3 p-6 pointer-events-auto">
-                          <div className="bg-slate-900/95 border-2 border-emerald-500/70 p-6 rounded-3xl shadow-2xl flex flex-col items-center gap-3 text-center max-w-md">
-                            <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
-                              <RefreshCw className="w-7 h-7 text-emerald-400 animate-spin" />
-                            </div>
-                            <p className="text-base font-black uppercase tracking-wider text-emerald-300">⏳ VERİLER BEKLENİYOR...</p>
-                            <p className="text-xs text-slate-300 font-medium leading-relaxed">
-                              Veriler sunucudan alınıyor...
-                            </p>
-                            <button
-                              onClick={() => {
-                                setIsTechizatDriveLoading(false);
-                                setIsPullingTechizat(false);
-                              }}
-                              className="mt-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 cursor-pointer"
-                            >
-                              Beklemeyi Sonlandır
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      <table className={`w-full border-collapse text-left min-w-[1200px] ${((isPullingTechizat || isTechizatDriveLoading) && processedRows.length === 0) ? 'filter blur-sm select-none pointer-events-none' : ''}`}>
+                      <table className="w-full border-collapse text-left min-w-[1200px]">
                         <thead>
                           <tr className="bg-slate-900 border-b border-slate-800 print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10">
                             <th className="px-3 py-3.5 text-center text-[10px] font-black text-slate-300 uppercase font-mono border-r border-slate-800 w-[50px] print:hidden">
@@ -10932,19 +11306,7 @@ export default function App() {
                           {processedRows.length === 0 ? (
                             <tr key="no-equipment-row">
                               <td colSpan={cols.length + 1} className="px-6 py-16 text-center text-slate-400 font-extrabold text-sm">
-                                {isPullingTechizat ? (
-                                  <div className="flex flex-col items-center justify-center gap-3 py-10">
-                                    <div className="w-12 h-12 rounded-2xl bg-sky-50 border border-sky-200 flex items-center justify-center shadow-sm">
-                                      <RefreshCw className="w-6 h-6 text-sky-600 animate-spin" />
-                                    </div>
-                                    <span className="text-slate-800 font-black text-sm uppercase tracking-wider">
-                                      GOOGLE DRIVE'DAN EXCEL ARANIYOR VE YÜKLENİYOR...
-                                    </span>
-                                    <p className="text-xs text-slate-500 font-medium">
-                                      Drive klasöründeki güncel Excel tablosu kontrol ediliyor, lütfen bekleyiniz.
-                                    </p>
-                                  </div>
-                                ) : isDepo ? (
+                                {isDepo ? (
                                   <div className="flex flex-col items-center justify-center gap-3 py-6">
                                     <div className="w-16 h-16 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center shadow-inner">
                                       <Boxes className="w-8 h-8 text-amber-700" />
@@ -10976,7 +11338,7 @@ export default function App() {
                               </td>
                             </tr>
                           ) : (
-                             processedRows.map((row, rIdx) => {
+                             paginatedTechizatRows.map((row, rIdx) => {
                                const isAll = activeTechizatType === 'all';
                                const targetTechType = isAll ? getRealTechType(row[0]) : activeTechizatType;
                                const targetRow = isAll ? row.slice(1) : row;
@@ -10994,11 +11356,6 @@ export default function App() {
                                          x: e.clientX,
                                          y: e.clientY
                                        });
-                                     }
-                                   }}
-                                   onMouseMove={(e) => {
-                                     if (rowImageUrl) {
-                                       setHoveredRowImage(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
                                      }
                                    }}
                                    onMouseLeave={() => setHoveredRowImage(null)}
@@ -11087,7 +11444,7 @@ export default function App() {
                                        ? 'text-slate-800 font-sans font-semibold' 
                                        : 'text-slate-300 italic';
                                        
-                                     const isKalibTabiColIdx = cols.findIndex(c => c.includes("KALİBRASYONA TABİ") || c.includes("BAKIMA TABİ"));
+                                     const isKalibTabiColIdx = cols.findIndex(c => (c || '').includes("KALİBRASYONA TABİ") || (c || '').includes("BAKIMA TABİ"));
                                      const isKalibTabiVal = isKalibTabiColIdx !== -1 ? String(row[isKalibTabiColIdx] || "").trim().toUpperCase() : "EVET";
                                      const isBakimMuaf = isKalibTabiVal === "HAYIR" || isKalibTabiVal === "HAYIR (MUAFIYET)" || isKalibTabiVal === "MUAFIYET";
 
@@ -11302,6 +11659,75 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
+
+                    {techizatPageSize > 0 && totalTechizatPages > 1 && (
+                      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-slate-900 border-t border-slate-800 text-xs text-slate-300 font-mono select-none rounded-b-2xl mt-1">
+                        <div className="flex items-center gap-2">
+                          <span>
+                            Görüntülenen: <strong className="text-white font-bold">{(techizatPage - 1) * techizatPageSize + 1}-{Math.min(processedRows.length, techizatPage * techizatPageSize)}</strong> / Toplam <strong>{processedRows.length}</strong>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            disabled={techizatPage <= 1}
+                            onClick={() => setTechizatPage(prev => Math.max(1, prev - 1))}
+                            className="px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-700 cursor-pointer text-xs font-bold"
+                            title="Önceki Sayfa"
+                          >
+                            ‹ Önceki
+                          </button>
+
+                          {(() => {
+                            const pages: (number | string)[] = [];
+                            if (totalTechizatPages <= 7) {
+                              for (let i = 1; i <= totalTechizatPages; i++) pages.push(i);
+                            } else {
+                              pages.push(1);
+                              if (techizatPage > 3) pages.push('...');
+                              const start = Math.max(2, techizatPage - 1);
+                              const end = Math.min(totalTechizatPages - 1, techizatPage + 1);
+                              for (let i = start; i <= end; i++) {
+                                if (!pages.includes(i)) pages.push(i);
+                              }
+                              if (techizatPage < totalTechizatPages - 2) pages.push('...');
+                              if (!pages.includes(totalTechizatPages)) pages.push(totalTechizatPages);
+                            }
+                            return pages.map((p, idx) => {
+                              if (p === '...') {
+                                return <span key={`ell-${idx}`} className="px-1.5 py-1 text-slate-500 font-bold select-none text-xs">...</span>;
+                              }
+                              const num = Number(p);
+                              const isActive = num === techizatPage;
+                              return (
+                                <button
+                                  key={`p-${num}`}
+                                  type="button"
+                                  onClick={() => setTechizatPage(num)}
+                                  className={`min-w-[28px] px-2 py-1 rounded text-xs font-mono font-bold transition-all cursor-pointer ${
+                                    isActive
+                                      ? 'bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-400 font-black'
+                                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700'
+                                  }`}
+                                >
+                                  {num}
+                                </button>
+                              );
+                            });
+                          })()}
+
+                          <button
+                            type="button"
+                            disabled={techizatPage >= totalTechizatPages}
+                            onClick={() => setTechizatPage(prev => Math.min(totalTechizatPages, prev + 1))}
+                            className="px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-700 cursor-pointer text-xs font-bold"
+                            title="Sonraki Sayfa"
+                          >
+                            Sonraki Sayfa ›
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                   </div>
                 </>
@@ -13293,6 +13719,129 @@ export default function App() {
         />
       )}
 
+      {isBarkodOkuyucuOpen && (
+        <BarkodOkuyucuModal
+          isOpen={isBarkodOkuyucuOpen}
+          onClose={() => setIsBarkodOkuyucuOpen(false)}
+          showNotification={showNotification}
+          initialUnit={barkodOkuyucuInitialUnit}
+          transactions={depoTransactions}
+          onAddTransactions={async (txs) => {
+            const newTxs = txs.map(tx => ({
+              id: tx.id || `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+              timestamp: tx.timestamp || new Date().toISOString(),
+              ...tx
+            }));
+            
+            setDepoTransactions(prev => [...newTxs, ...prev]);
+
+            // Sync to Table 7 (DEPO SAYIM KAYITLARI)
+            try {
+              const stored = localStorage.getItem('form_7_sayimlar');
+              const currentLogs = stored ? JSON.parse(stored) : [];
+              const newRows = newTxs
+                .filter(tx => tx.islemTuru?.includes('SAYIM') || tx.type === 'SAYIM')
+                .map(tx => ({
+                  Tarih: tx.date || new Date().toLocaleString('tr-TR'),
+                  Malzeme: tx.itemName || '-',
+                  PN: tx.pn || '-',
+                  SN: tx.sn || '-',
+                  Bolge: tx.location || '-',
+                  Sistem_Stok: tx.sistemStok ?? '-',
+                  Sayilan_Adet: tx.sayilanAdet ?? '-',
+                  Fark: tx.fark ?? '-',
+                  Personel: tx.operator || '-'
+                }));
+              
+              if (newRows.length > 0) {
+                localStorage.setItem('form_7_sayimlar', JSON.stringify([...newRows, ...currentLogs]));
+              }
+            } catch (e) {}
+
+            // Background sync to Excel / Drive
+            try {
+              const u = (newTxs[0]?.unit || 'hangar').toLowerCase();
+              let sheetName = "DEPO HAREKET GEÇMİŞİ-AT-802";
+              if (u.includes('bell')) sheetName = "DEPO HAREKET GEÇMİŞİ-BELL 429";
+              else if (u.includes('t70')) sheetName = "DEPO HAREKET GEÇMİŞİ-T-70";
+              else if (u.includes('360')) sheetName = "DEPO HAREKET GEÇMİŞİ-B-360";
+              else if (u.includes('650')) sheetName = "DEPO HAREKET GEÇMİŞİ-C-650";
+              else if (u.includes('hangar')) sheetName = "DEPO HAREKET GEÇMİŞİ-HANGAR";
+
+              fetch('/api/save-depo-transfers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  spreadsheetId: '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0',
+                  sheetName: sheetName,
+                  transfers: newTxs
+                })
+              }).catch(err => console.warn("Depo sync background error:", err));
+            } catch (e) {}
+          }}
+          onAddTransaction={async (tx) => {
+            const newTx: DepoTransaction = {
+              id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+              timestamp: new Date().toISOString(),
+              ...tx
+            };
+            setDepoTransactions(prev => [newTx, ...prev]);
+
+            // Sync to Table 7 (DEPO SAYIM KAYITLARI) if it's a counting action
+            if (newTx.islemTuru?.includes('SAYIM') || newTx.type === 'SAYIM') {
+              try {
+                const stored = localStorage.getItem('form_7_sayimlar');
+                const currentLogs = stored ? JSON.parse(stored) : [];
+                const newRow = {
+                  Tarih: newTx.date || new Date().toLocaleString('tr-TR'),
+                  Malzeme: newTx.itemName || '-',
+                  PN: newTx.pn || '-',
+                  SN: newTx.sn || '-',
+                  Bolge: newTx.location || '-',
+                  Sistem_Stok: newTx.sistemStok ?? '-',
+                  Sayilan_Adet: newTx.sayilanAdet ?? '-',
+                  Fark: newTx.fark ?? '-',
+                  Personel: newTx.operator || '-'
+                };
+                localStorage.setItem('form_7_sayimlar', JSON.stringify([newRow, ...currentLogs]));
+              } catch (e) {}
+            }
+            
+            // Background sync to Excel / Drive
+            try {
+              const u = (newTx.unit || 'hangar').toLowerCase();
+              let sheetName = "DEPO HAREKET GEÇMİŞİ-AT-802";
+              if (u.includes('bell')) sheetName = "DEPO HAREKET GEÇMİŞİ-BELL 429";
+              else if (u.includes('t70')) sheetName = "DEPO HAREKET GEÇMİŞİ-T-70";
+              else if (u.includes('360')) sheetName = "DEPO HAREKET GEÇMİŞİ-B-360";
+              else if (u.includes('650')) sheetName = "DEPO HAREKET GEÇMİŞİ-C-650";
+              else if (u.includes('hangar')) sheetName = "DEPO HAREKET GEÇMİŞİ-HANGAR";
+
+              fetch('/api/save-depo-transfers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  spreadsheetId: '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0',
+                  sheetName: sheetName,
+                  transfers: [newTx]
+                })
+              }).catch(err => console.warn("Depo sync background error:", err));
+            } catch (e) {}
+          }}
+          onUpdateInventory={(updated) => {
+            try {
+              localStorage.setItem('ogm_depo_inventory_v5', JSON.stringify(updated));
+              // Also sync to backend/drive
+              fetch('/api/depo-save-inventory', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: updated, unit: barkodOkuyucuInitialUnit || 'at802' })
+              }).catch(err => console.warn("Inventory sync background error:", err));
+            } catch (e) {}
+          }}
+        />
+      )}
+
       {/* PASSWORD-PROTECTED DATA UPDATE MODAL (1839) */}
       {isPasswordModalOpen && (
         <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fade-in">
@@ -13724,6 +14273,9 @@ export default function App() {
             if (cleanKey.includes('bell429')) {
               setTechizatBell429Data(newRows);
               try { localStorage.setItem('techizat_bell429_data', JSON.stringify(newRows)); } catch(e){}
+            } else if (cleanKey.includes('at802_ozel_alet')) {
+              setTechizatAt802OzelAletData(newRows);
+              try { localStorage.setItem('techizat_at802_ozel_alet_data', JSON.stringify(newRows)); } catch(e){}
             } else if (cleanKey.includes('at802')) {
               setTechizatAt802Data(newRows);
               try { localStorage.setItem('techizat_at802_data', JSON.stringify(newRows)); } catch(e){}
@@ -13765,90 +14317,32 @@ export default function App() {
         />
       )}
 
-      {/* DEPO YÖNETİMİ & SERTİFİKA & SAYIM & TRANSFER MODALI */}
+      {/* DEPO YÖNETİMİ: ANA SİSTEM ENTEGRASYONU */}
       {isDepoModalOpen && (
         <DepoManagementModal
           isOpen={isDepoModalOpen}
           onClose={() => setIsDepoModalOpen(false)}
-          depoRows={
-            selectedUnitFolder === 'bell429' || activeTechizatType === 'bell429' ? techizatBell429Data :
-            selectedUnitFolder === 't70' || activeTechizatType === 't70' ? techizatT70Data :
-            selectedUnitFolder === 'b360' || activeTechizatType === 'b360' ? techizatB360Data :
-            selectedUnitFolder === 'c650' || activeTechizatType === 'c650' ? techizatC650Data :
-            selectedUnitFolder === 'hangar' || activeTechizatType === 'hangar' ? techizatHangarData :
-            selectedUnitFolder === 't70_bumbi_backet' || activeTechizatType === 't70_bumbi_backet' ? techizatT70BumbiBacketData :
-            selectedUnitFolder === 't70_helitak' || activeTechizatType === 't70_helitak' ? techizatT70HelitakData :
-            techizatAt802Data
-          }
+          initialUnit={selectedUnitFolder || 'at802'}
+          depoRows={activeTechizatType === 'at802' ? techizatAt802Data : (activeTechizatType === 'bell429' ? techizatBell429Data : techizatHangarData)}
           at802Rows={techizatAt802Data}
-          onUpdateAt802Rows={(updatedRows) => {
-            setTechizatAt802Data(updatedRows);
-            try { localStorage.setItem('techizat_at802_data', JSON.stringify(updatedRows)); } catch(e){}
-          }}
           onUpdateDepoRows={(updatedRows) => {
-            const unit = selectedUnitFolder || activeTechizatType || 'at802';
-            if (unit === 'bell429') { setTechizatBell429Data(updatedRows); try { localStorage.setItem('techizat_bell429_data', JSON.stringify(updatedRows)); } catch(e){} }
-            else if (unit === 't70') { setTechizatT70Data(updatedRows); try { localStorage.setItem('techizat_t70_data', JSON.stringify(updatedRows)); } catch(e){} }
-            else if (unit === 'b360') { setTechizatB360Data(updatedRows); try { localStorage.setItem('techizat_b360_data', JSON.stringify(updatedRows)); } catch(e){} }
-            else if (unit === 'c650') { setTechizatC650Data(updatedRows); try { localStorage.setItem('techizat_c650_data', JSON.stringify(updatedRows)); } catch(e){} }
-            else if (unit === 'hangar') { setTechizatHangarData(updatedRows); try { localStorage.setItem('techizat_hangar_data', JSON.stringify(updatedRows)); } catch(e){} }
-            else if (unit === 't70_bumbi_backet') { setTechizatT70BumbiBacketData(updatedRows); try { localStorage.setItem('techizat_t70_bumbi_backet_data', JSON.stringify(updatedRows)); } catch(e){} }
-            else if (unit === 't70_helitak') { setTechizatT70HelitakData(updatedRows); try { localStorage.setItem('techizat_t70_helitak_data', JSON.stringify(updatedRows)); } catch(e){} }
-            else { setTechizatAt802Data(updatedRows); try { localStorage.setItem('techizat_at802_data', JSON.stringify(updatedRows)); } catch(e){} }
+            if (activeTechizatType === 'at802') setTechizatAt802Data(updatedRows);
+            else if (activeTechizatType === 'bell429') setTechizatBell429Data(updatedRows);
+            else setTechizatHangarData(updatedRows);
           }}
-          allInventory={[
-            ...techizatAt802Data.map(r => ({ unit: 'AT-802', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' })),
-            ...techizatBell429Data.map(r => ({ unit: 'BELL 429', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' })),
-            ...techizatT70Data.map(r => ({ unit: 'T-70', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' })),
-            ...techizatHangarData.map(r => ({ unit: 'HANGAR', pn: r[2] || '', name: r[1] || '', sn: r[3] || '', qty: r[4] || '1', loc: r[5] || '', status: r[6] || 'FAAL' }))
-          ]}
           transactions={depoTransactions}
           onAddTransaction={(tx) => {
             const newTx: DepoTransaction = {
-              ...tx,
-              id: (tx as any).id || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-              timestamp: (tx as any).timestamp || new Date().toLocaleString('tr-TR')
+              id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+              timestamp: new Date().toISOString(),
+              ...tx
             };
             setDepoTransactions(prev => [newTx, ...prev]);
-            addAuditLog({
-              unit: 'DEPO',
-              action: tx.type === 'GİRİŞ' ? 'EKLEME' : tx.type === 'ÇIKIŞ' ? 'SILME' : 'GUNCELLEME',
-              itemName: tx.itemName,
-              pn: tx.pn,
-              fieldName: `DEPO_${tx.type}`,
-              oldValue: '-',
-              newValue: `${tx.quantity} adet -> ${tx.targetLocation || tx.sourceLocation}`
-            });
-            showNotification(`✅ Depo işlemi kaydedildi: ${tx.type} - ${tx.itemName}`);
-          }}
-          onAddTransactionsBatch={(batchTxs) => {
-            const formattedBatch: DepoTransaction[] = batchTxs.map((tx, idx) => ({
-              ...tx,
-              id: (tx as any).id || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}_${idx}`,
-              timestamp: (tx as any).timestamp || new Date().toLocaleString('tr-TR')
-            }));
-            setDepoTransactions(prev => [...formattedBatch, ...prev]);
-          }}
-          onUpdateTransaction={(updatedTx) => {
-            setDepoTransactions(prev => prev.map(t => t.id === updatedTx.id ? updatedTx : t));
           }}
           onDeleteTransaction={(txId) => {
             setDepoTransactions(prev => prev.filter(t => t.id !== txId));
           }}
-          onDeleteTransactionsBatch={(txIds) => {
-            const idSet = new Set(txIds);
-            setDepoTransactions(prev => prev.filter(t => !idSet.has(t.id)));
-          }}
-          onUndoTransaction={(txId) => {
-            setDepoTransactions(prev => prev.map(t => t.id === txId ? { ...t, isUndone: true } : t));
-            showNotification("İşlem başarıyla geri alındı ve log tablosu güncellendi!");
-          }}
           certificatePdfUrl={depoCertificatePdfUrl}
-          onSaveCertificatePdfUrl={(url) => {
-            setDepoCertificatePdfUrl(url);
-            localStorage.setItem('depo_certificate_pdf_url', url);
-            showNotification("✅ Depo sertifika esas formu başarıyla kaydedildi!");
-          }}
           showNotification={(msg) => showNotification(msg)}
         />
       )}
@@ -13900,6 +14394,19 @@ export default function App() {
             });
             showNotification("Belge silindi.");
           }}
+        />
+      )}
+
+      {/* YER DESTEK VE ÖZEL ALET TERMAL ETİKET MODALI */}
+      {isTechizatSlipModalOpen && (
+        <DepoSlipPrintModal
+          isOpen={isTechizatSlipModalOpen}
+          onClose={() => setIsTechizatSlipModalOpen(false)}
+          initialType="etiket"
+          mode="techizat"
+          techizatList={techizatModalList}
+          inventory={[]}
+          showNotification={(msg) => showNotification(msg)}
         />
       )}
 

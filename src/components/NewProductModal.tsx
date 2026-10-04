@@ -37,6 +37,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({
   const [name, setName] = useState<string>('');
   const [marka, setMarka] = useState<string>('');
   const [pn, setPn] = useState<string>('');
+  const [yakitTuru, setYakitTuru] = useState<string>('Dizel');
   const [sn, setSn] = useState<string>('-');
   const [miktar, setMiktar] = useState<string>('1 ADET');
   const [yer, setYer] = useState<string>('Hangar / Takımhane');
@@ -99,12 +100,13 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({
     let constructedRow: string[] = [];
 
     if (isKaraAraci) {
-      // Kara Araçları formatı: SIRA NO, ARAÇ PLAKASI, MARKA, PARÇA NO (P/N), BULUNDUĞU YER, SON KM, DURUMU, KALİBRASYONA TABİ, SON BAKIM, GELECEK BAKIM, FİRMA, AÇIKLAMA, MAİL
+      // Kara Araçları formatı: SIRA NO, ARAÇ PLAKASI, MARKA, MODEL, YAKIT TÜRÜ, BULUNDUĞU YER, SON KM, DURUMU, MUAYENE / BAKIMA TABİ, SON BAKIM, GELECEK BAKIM, FİRMA, AÇIKLAMA, MAİL
       constructedRow = [
         siraNo.trim() || "1",
         name.trim().toUpperCase(),
         marka.trim().toUpperCase() || "-",
         pn.trim().toUpperCase() || "-",
+        yakitTuru.trim() || "Dizel",
         yer.trim().toUpperCase() || "ANKARA",
         miktar.trim() || "0",
         durum.trim().toUpperCase(),
@@ -274,7 +276,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({
           {/* DİNAMİK ALANLAR - KARA ARAÇLARI ÖZEL */}
           {isKaraAraci && (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
                   <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider mb-1">
                     MARKA
@@ -290,15 +292,32 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider mb-1">
-                    PARÇA NO (P/N) / MODEL <span className="text-slate-400 font-normal">(İsteğe Bağlı / Boş)</span>
+                    MODEL <span className="text-slate-400 font-normal">(İsteğe Bağlı)</span>
                   </label>
                   <input
                     type="text"
-                    placeholder="Örn: Ranger 4x4 / Boş bırakılabilir"
+                    placeholder="Örn: Ranger 4x4, Hilux, D-Max"
                     value={pn}
                     onChange={(e) => setPn(e.target.value)}
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 shadow-sm"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <span>⛽</span> YAKIT TÜRÜ
+                  </label>
+                  <select
+                    value={yakitTuru}
+                    onChange={(e) => setYakitTuru(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 shadow-sm"
+                  >
+                    <option value="Dizel">Dizel</option>
+                    <option value="Benzin">Benzin</option>
+                    <option value="Hibrit">Hibrit</option>
+                    <option value="Elektrik">Elektrik</option>
+                    <option value="LPG">LPG</option>
+                  </select>
                 </div>
               </div>
 

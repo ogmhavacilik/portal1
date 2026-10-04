@@ -757,7 +757,12 @@ function doPost(e) {
           targetSs = ss;
         }
 
-        // 1. Ana Transfer Geçmişi Tablosunu Yaz (Tüm transferler)
+        // 1. Ana Transfer Geçmişi Tablosunu Yaz (Kullanıcının belirlediği DEPO HAREKET GEÇMİŞİ-AT-802 sayfasına yaz)
+        var targetSheetName = (postData && postData.sheetName) || "DEPO HAREKET GEÇMİŞİ-AT-802";
+        writeTransfersToSpecificSheet(targetSs, targetSheetName, transfers, "#0b3d1d");
+        if (targetSheetName !== "DEPO HAREKET GEÇMİŞİ-AT-802") {
+          writeTransfersToSpecificSheet(targetSs, "DEPO HAREKET GEÇMİŞİ-AT-802", transfers, "#0b3d1d");
+        }
         writeTransfersToSpecificSheet(targetSs, "TRANSFER GEÇMİŞİ", transfers, "#0b3d1d");
 
         // 2. Depo / Birim Bazlı Ayrı Sayfalar Oluştur ve Yaz
@@ -851,11 +856,99 @@ function doPost(e) {
         response.message = "Transfer geçmişi kaydetme hatası: " + trErr.toString();
       }
 
+    } else if (action === "saveAt802SarfDepo" || action === "updateAt802SarfDepo") {
+      try {
+        var items = postData.items || postData.data || [];
+        var targetSpreadsheetId = (postData && postData.spreadsheetId) || "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+        var targetSs = ss;
+        try { targetSs = SpreadsheetApp.openById(targetSpreadsheetId); } catch(e) { targetSs = ss; }
+        
+        writeAt802SarfDepoSheet(targetSs, items);
+        recordLastUpdate(targetSs, "AT-802 SARF PARÇA DEPO", formattedDate);
+        response.status = "success";
+        response.message = items.length + " adet AT-802 sarf depo malzemesi E-Tabloya başarıyla kaydedildi.";
+        response.count = items.length;
+      } catch (atErr) {
+        response.status = "error";
+        response.message = "AT-802 Sarf Depo kaydetme hatası: " + atErr.toString();
+      }
+
+    } else if (action === "readAt802SarfDepo" || action === "getAt802SarfDepo") {
+      try {
+        var targetSpreadsheetId = (postData && postData.spreadsheetId) || "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+        var targetSs = ss;
+        try { targetSs = SpreadsheetApp.openById(targetSpreadsheetId); } catch(e) { targetSs = ss; }
+        var sheet = targetSs.getSheetByName("AT-802 SARF PARÇA DEPO") || targetSs.getSheetByName("AT802 SARF DEPO");
+        if (sheet && sheet.getLastRow() > 1) {
+          var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 23).getValues();
+          response.items = rows.map(function(r) {
+            return {
+              description: String(r[0] || ""),
+              partNumber: String(r[1] || ""),
+              serialAndNotes: String(r[2] || ""),
+              lokasyonNo: String(r[3] || ""),
+              gelen: Number(r[4]) || 0,
+              toplamStok: Number(r[5]) || 0,
+              ankaraCikan: Number(r[6]) || 0,
+              ankaraMevcut: Number(r[7]) || 0,
+              karainTransfer: Number(r[8]) || 0,
+              karainCikan: Number(r[9]) || 0,
+              karainMevcut: Number(r[10]) || 0,
+              canakkaleTransfer: Number(r[11]) || 0,
+              canakkaleCikan: Number(r[12]) || 0,
+              canakkaleMevcut: Number(r[13]) || 0,
+              milasTransfer: Number(r[14]) || 0,
+              milasCikan: Number(r[15]) || 0,
+              milasMevcut: Number(r[16]) || 0,
+              bursaTransfer: Number(r[17]) || 0,
+              bursaCikan: Number(r[18]) || 0,
+              bursaMevcut: Number(r[19]) || 0,
+              muayeneGiden: Number(r[20]) || 0,
+              muayeneGelen: Number(r[21]) || 0,
+              muayeneToplam: Number(r[22]) || 0
+            };
+          });
+          response.status = "success";
+        } else {
+          response.items = [];
+          response.status = "success";
+        }
+      } catch (rErr) {
+        response.status = "error";
+        response.message = rErr.toString();
+      }
+
+    } else if (action === "saveTransferTurleri" || action === "updateTransferTurleri") {
+      try {
+        var turler = postData.transferTurleri || postData.data || [];
+        var targetSpreadsheetId = (postData && postData.spreadsheetId) || "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+        var targetSs = ss;
+        try { targetSs = SpreadsheetApp.openById(targetSpreadsheetId); } catch(e) { targetSs = ss; }
+        
+        var turSheet = targetSs.getSheetByName("TRANSFER TÜRLERİ");
+        if (!turSheet) {
+          turSheet = targetSs.insertSheet("TRANSFER TÜRLERİ");
+        }
+        turSheet.clear();
+        turSheet.getRange(1, 1).setValue("TRANSFER VE İŞLEM TÜRLERİ (SİSTEM HAFIZASI)").setBackground("#0b3d1d").setFontColor("#ffffff").setFontWeight("bold");
+        
+        if (turler && turler.length > 0) {
+          var rows = turler.map(function(t) { return [t]; });
+          turSheet.getRange(2, 1, rows.length, 1).setValues(rows);
+        }
+        response.status = "success";
+        response.message = "Transfer türleri hafızaya kaydedildi.";
+      } catch (tErr) {
+        response.status = "error";
+        response.message = tErr.toString();
+      }
+
     } else if (action === "readDepoTransfers" || action === "getDepoTransfers") {
       try {
         var targetSpreadsheetId = (postData && postData.spreadsheetId) || "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
         var targetSs = SpreadsheetApp.openById(targetSpreadsheetId);
-        var sheet = targetSs.getSheetByName("TRANSFER GEÇMİŞİ - AT802") || targetSs.getSheetByName("TRANSFER GEÇMİŞİ");
+        var reqSheet = (postData && postData.sheetName) || "DEPO HAREKET GEÇMİŞİ-AT-802";
+        var sheet = targetSs.getSheetByName(reqSheet) || targetSs.getSheetByName("DEPO HAREKET GEÇMİŞİ-AT-802") || targetSs.getSheetByName("TRANSFER GEÇMİŞİ - AT802") || targetSs.getSheetByName("TRANSFER GEÇMİŞİ");
         if (sheet && sheet.getLastRow() > 1) {
           var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
           response.transfers = rows.map(function(r) {
@@ -3098,48 +3191,45 @@ function writeTransfersToSpecificSheet(targetSs, sheetName, transfersList, heade
   }
   sheet.clear();
 
+  // Görsel 2'deki tam 9 başlık sırası:
   var headers = [
-    "SIRA NO",
     "MALZEME ADI",
     "ADET",
     "TARİH",
     "İŞLEM TÜRÜ",
-    "SERİAL NUMBER (S/N)",
+    "SERİAL NUMBER",
     "KUYRUK KODU",
     "TESLİM ALAN",
     "KABUL YAPAN",
-    "DEPO YERİ / LOKASYON",
-    "AÇIKLAMA / NOTLAR"
+    "DEPO YERİ"
   ];
 
   sheet.appendRow(headers);
   var headerRange = sheet.getRange(1, 1, 1, headers.length);
-  headerRange.setBackground(headerBgColor || "#0b3d1d")
-    .setFontColor("#ffffff")
+  headerRange.setBackground(headerBgColor || "#b0b0b0")
+    .setFontColor("#e65100")
     .setFontWeight("bold")
     .setFontFamily("Calibri")
     .setFontSize(11)
     .setHorizontalAlignment("center")
     .setVerticalAlignment("middle");
-  sheet.setRowHeight(1, 30);
+  sheet.setRowHeight(1, 32);
   sheet.setFrozenRows(1);
 
   if (transfersList && transfersList.length > 0) {
     var curDateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd.MM.yyyy");
-    var rowsToInsert = transfersList.map(function(t, idx) {
+    var rowsToInsert = transfersList.map(function(t) {
       var name = t.itemName || t.name || t["MALZEME ADI"] || "-";
-      var qty = t.quantity !== undefined ? t.quantity : (t.qty || t["ADET"] || "1");
+      var qty = t.quantity !== undefined ? t.quantity : (t.qty || t.miktar || t["ADET"] || 1);
       var date = t.date || (t.timestamp ? String(t.timestamp).split(' ')[0] : "") || t["TARİH"] || curDateStr;
-      var type = t.type || t["İŞLEM TÜRÜ"] || "TRANSFER";
-      var sn = t.sn || t["SERİAL NUMBER"] || t["SERİ NO"] || "-";
-      var tail = t.tailNo || t["KUYRUK KODU"] || "-";
-      var op = t.operator || t["TESLİM ALAN"] || "-";
-      var rec = t.receivedBy || t["KABUL YAPAN"] || "-";
-      var loc = t.location || t.targetLocation || t.sourceLocation || t["DEPO YERİ"] || "DEPO";
-      var notes = t.notes || t["AÇIKLAMA"] || "";
+      var type = t.type || t["İŞLEM TÜRÜ"] || t.islemTuru || "TRANSFER";
+      var sn = t.sn || t.serialNumber || t["SERİAL NUMBER"] || t["SERİ NO"] || "-";
+      var tail = t.tailNo || t.aircraftTail || t["KUYRUK KODU"] || "-";
+      var op = t.operator || t.teslimAlan || t["TESLİM ALAN"] || "-";
+      var rec = t.receivedBy || t.kabulYapan || t["KABUL YAPAN"] || "-";
+      var loc = t.location || t.depoYeri || t.targetLocation || t.sourceLocation || t["DEPO YERİ"] || "DEPO";
 
       return [
-        idx + 1,
         name,
         qty,
         date,
@@ -3148,8 +3238,7 @@ function writeTransfersToSpecificSheet(targetSs, sheetName, transfersList, heade
         tail,
         op,
         rec,
-        loc,
-        notes
+        loc
       ];
     });
 
@@ -3167,9 +3256,154 @@ function writeTransfersToSpecificSheet(targetSs, sheetName, transfersList, heade
   for (var c = 1; c <= headers.length; c++) {
     sheet.autoResizeColumn(c);
     var w = sheet.getColumnWidth(c);
-    if (c === 2) { if (w < 200) sheet.setColumnWidth(c, 220); }
-    else if (c === 10 || c === 11) { if (w < 180) sheet.setColumnWidth(c, 200); }
-    else { if (w < 90) sheet.setColumnWidth(c, 100); }
+    if (c === 1) { if (w < 220) sheet.setColumnWidth(c, 240); }
+    else if (c === 4) { if (w < 160) sheet.setColumnWidth(c, 180); }
+    else if (c === 9) { if (w < 160) sheet.setColumnWidth(c, 180); }
+    else { if (w < 90) sheet.setColumnWidth(c, 110); }
+  }
+}
+
+/**
+ * AT-802 SARF PARÇA DEPO sayfasını Görsel 3'teki 23 sütuna göre tam formatlar ve yazar
+ */
+function writeAt802SarfDepoSheet(targetSs, itemsList) {
+  var sheetName = "AT-802 SARF PARÇA DEPO";
+  var sheet = targetSs.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = targetSs.insertSheet(sheetName);
+  }
+  sheet.clear();
+
+  // Görsel 3'teki 23 sütun:
+  var headers = [
+    "DESCRIPTION",
+    "PART NUMBER",
+    "SERİ NUMBER - MÜKERRER NO - AÇIKLAMA",
+    "LOKASYON NO",
+    "GELEN",
+    "TOPLAM STOK",
+    "ANKARA ÇIKAN",
+    "ANKARA MEVCUT",
+    "KARAİN TRANSFER",
+    "KARAİN ÇIKAN",
+    "KARAİN MEVCUT",
+    "ÇANAKKALE TRANSFER",
+    "ÇANAKKALE ÇIKAN",
+    "ÇANAKKALE MEVCUT",
+    "MİLAS TRANSFER",
+    "MİLAS ÇIKAN",
+    "MİLAS MEVCUT",
+    "BURSA TRANSFER",
+    "BURSA ÇIKAN",
+    "BURSA MEVCUT",
+    "MUAYENE GİDEN",
+    "MUAYENE GELEN",
+    "MUAYENE TOPLAM"
+  ];
+
+  sheet.appendRow(headers);
+  var headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontFamily("Calibri")
+    .setFontSize(10)
+    .setFontWeight("bold")
+    .setHorizontalAlignment("center")
+    .setVerticalAlignment("middle");
+  sheet.setRowHeight(1, 38);
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(4);
+
+  // Renk kodlamaları (Görsel 3'e birebir uygun):
+  // 1-3: Beyaz (#ffffff), Yazı Siyah (#000000)
+  sheet.getRange(1, 1, 1, 3).setBackground("#ffffff").setFontColor("#000000");
+  // 4: LOKASYON NO -> Sarı (#ffff00)
+  sheet.getRange(1, 4).setBackground("#ffff00").setFontColor("#000000");
+  // 5: GELEN -> Gri (#d9d9d9)
+  sheet.getRange(1, 5).setBackground("#d9d9d9").setFontColor("#000000");
+  // 6: TOPLAM STOK -> Turkuaz / Açık Mavi (#00ffff)
+  sheet.getRange(1, 6).setBackground("#00ffff").setFontColor("#000000");
+  // 7-8: ANKARA -> Turuncu (#ff9900)
+  sheet.getRange(1, 7, 1, 2).setBackground("#ff9900").setFontColor("#000000");
+  // 9-11: KARAİN -> Sarı (#ffff00)
+  sheet.getRange(1, 9, 1, 3).setBackground("#ffff00").setFontColor("#000000");
+  // 12-14: ÇANAKKALE -> Yeşil (#92d050)
+  sheet.getRange(1, 12, 1, 3).setBackground("#92d050").setFontColor("#000000");
+  // 15-17: MİLAS -> Turuncu (#ff9900)
+  sheet.getRange(1, 15, 1, 3).setBackground("#ff9900").setFontColor("#000000");
+  // 18-20: BURSA -> Pembe / Fuşya (#ff00ff)
+  sheet.getRange(1, 18, 1, 3).setBackground("#ff00ff").setFontColor("#000000");
+  // 21-23: MUAYENE -> Gri (#bfbfbf)
+  sheet.getRange(1, 21, 1, 3).setBackground("#bfbfbf").setFontColor("#000000");
+
+  if (itemsList && itemsList.length > 0) {
+    var rowsToInsert = itemsList.map(function(item) {
+      var desc = item.description || item.name || "-";
+      var pn = item.partNumber || item.pn || "-";
+      var snNotes = item.serialAndNotes || item.sn || item.aciklama || "-";
+      var loc = item.lokasyonNo || item.location || "-";
+      var gelen = Number(item.gelen) || Number(item.miktar) || 0;
+      var ankaraCikan = Number(item.ankaraCikan) || 0;
+      var ankaraMevcut = Number(item.ankaraMevcut) || 0;
+      var karainTransfer = Number(item.karainTransfer) || 0;
+      var karainCikan = Number(item.karainCikan) || 0;
+      var karainMevcut = Number(item.karainMevcut) || Math.max(0, karainTransfer - karainCikan);
+      var canakkaleTransfer = Number(item.canakkaleTransfer) || 0;
+      var canakkaleCikan = Number(item.canakkaleCikan) || 0;
+      var canakkaleMevcut = Number(item.canakkaleMevcut) || Math.max(0, canakkaleTransfer - canakkaleCikan);
+      var milasTransfer = Number(item.milasTransfer) || 0;
+      var milasCikan = Number(item.milasCikan) || 0;
+      var milasMevcut = Number(item.milasMevcut) || Math.max(0, milasTransfer - milasCikan);
+      var bursaTransfer = Number(item.bursaTransfer) || 0;
+      var bursaCikan = Number(item.bursaCikan) || 0;
+      var bursaMevcut = Number(item.bursaMevcut) || Math.max(0, bursaTransfer - bursaCikan);
+      var muayeneGiden = Number(item.muayeneGiden) || 0;
+      var muayeneGelen = Number(item.muayeneGelen) || 0;
+      var muayeneToplam = Number(item.muayeneToplam) || Math.max(0, muayeneGelen - muayeneGiden);
+      
+      var toplamStok = Number(item.toplamStok);
+      if (isNaN(toplamStok) || toplamStok === 0) {
+        toplamStok = ankaraMevcut + karainMevcut + canakkaleMevcut + milasMevcut + bursaMevcut;
+        if (toplamStok === 0 && gelen > 0) toplamStok = gelen;
+      }
+
+      return [
+        desc,
+        pn,
+        snNotes,
+        loc,
+        gelen,
+        toplamStok,
+        ankaraCikan,
+        ankaraMevcut,
+        karainTransfer,
+        karainCikan,
+        karainMevcut,
+        canakkaleTransfer,
+        canakkaleCikan,
+        canakkaleMevcut,
+        milasTransfer,
+        milasCikan,
+        milasMevcut,
+        bursaTransfer,
+        bursaCikan,
+        bursaMevcut,
+        muayeneGiden,
+        muayeneGelen,
+        muayeneToplam
+      ];
+    });
+
+    sheet.getRange(2, 1, rowsToInsert.length, headers.length).setValues(rowsToInsert);
+    var dataRange = sheet.getRange(2, 1, rowsToInsert.length, headers.length);
+    dataRange.setFontFamily("Calibri").setFontSize(10).setVerticalAlignment("middle");
+  }
+
+  for (var c = 1; c <= headers.length; c++) {
+    sheet.autoResizeColumn(c);
+    var colW = sheet.getColumnWidth(c);
+    if (c === 1) { if (colW < 240) sheet.setColumnWidth(c, 260); }
+    else if (c === 2) { if (colW < 140) sheet.setColumnWidth(c, 160); }
+    else if (c === 3) { if (colW < 200) sheet.setColumnWidth(c, 220); }
+    else { if (colW < 80) sheet.setColumnWidth(c, 90); }
   }
 }
 
@@ -3199,36 +3433,35 @@ function ensureTransferGecmisiSheet(ss) {
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
     var headers = [
-      "SIRA NO",
       "MALZEME ADI",
       "ADET",
       "TARİH",
       "İŞLEM TÜRÜ",
-      "SERİAL NUMBER (S/N)",
+      "SERİAL NUMBER",
       "KUYRUK KODU",
       "TESLİM ALAN",
       "KABUL YAPAN",
-      "DEPO YERİ / LOKASYON",
-      "AÇIKLAMA / NOTLAR"
+      "DEPO YERİ"
     ];
     sheet.appendRow(headers);
     var headerRange = sheet.getRange(1, 1, 1, headers.length);
-    headerRange.setBackground("#0b3d1d")
-      .setFontColor("#ffffff")
+    headerRange.setBackground("#b0b0b0")
+      .setFontColor("#e65100")
       .setFontWeight("bold")
       .setFontFamily("Calibri")
       .setFontSize(11)
       .setHorizontalAlignment("center")
       .setVerticalAlignment("middle");
-    sheet.setRowHeight(1, 30);
+    sheet.setRowHeight(1, 32);
     sheet.setFrozenRows(1);
     
     for (var c = 1; c <= headers.length; c++) {
       sheet.autoResizeColumn(c);
       var w = sheet.getColumnWidth(c);
-      if (c === 2) { if (w < 200) sheet.setColumnWidth(c, 220); }
-      else if (c === 10 || c === 11) { if (w < 180) sheet.setColumnWidth(c, 200); }
-      else { if (w < 90) sheet.setColumnWidth(c, 100); }
+      if (c === 1) { if (w < 220) sheet.setColumnWidth(c, 240); }
+      else if (c === 4) { if (w < 160) sheet.setColumnWidth(c, 180); }
+      else if (c === 9) { if (w < 160) sheet.setColumnWidth(c, 180); }
+      else { if (w < 90) sheet.setColumnWidth(c, 110); }
     }
   }
   return sheet;

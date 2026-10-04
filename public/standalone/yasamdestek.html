@@ -1,0 +1,2010 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OGM AT-802 Yaşam Destek Ekipmanları Depo & Görev Portalı</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    @media print {
+      body * { visibility: hidden; }
+      #printableTutanak, #printableTutanak * { visibility: visible; }
+      #printableTutanak { position: absolute; left: 0; top: 0; width: 100%; display: block !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 font-sans text-slate-800 min-h-screen flex flex-col">
+
+  <!-- TOP HEADER -->
+  <header class="bg-[#0b3d1d] text-white sticky top-0 z-40 shadow-md">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center border border-white/20 shadow-inner">
+          <span class="text-2xl">🦺</span>
+        </div>
+        <div>
+          <div class="text-[10px] sm:text-xs font-bold text-emerald-300 uppercase tracking-wider">
+            T.C. ORMAN GENEL MÜDÜRLÜĞÜ • HAVACILIK DAİRESİ BAŞKANLIĞI
+          </div>
+          <div class="text-sm sm:text-base font-black tracking-wide flex items-center gap-2">
+            <span>AT-802 YAŞAM DESTEK EKİPMANLARI PORTALI</span>
+            <span class="text-[10px] bg-emerald-500/30 text-emerald-200 border border-emerald-400/40 px-2 py-0.5 rounded-full font-mono">CANLI GOOGLE E-TABLO</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div id="liveClock" class="hidden sm:block text-right font-mono text-xs text-emerald-200/90 bg-emerald-950/50 px-3 py-1.5 rounded-lg border border-emerald-800">
+          --.--.---- --:--
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- NAVIGATION BAR (TÜM TABLAR VE SADECE ZİMMET AL BUTONU) -->
+  <div class="bg-slate-200 border-b border-slate-300 sticky top-[62px] z-30">
+    <div class="max-w-7xl mx-auto px-4 py-2 flex flex-wrap items-center justify-between gap-2">
+      <div class="flex flex-wrap items-center gap-1.5 sm:gap-2">
+        <button 
+          id="tab_personnel" 
+          onclick="switchPublicTab('personnel')"
+          class="px-3 sm:px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 bg-[#0b3d1d] text-white shadow-xs cursor-pointer"
+        >
+          <span>👨‍✈️ AT-802 PERSONEL VERİSİ (<span id="count_personnel">32</span>)</span>
+        </button>
+
+        <button 
+          id="tab_zimmetler" 
+          onclick="switchPublicTab('zimmetler')"
+          class="px-3 sm:px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 bg-white text-slate-700 hover:bg-slate-100 cursor-pointer shadow-2xs"
+        >
+          <span>📋 GÖREV & ZİMMETLER (<span id="count_zm">0</span>)</span>
+        </button>
+
+        <button 
+          id="tab_can_yelegi" 
+          onclick="switchPublicTab('can_yelegi')"
+          class="px-3 sm:px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 bg-white text-slate-700 hover:bg-slate-100 cursor-pointer shadow-2xs"
+        >
+          <span>🦺 CAN YELEĞİ (<span id="count_cy">19</span>)</span>
+        </button>
+
+        <button 
+          id="tab_spare_air" 
+          onclick="switchPublicTab('spare_air')"
+          class="px-3 sm:px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 bg-white text-slate-700 hover:bg-slate-100 cursor-pointer shadow-2xs"
+        >
+          <span>💨 SPARE AIR (<span id="count_sa">18</span>)</span>
+        </button>
+
+        <button 
+          id="tab_helmet_kit" 
+          onclick="switchPublicTab('helmet_kit')"
+          class="px-3 sm:px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 bg-white text-slate-700 hover:bg-slate-100 cursor-pointer shadow-2xs"
+        >
+          <span>🪖 HELMET KIT & KULAKLIK (<span id="count_hk">21</span>)</span>
+        </button>
+      </div>
+
+      <!-- SADECE + YENİ ZİMMET AL BUTONU (DİĞER TÜM BUTONLAR KALDIRILDI) -->
+      <div class="flex items-center gap-2">
+        <button 
+          type="button" 
+          onclick="openStepByStepModal()" 
+          id="btnOpenZimmetAl"
+          class="px-5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-md active:scale-95"
+        >
+          <i class="fa-solid fa-plus text-sm"></i>
+          <span>+ YENİ ZİMMET AL</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- MAIN CONTENT CONTAINER -->
+  <main class="max-w-7xl mx-auto px-4 py-6 flex-1 w-full space-y-6">
+
+    <!-- SEARCH BAR (KAYIT ARA) -->
+    <div class="bg-white rounded-2xl p-3 border border-slate-300 shadow-xs flex items-center gap-3">
+      <div class="relative flex-1">
+        <input 
+          type="text" 
+          id="htmlSearchInput" 
+          oninput="renderStocks(); renderZimmetler(); renderPersonnelTable();" 
+          placeholder="🔍 KAYIT ARA (Tarih, Personel Adı, Seri No, Görev Yeri, P/N)..." 
+          class="w-full pl-4 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-600 focus:bg-white"
+        >
+      </div>
+    </div>
+
+    <!-- SHEET 1: CAN YELEĞİ STOK -->
+    <div id="section_can_yelegi" class="hidden space-y-4">
+      <div class="bg-white rounded-2xl border border-slate-300 shadow-xs overflow-hidden">
+        <div class="p-3 bg-slate-100 border-b border-slate-300 text-center font-black text-sm uppercase text-slate-800 tracking-wider">
+          CAN YELEĞİ STOK
+        </div>
+        <div class="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-900 font-black text-[11px] uppercase tracking-wider text-center select-none">
+              <tr>
+                <th class="py-2.5 px-3 border-r border-slate-300 w-16">S. NO</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[180px]">MALZEME ADI</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px] font-mono">PARÇA NO</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px] font-mono">SERİ NO</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[100px] font-mono">DIŞ NO</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[160px] bg-slate-200">AÇIKLAMALAR</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[220px] bg-emerald-200/60 text-emerald-950">TESLİM EDİLEN PERSONEL/BÖLGE</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">TARİH / BİTİŞ</th>
+                <th class="py-2.5 px-3 min-w-[130px] bg-slate-700 text-white font-black">İŞLEMLER</th>
+              </tr>
+            </thead>
+            <tbody id="tbody_can_yelegi" class="divide-y divide-slate-300 text-[11px] font-bold"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SHEET 2: SPARE AIR STOK -->
+    <div id="section_spare_air" class="hidden space-y-4">
+      <div class="bg-white rounded-2xl border border-slate-300 shadow-xs overflow-hidden">
+        <div class="p-3 bg-slate-100 border-b border-slate-300 text-center font-black text-sm uppercase text-slate-800 tracking-wider">
+          SPARE AIR STOK
+        </div>
+        <div class="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-900 font-black text-[11px] uppercase tracking-wider text-center select-none">
+              <tr>
+                <th class="py-2.5 px-3 border-r border-slate-300 w-16">S. NO</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[180px]">MALZEME ADI</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px] font-mono">PARÇA NO</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px] font-mono">SERİ NO</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[160px] bg-slate-200">AÇIKLAMALAR</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[220px] bg-cyan-200/60 text-cyan-950">TESLİM EDİLEN PERSONEL/BÖLGE</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">TARİH / BİTİŞ</th>
+                <th class="py-2.5 px-3 min-w-[130px] bg-slate-700 text-white font-black">İŞLEMLER</th>
+              </tr>
+            </thead>
+            <tbody id="tbody_spare_air" class="divide-y divide-slate-300 text-[11px] font-bold"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SHEET 3: HELMET KIT & KULAKLIK STOK -->
+    <div id="section_helmet_kit" class="hidden space-y-4">
+      <div class="bg-white rounded-2xl border border-slate-300 shadow-xs overflow-hidden">
+        <div class="p-3 bg-slate-100 border-b border-slate-300 text-center font-black text-sm uppercase text-slate-800 tracking-wider">
+          HELMET KIT VE DAVID CLARK KULAK VE DOLGU
+        </div>
+        <div class="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-900 font-black text-[11px] uppercase tracking-wider text-center select-none">
+              <tr>
+                <th class="py-2.5 px-3 border-r border-slate-300 w-16">S. NO</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">MALZEME 1</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[110px] font-mono">P/N 1</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px] font-mono">S/N 1</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">MALZEME 2</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[110px] font-mono">P/N 2</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[130px] font-mono font-black text-indigo-900 bg-indigo-50/70">KULAKLIK S/N</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[150px] bg-slate-200">AÇIKLAMALAR</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[220px] bg-purple-200/60 text-purple-950">TESLİM EDİLEN PERSONEL/BÖLGE</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">TARİH / BİTİŞ</th>
+                <th class="py-2.5 px-3 min-w-[130px] bg-slate-700 text-white font-black">İŞLEMLER</th>
+              </tr>
+            </thead>
+            <tbody id="tbody_helmet_kit" class="divide-y divide-slate-300 text-[11px] font-bold"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SHEET 4: GÖREV & ZİMMETLER -->
+    <div id="section_zimmetler" class="hidden space-y-4">
+      <div class="bg-white rounded-2xl border border-slate-300 shadow-xs overflow-hidden">
+        <div class="p-3.5 bg-emerald-50 border-b border-emerald-200 flex flex-wrap items-center justify-between gap-3">
+          <div class="font-black text-sm uppercase text-emerald-950 tracking-wider flex items-center gap-2">
+            <span>📋 YAŞAM DESTEK CANLI GÖREV & ZİMMET LİSTESİ</span>
+          </div>
+          <span class="text-xs font-bold text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-300">
+            Aktif Zimmetler Yeşil Dolgu ile İşlenir
+          </span>
+        </div>
+        <div class="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-900 font-black text-[11px] uppercase tracking-wider text-center select-none">
+              <tr>
+                <th class="py-2.5 px-3 border-r border-slate-300 w-16">SIRA</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[180px]">PERSONEL ADI SOYADI</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">GÖREV YERİ</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[110px]">BAŞLANGIÇ</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[110px]">BİTİŞ</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[130px] bg-amber-200/50">LIFE VEST S/N</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[130px] bg-cyan-200/50">SPARE AIR S/N</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[130px] bg-purple-200/50">HELMET KIT S/N</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">DURUM</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[160px] bg-slate-200">AÇIKLAMALAR</th>
+                <th class="py-2.5 px-3 min-w-[100px] bg-slate-700 text-white font-black">İŞLEMLER</th>
+              </tr>
+            </thead>
+            <tbody id="tbody_zimmetler" class="divide-y divide-slate-200 font-mono text-[11px]"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SHEET 5: AT-802 PERSONEL VERİSİ ( CANLI LİSTE) -->
+    <!-- DÜZENLE / SİL YOKTUR - DIŞARIDAN BAKANLAR KİMDE NE VAR GÖRÜR, ZİMMET YOKSA 'ZİMMET AL', VARSA 'DEVRET' BUTONU VAR -->
+    <div id="section_personnel" class="space-y-4">
+      <div class="bg-white rounded-2xl border border-slate-300 shadow-xs overflow-hidden">
+        <div class="p-3.5 bg-indigo-50 border-b border-indigo-200 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div class="font-black text-sm uppercase text-indigo-950 tracking-wider flex items-center gap-2">
+              <span>👨‍✈️ AT-802 PERSONEL VERİSİ ( CANLI LİSTE)</span>
+            </div>
+            <p class="text-[11px] text-slate-600 font-medium mt-0.5">
+              Dış kullanıcılar ve personel için canlı yaşam destek takip listesidir. Kimde hangi ekipmanların (Life Vest, Spare Air, Helmet Kit) zimmetli olduğunu gösterir.
+            </p>
+          </div>
+          <div class="text-xs font-black text-indigo-900 bg-indigo-100 px-3 py-1 rounded-full border border-indigo-300">
+            32 Personel Canlı Verisi
+          </div>
+        </div>
+        <div class="overflow-x-auto max-h-[70vh] overflow-y-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-900 font-black text-[11px] uppercase tracking-wider text-center select-none">
+              <tr>
+                <th class="py-2.5 px-3 border-r border-slate-300 w-16">SIRA</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[200px]">PERSONEL ADI SOYADI</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">ÜNVANI</th>
+                <th class="py-2.5 px-3 border-r border-slate-300 min-w-[120px]">GÖREV YERİ</th>
+                <th class="py-2.5 px-4 border-r border-slate-300 text-left min-w-[300px]">ZİMMETLİ EKİPMANLAR (SERİ NO)</th>
+                <th class="py-2.5 px-3 min-w-[140px]">İŞLEMLER</th>
+              </tr>
+            </thead>
+            <tbody id="tbody_personnel" class="divide-y divide-slate-200 font-sans text-[11px]"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- STEP-BY-STEP (ADIM ADIM) YENİ ZİMMET AL MODALI -->
+  <!-- ========================================================================= -->
+  <div id="stepWizardModal" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-2xl w-full border border-slate-300 overflow-hidden animate-in fade-in duration-150 flex flex-col max-h-[92vh]">
+      
+      <!-- MODAL HEADER & PROGRESS BAR -->
+      <div class="px-6 py-4 bg-[#0b3d1d] text-white flex items-center justify-between border-b border-emerald-900">
+        <div>
+          <div class="text-[10px] font-bold text-emerald-300 uppercase tracking-widest">OGM HAVACILIK DEPO SİSTEMİ</div>
+          <h3 class="text-base font-black tracking-wide flex items-center gap-2">
+            <span>🚀 YENİ YAŞAM DESTEK ZİMMETİ VER</span>
+          </h3>
+        </div>
+        <button type="button" onclick="closeStepByStepModal()" class="text-white/80 hover:text-white p-1 cursor-pointer">
+          <i class="fa-solid fa-xmark text-xl"></i>
+        </button>
+      </div>
+
+      <!-- STEPPER PROGRESS TABS -->
+      <div class="bg-slate-100 px-6 py-3 border-b border-slate-200">
+        <div class="flex items-center justify-between text-[11px] font-black uppercase tracking-wider mb-2">
+          <span id="stepTab1" class="text-emerald-700 underline font-black">1. Personel</span>
+          <span class="text-slate-300">➔</span>
+          <span id="stepTab2" class="text-slate-400">2. Can Yeleği</span>
+          <span class="text-slate-300">➔</span>
+          <span id="stepTab3" class="text-slate-400">3. Spare Air</span>
+          <span class="text-slate-300">➔</span>
+          <span id="stepTab4" class="text-slate-400">4. Helmet Kit</span>
+          <span class="text-slate-300">➔</span>
+          <span id="stepTab5" class="text-slate-400">5. Onay</span>
+        </div>
+        <div class="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+          <div id="wizardBar" class="bg-emerald-600 h-full transition-all duration-300 rounded-full" style="width: 20%"></div>
+        </div>
+      </div>
+
+      <!-- MODAL BODY: STEPS CONTENT -->
+      <div class="p-6 overflow-y-auto flex-1 space-y-5">
+        
+        <!-- ============================================== -->
+        <!-- ADIM 1: PERSONEL SEÇİMİ (OTOMATİK DOLDURMA) -->
+        <!-- ============================================== -->
+        <div id="stepSection1" class="space-y-4">
+          <div class="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200">
+            <div class="text-xs font-black uppercase text-emerald-950 flex items-center gap-2">
+              <span class="text-lg">👤</span>
+              <span>Adım 1: Personel Seçimi</span>
+            </div>
+            <p class="text-xs text-emerald-800 mt-1">
+              Zimmet verilecek personeli açılır listeden seçiniz. Seçilen personelin ünvanı ve müsait ekipmanların seri numaraları sonraki adımlarda otomatik doldurulacaktır.
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-black uppercase text-slate-700 mb-2">
+              Personel Seçiniz (32 Kişilik Canlı Liste): *
+            </label>
+            <select 
+              id="wizardPersonelSelect" 
+              onchange="onWizardPersonnelSelect(this.value)" 
+              class="w-full px-4 py-3.5 bg-white border-2 border-emerald-600 rounded-2xl text-xs font-black text-slate-900 focus:outline-none focus:border-emerald-800 shadow-xs cursor-pointer"
+            >
+              <!-- Dinamik olarak doldurulur -->
+            </select>
+          </div>
+
+          <!-- OTOMATİK DOLDURULAN SEÇİLEN PERSONEL ROZETİ VE DETAYI -->
+          <div id="wizardSelectedPersonCard" class="p-4 bg-slate-50 border-2 border-emerald-200 rounded-2xl space-y-2">
+            <div class="text-[10px] font-black uppercase text-slate-500 tracking-wider">Otomatik Yüklenen Personel Bilgisi:</div>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2.5">
+                <span class="text-3xl">👤</span>
+                <div>
+                  <div id="wizardSelectedPersonName" class="text-base font-black text-slate-950">-</div>
+                  <div class="text-[11px] text-slate-500 font-bold">AT-802 Orman Yangın Ekibi</div>
+                </div>
+              </div>
+              <span id="wizardSelectedPersonRole" class="text-xs font-black px-3.5 py-1.5 bg-emerald-700 text-white rounded-full shadow-2xs">
+                -
+              </span>
+            </div>
+            <div id="wizardPersonZimmetStatus" class="pt-2 border-t border-slate-200 text-xs">
+              <!-- Zimmet durumu dinamik doldurulur -->
+            </div>
+          </div>
+        </div>
+
+        <!-- ============================================== -->
+        <!-- ADIM 2: CAN YELEĞİ (LIFE VEST) SEÇİMİ -->
+        <!-- ============================================== -->
+        <div id="stepSection2" class="hidden space-y-4">
+          <div class="p-3.5 bg-amber-50 rounded-2xl border border-amber-200">
+            <div class="text-xs font-black uppercase text-amber-950 flex items-center gap-2">
+              <span class="text-lg">🦺</span>
+              <span>Adım 2: Life West - Can Yeleği Seçimi</span>
+            </div>
+            <p class="text-xs text-amber-800 mt-1">
+              Depoda boşta bulunan can yeleklerinden otomatik olarak önerilen seri no seçilmiştir. İsterseniz değiştirebilirsiniz.
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-black uppercase text-slate-700 mb-1.5">
+              Müsait Can Yeleği Seri Numarası (P/N: S-7200-511):
+            </label>
+            <select 
+              id="wizardSelLifeVest" 
+              onchange="onWizardLifeVestChange(this.value)"
+              class="w-full px-4 py-3 bg-white border-2 border-amber-300 rounded-2xl font-mono font-black text-sm text-amber-950 focus:outline-none focus:border-amber-500 shadow-xs"
+            >
+              <!-- Auto filled with available life vests -->
+            </select>
+          </div>
+
+          <div id="wizardLifeVestDetailBox" class="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1">
+            <div class="font-black text-slate-700">Seçilen Ekipman Özeti:</div>
+            <div class="text-slate-600">Malzeme: <span class="font-bold text-slate-900">LIFE WEST - CAN YELEĞİ</span></div>
+            <div class="text-slate-600">Parça No: <span class="font-mono font-bold text-slate-900">S-7200-511</span></div>
+            <div class="text-slate-600">Seri No: <span id="wizardDetailLifeVestSn" class="font-mono font-black text-amber-900">-</span></div>
+            <div class="text-slate-600">Durum: <span class="font-bold text-emerald-700">DEPODA (MÜSAİT)</span></div>
+          </div>
+        </div>
+
+        <!-- ============================================== -->
+        <!-- ADIM 3: SPARE AIR (YEDEK HAVA TÜPÜ) SEÇİMİ -->
+        <!-- ============================================== -->
+        <div id="stepSection3" class="hidden space-y-4">
+          <div class="p-3.5 bg-cyan-50 rounded-2xl border border-cyan-200">
+            <div class="text-xs font-black uppercase text-cyan-950 flex items-center gap-2">
+              <span class="text-lg">💨</span>
+              <span>Adım 3: Spare Air (Yedek Hava Tüpü) Seçimi</span>
+            </div>
+            <p class="text-xs text-cyan-800 mt-1">
+              Depoda boşta bulunan yedek hava tüplerinden otomatik olarak önerilen seri no seçilmiştir.
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-black uppercase text-slate-700 mb-1.5">
+              Müsait Spare Air Seri Numarası (P/N: 175-001-CE):
+            </label>
+            <select 
+              id="wizardSelSpareAir" 
+              onchange="onWizardSpareAirChange(this.value)"
+              class="w-full px-4 py-3 bg-white border-2 border-cyan-300 rounded-2xl font-mono font-black text-sm text-cyan-950 focus:outline-none focus:border-cyan-500 shadow-xs"
+            >
+              <!-- Auto filled with available spare airs -->
+            </select>
+          </div>
+
+          <div id="wizardSpareAirDetailBox" class="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1">
+            <div class="font-black text-slate-700">Seçilen Ekipman Özeti:</div>
+            <div class="text-slate-600">Malzeme: <span class="font-bold text-slate-900">SPARE AIR (HEED 3)</span></div>
+            <div class="text-slate-600">Parça No: <span class="font-mono font-bold text-slate-900">175-001-CE</span></div>
+            <div class="text-slate-600">Seri No: <span id="wizardDetailSpareAirSn" class="font-mono font-black text-cyan-900">-</span></div>
+            <div class="text-slate-600">Durum: <span class="font-bold text-emerald-700">DEPODA (MÜSAİT)</span></div>
+          </div>
+        </div>
+
+        <!-- ============================================== -->
+        <!-- ADIM 4: HELMET KIT & DAVID CLARK KULAKLIK SEÇİMİ -->
+        <!-- ============================================== -->
+        <div id="stepSection4" class="hidden space-y-4">
+          <div class="p-3.5 bg-purple-50 rounded-2xl border border-purple-200">
+            <div class="text-xs font-black uppercase text-purple-950 flex items-center gap-2">
+              <span class="text-lg">🪖</span>
+              <span>Adım 4: Helmet Kit & David Clark Kulaklık Seçimi</span>
+            </div>
+            <p class="text-xs text-purple-800 mt-1">
+              Depoda boşta bulunan kask ve kulaklık takımlarından otomatik olarak ilk müsait seri numarası seçilmiştir.
+            </p>
+          </div>
+
+          <div>
+            <label class="block text-xs font-black uppercase text-slate-700 mb-1.5">
+              Müsait Helmet Kit & Kulaklık Seri No:
+            </label>
+            <select 
+              id="wizardSelHelmetKit" 
+              onchange="onWizardHelmetKitChange(this.value)"
+              class="w-full px-4 py-3 bg-white border-2 border-purple-300 rounded-2xl font-mono font-black text-sm text-purple-950 focus:outline-none focus:border-purple-500 shadow-xs"
+            >
+              <!-- Auto filled with available helmet kits -->
+            </select>
+          </div>
+
+          <div id="wizardHelmetDetailBox" class="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1">
+            <div class="font-black text-slate-700">Seçilen Ekipman Özeti:</div>
+            <div class="text-slate-600">Kask Parça: <span class="font-mono font-bold text-slate-900">18852G-01</span></div>
+            <div class="text-slate-600">Kulaklık: <span class="font-bold text-slate-900">DAVID CLARK H-10-13X</span></div>
+            <div class="text-slate-600">Kulaklık S/N: <span id="wizardDetailHelmetSn" class="font-mono font-black text-purple-900">-</span></div>
+            <div class="text-slate-600">Durum: <span class="font-bold text-emerald-700">DEPODA (MÜSAİT)</span></div>
+          </div>
+        </div>
+
+        <!-- ============================================== -->
+        <!-- ADIM 5: GÖREV YERİ, TARİH & ONAY (GÖREVİ BAŞLAT) -->
+        <!-- ============================================== -->
+        <div id="stepSection5" class="hidden space-y-4">
+          <div class="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-300">
+            <div class="text-xs font-black uppercase text-emerald-950 flex items-center gap-2">
+              <span class="text-lg">📍</span>
+              <span>Adım 5: Görev Yeri ve Zimmet Onayı</span>
+            </div>
+            <p class="text-xs text-emerald-800 mt-1">
+              Görev bölgesini ve başlangıç tarihini onaylayarak görevi başlatınız. Stoklar otomatik yeşil dolguya dönecektir.
+            </p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-black uppercase text-slate-700 mb-1.5">Görev Yeri: *</label>
+              <select id="wizardGorevYeri" onchange="onWizardGorevYeriChange(this.value)" class="w-full px-4 py-2.5 bg-slate-50 border-2 border-slate-300 rounded-xl font-bold text-slate-900 text-xs cursor-pointer">
+                <option value="MİLAS">MİLAS</option>
+                <option value="KARAİN">KARAİN</option>
+                <option value="ÇANAKKALE">ÇANAKKALE</option>
+                <option value="BURSA">BURSA</option>
+                <option value="ANKARA">ANKARA</option>
+                <option value="İZMİR">İZMİR</option>
+                <option value="MUĞLA">MUĞLA</option>
+                <option value="ANTALYA">ANTALYA</option>
+                <option value="DİĞER">✏️ DİĞER (Manuel Yazınız)</option>
+              </select>
+              <input 
+                type="text" 
+                id="wizardGorevYeriCustom" 
+                oninput="updateSummaryGorevYeri()" 
+                placeholder="Örn: ADANA, DALAMAN, SİNOP..." 
+                class="hidden mt-2 w-full px-4 py-2 bg-amber-50 border-2 border-amber-400 rounded-xl font-bold text-slate-900 text-xs uppercase focus:outline-none focus:border-amber-600"
+              >
+            </div>
+
+            <div>
+              <label class="block text-xs font-black uppercase text-slate-700 mb-1.5">Başlangıç Tarihi: *</label>
+              <input type="text" id="wizardBaslangicTarihi" class="w-full px-4 py-2.5 bg-slate-50 border-2 border-slate-300 rounded-xl font-mono text-slate-900 text-xs font-bold">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Görev Notu / Açıklama (Opsiyonel):</label>
+            <input type="text" id="wizardNotlar" placeholder="Örn: 2026 Yangın Sezonu Nöbeti..." class="w-full px-4 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium">
+          </div>
+
+          <!-- ZİMMET ÖZET KARTI -->
+          <div class="p-4 bg-slate-50 rounded-2xl border-2 border-slate-300 space-y-2.5">
+            <div class="text-xs font-black uppercase text-slate-900 tracking-wider flex items-center justify-between pb-2 border-b border-slate-200">
+              <span>Zimmet Verilecek Personel & Ekipmanlar:</span>
+              <span class="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">🟢 Yeşil Dolgu Yapılacak</span>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Personel:</span>
+                <span id="summaryPersonel" class="font-black text-slate-900 text-sm">-</span>
+              </div>
+              <div>
+                <span class="text-slate-400 block text-[10px] uppercase font-bold">Görev Yeri:</span>
+                <span id="summaryGorevYeri" class="font-black text-emerald-800 text-sm">📍 MİLAS</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200 text-xs">
+              <div class="p-2 bg-amber-50 rounded-xl border border-amber-200 text-center">
+                <div class="text-[10px] font-bold text-amber-800">🦺 Life Vest S/N</div>
+                <div id="summaryLifeVest" class="font-mono font-black text-amber-950 text-xs mt-0.5">-</div>
+              </div>
+              <div class="p-2 bg-cyan-50 rounded-xl border border-cyan-200 text-center">
+                <div class="text-[10px] font-bold text-cyan-800">💨 Spare Air S/N</div>
+                <div id="summarySpareAir" class="font-mono font-black text-cyan-950 text-xs mt-0.5">-</div>
+              </div>
+              <div class="p-2 bg-purple-50 rounded-xl border border-purple-200 text-center">
+                <div class="text-[10px] font-bold text-purple-800">🪖 Helmet Kit S/N</div>
+                <div id="summaryHelmetKit" class="font-mono font-black text-purple-950 text-xs mt-0.5">-</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- MODAL FOOTER: NAVIGATION BUTTONS -->
+      <div class="px-6 py-4 bg-slate-100 border-t border-slate-200 flex items-center justify-between">
+        <button 
+          type="button" 
+          id="wizardPrevBtn" 
+          onclick="wizardPrevStep()" 
+          class="hidden px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95 flex items-center gap-1.5"
+        >
+          <i class="fa-solid fa-arrow-left"></i>
+          <span>Geri</span>
+        </button>
+
+        <button 
+          type="button" 
+          onclick="closeStepByStepModal()" 
+          id="wizardCancelBtn"
+          class="px-5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl font-bold text-xs cursor-pointer"
+        >
+          Vazgeç
+        </button>
+
+        <button 
+          type="button" 
+          id="wizardNextBtn" 
+          onclick="wizardNextStep()" 
+          class="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-black text-xs uppercase tracking-wider cursor-pointer shadow-md transition active:scale-95 flex items-center gap-1.5"
+        >
+          <span>İleri (Can Yeleği)</span>
+          <i class="fa-solid fa-arrow-right"></i>
+        </button>
+
+        <button 
+          type="button" 
+          id="wizardSubmitBtn" 
+          onclick="submitStepWizardZimmet()" 
+          class="hidden px-7 py-3 bg-[#0b3d1d] hover:bg-[#072813] text-white rounded-xl font-black text-xs uppercase tracking-wider cursor-pointer shadow-lg transition active:scale-95 flex items-center gap-2"
+        >
+          <i class="fa-solid fa-play text-emerald-400"></i>
+          <span>🚀 GÖREVİ BAŞLAT (ZİMMETİ VER)</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- MODAL: ZİMMET DETAYLARI GÖRÜNTÜLE -->
+  <div id="viewZimmetModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden animate-in fade-in duration-150">
+      <div class="px-5 py-4 bg-[#0b3d1d] text-white flex items-center justify-between">
+        <h3 class="text-sm font-black uppercase tracking-wider flex items-center gap-2">
+          <span>👁️ Personel Yaşam Destek Zimmet Detayı</span>
+        </h3>
+        <button onclick="closeViewZimmetModal()" class="text-white/80 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <div class="p-6 space-y-4" id="viewZimmetModalContent">
+        <!-- Dynamic Content -->
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: GÖREVİ BİTİR / DEVİR & TESLİM -->
+  <div id="finishModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden">
+      <div class="px-5 py-4 bg-amber-600 text-white flex items-center justify-between">
+        <h3 class="text-sm font-black uppercase tracking-wider">🔄 Görevi Bitir / Ekipman Devir & Teslim</h3>
+        <button onclick="closeFinishModal()" class="text-white/80 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+          <div class="font-bold text-slate-400 uppercase text-[10px]">Görevi Tamamlayan:</div>
+          <div id="modalCurrentPersonel" class="text-sm font-black text-slate-900 mt-0.5">-</div>
+          <div id="modalCurrentInfo" class="text-slate-500 font-mono text-[11px] mt-0.5">-</div>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Bitiş Tarihi:</label>
+          <input type="text" id="modalBitisTarihi" required class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl font-mono text-xs font-bold">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <button type="button" id="btnDevret" onclick="setModalAction('devret')" class="p-3 rounded-xl border-2 border-indigo-600 bg-indigo-50/50 text-indigo-950 font-bold text-left cursor-pointer">
+            <div class="text-xs font-black uppercase">🤝 Ekipmanları Devret</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Başka personele aktar</div>
+          </button>
+          <button type="button" id="btnTeslim" onclick="setModalAction('teslim')" class="p-3 rounded-xl border-2 border-slate-200 bg-white text-slate-600 text-left cursor-pointer">
+            <div class="text-xs font-black uppercase">🏢 Ankara Depo Teslim</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Depoya iade et</div>
+          </button>
+        </div>
+        <div id="secDevret" class="space-y-3 p-3 bg-indigo-50/40 rounded-xl border border-indigo-200">
+          <div class="relative">
+            <label class="block text-xs font-bold text-indigo-950 mb-1">Devredilecek Personel:</label>
+            <select id="modalDevredilenPersonel" class="w-full px-3 py-2 bg-white border border-indigo-300 rounded-xl font-bold text-xs">
+              <!-- Dynamically populated -->
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-indigo-950 mb-1">Yeni Görev Yeri:</label>
+            <select id="modalDevredilenYer" onchange="onModalDevredilenYerChange(this.value)" class="w-full px-3 py-2 bg-white border border-indigo-300 rounded-xl font-bold text-xs cursor-pointer">
+              <option value="MİLAS">MİLAS</option>
+              <option value="KARAİN">KARAİN</option>
+              <option value="ÇANAKKALE">ÇANAKKALE</option>
+              <option value="BURSA">BURSA</option>
+              <option value="ANKARA">ANKARA</option>
+              <option value="İZMİR">İZMİR</option>
+              <option value="MUĞLA">MUĞLA</option>
+              <option value="ANTALYA">ANTALYA</option>
+              <option value="DİĞER">✏️ DİĞER (Manuel Yazınız)</option>
+            </select>
+            <input 
+              type="text" 
+              id="modalDevredilenYerCustom" 
+              placeholder="Örn: ADANA, DALAMAN, SİNOP..." 
+              class="hidden mt-2 w-full px-3 py-1.5 bg-amber-50 border-2 border-amber-400 rounded-xl font-bold text-slate-900 text-xs uppercase focus:outline-none focus:border-amber-600"
+            >
+          </div>
+        </div>
+        <div id="secTeslim" class="hidden p-3 bg-blue-50/40 rounded-xl border border-blue-200">
+          <label class="block text-xs font-bold text-blue-950 mb-1">Teslim Alan Depo Görevlisi:</label>
+          <input type="text" id="modalTeslimAlan" value="Ankara Depo Sorumlusu" class="w-full px-3 py-2 bg-white border border-blue-300 rounded-xl font-bold text-xs">
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Not:</label>
+          <input type="text" id="modalNotes" placeholder="Teslim notu..." class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs">
+        </div>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+          <button onclick="closeFinishModal()" class="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">Vazgeç</button>
+          <button onclick="submitFinishModal()" class="px-5 py-2 bg-amber-600 text-white rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer shadow-md">Kaydet ve Tamamla</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: GÖREVDEYKEN PARÇA / EKİPMAN DEĞİŞTİR -->
+  <div id="swapItemModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 overflow-hidden animate-in fade-in duration-150">
+      <div class="px-5 py-4 bg-indigo-900 text-white flex items-center justify-between">
+        <h3 class="text-sm font-black uppercase tracking-wider flex items-center gap-2">
+          <span>⚡ Görevdeyken Parça / Ekipman Değiştir</span>
+        </h3>
+        <button onclick="closeSwapItemModal()" class="text-white/80 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div class="p-3.5 bg-indigo-50 rounded-2xl border border-indigo-200 text-xs space-y-1">
+          <div class="text-[10px] font-black uppercase text-indigo-900 tracking-wider">Personel ve Mevcut Görev Bilgisi:</div>
+          <div class="flex items-center justify-between">
+            <span id="swapPersonelName" class="text-sm font-black text-slate-900">-</span>
+            <span id="swapGorevYeriBadge" class="px-2.5 py-0.5 bg-emerald-100 text-emerald-950 font-black rounded-lg border border-emerald-300 text-[11px]">📍 -</span>
+          </div>
+          <div class="pt-2 mt-1 border-t border-indigo-100 grid grid-cols-3 gap-1.5 text-[10px] text-slate-600">
+            <div class="p-1 bg-white rounded border border-slate-200">🦺 LV: <strong id="swapCurrentLv" class="font-mono text-amber-900">-</strong></div>
+            <div class="p-1 bg-white rounded border border-slate-200">💨 SA: <strong id="swapCurrentSa" class="font-mono text-cyan-900">-</strong></div>
+            <div class="p-1 bg-white rounded border border-slate-200">🪖 HK: <strong id="swapCurrentHk" class="font-mono text-purple-900">-</strong></div>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-black uppercase text-slate-700 mb-1.5">Değiştirilecek Ekipmanı Seçiniz: *</label>
+          <select 
+            id="swapItemTypeSelect" 
+            onchange="onSwapItemTypeChange(this.value)" 
+            class="w-full px-3.5 py-2.5 bg-white border-2 border-indigo-500 rounded-xl font-black text-xs text-slate-900 cursor-pointer shadow-2xs"
+          >
+            <option value="can_yelegi">🦺 Can Yeleği (Life Vest - P/N: S-7200-511)</option>
+            <option value="spare_air">💨 Spare Air (Yedek Hava Tüpü - P/N: 175-001-CE)</option>
+            <option value="helmet_kit">🪖 Helmet Kit / David Clark Kulaklık</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-black uppercase text-slate-700 mb-1.5">
+            Depoda Müsait Yeni Seri Numarası: *
+          </label>
+          <select 
+            id="swapNewSnSelect" 
+            class="w-full px-3.5 py-2.5 bg-emerald-50 border-2 border-emerald-600 rounded-xl font-mono font-black text-xs text-emerald-950 cursor-pointer shadow-2xs"
+          >
+            <!-- Dynamically populated with available depot items -->
+          </select>
+          <p class="text-[10px] text-slate-500 mt-1">
+            * Seçilen bu yeni seri numarası personele zimmetlenecek (Yeşil dolgu), eski parça ise otomatik olarak depoya iade edilecek (Beyaz dolgu).
+          </p>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Değişim Nedeni / Açıklama (Opsiyonel):</label>
+          <input 
+            type="text" 
+            id="swapNotes" 
+            placeholder="Örn: Arıza/Dolum değişimi, Sezonluk muayene..." 
+            class="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium"
+          >
+        </div>
+
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+          <button onclick="closeSwapItemModal()" class="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold cursor-pointer">Vazgeç</button>
+          <button onclick="submitSwapItemModal()" class="px-5 py-2.5 bg-indigo-800 hover:bg-indigo-900 text-white rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer shadow-md flex items-center gap-1.5">
+            <i class="fa-solid fa-bolt"></i>
+            <span>Parçayı Değiştir ve Depoyu Güncelle</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PRINT TUTANAK -->
+  <div id="printableTutanak" class="hidden font-sans p-8 bg-white text-slate-900">
+    <div class="text-center pb-4 border-b-2 border-slate-900">
+      <h2 class="text-base font-black uppercase">T.C. TARIM VE ORMAN BAKANLIĞI</h2>
+      <h3 class="text-sm font-bold uppercase">ORMAN GENEL MÜDÜRLÜĞÜ • HAVACILIK DAİRESİ BAŞKANLIĞI</h3>
+      <h4 class="text-xs font-black uppercase mt-2 bg-slate-900 text-white py-1">AT-802 YAŞAM DESTEK EKİPMANLARI ZİMMET VE TESLİM TUTANAĞI</h4>
+    </div>
+    <div class="grid grid-cols-2 gap-4 my-6 text-xs">
+      <div class="border border-slate-400 p-3 rounded">
+        <div>Zimmet Edilen: <strong id="prtPersonel">-</strong></div>
+        <div>Görev Yeri: <strong id="prtGorevYeri">-</strong></div>
+        <div>Başlangıç: <strong id="prtBaslangic">-</strong></div>
+        <div>Bitiş: <strong id="prtBitis">-</strong></div>
+      </div>
+      <div class="border border-slate-400 p-3 rounded">
+        <div>Durum: <strong id="prtDurum">-</strong></div>
+        <div>Devredilen: <strong id="prtDevredilen">-</strong></div>
+        <div>Teslim Alan: <strong id="prtTeslimAlan">-</strong></div>
+      </div>
+    </div>
+    <table class="w-full text-xs border border-slate-400 border-collapse mb-8">
+      <thead>
+        <tr class="bg-slate-200">
+          <th class="border border-slate-400 p-2">NO</th>
+          <th class="border border-slate-400 p-2 text-left">EKİPMAN</th>
+          <th class="border border-slate-400 p-2 text-center">SERİ NO</th>
+          <th class="border border-slate-400 p-2 text-center">DURUMU</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="border border-slate-400 p-2 text-center">1</td>
+          <td class="border border-slate-400 p-2 font-bold">Life Vest (Can Yeleği)</td>
+          <td id="prtLifeVest" class="border border-slate-400 p-2 text-center font-mono font-bold">-</td>
+          <td class="border border-slate-400 p-2 text-center">FAAL / SAĞLAM</td>
+        </tr>
+        <tr>
+          <td class="border border-slate-400 p-2 text-center">2</td>
+          <td class="border border-slate-400 p-2 font-bold">Spare Air (Yedek Hava Tüpü)</td>
+          <td id="prtSpareAir" class="border border-slate-400 p-2 text-center font-mono font-bold">-</td>
+          <td class="border border-slate-400 p-2 text-center">FAAL / SAĞLAM</td>
+        </tr>
+        <tr>
+          <td class="border border-slate-400 p-2 text-center">3</td>
+          <td class="border border-slate-400 p-2 font-bold">Helmet Kit (Kask ve Kulaklık)</td>
+          <td id="prtHelmetKit" class="border border-slate-400 p-2 text-center font-mono font-bold">-</td>
+          <td class="border border-slate-400 p-2 text-center">FAAL / SAĞLAM</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="grid grid-cols-2 gap-12 text-center text-xs mt-16">
+      <div>TESLİM EDEN: <strong id="prtSign1">-</strong></div>
+      <div>TESLİM ALAN: <strong id="prtSign2">-</strong></div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.location.protocol === 'file:' ? 'https://ais-dev-ffzy7jnq4pnpxljs4lte4p-216611645803.europe-west2.run.app' : '';
+
+    // -------------------------------------------------------------
+    // AT-802 DEFAULT SEED DATA (INITIAL LOAD - NEVER 0)
+    // -------------------------------------------------------------
+    const DEFAULT_CAN_YELEGI = [{"sNo": 1, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "03-22-0705", "disNo": "802-009", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 2, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "04-22-0942", "disNo": "802-008", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 3, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "09-23-2317", "disNo": "802-007", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 4, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "04-22-0948", "disNo": "802-006", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 5, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "04-22-0949", "disNo": "802-005", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 6, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "09-23-2316", "disNo": "802-004", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 7, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "04-22-0946", "disNo": "802-003", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 8, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "09-23-2310", "disNo": "802-002", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 9, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "09-23-2315", "disNo": "802-010", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 10, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "04-22-0950", "disNo": "802-001", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 11, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "07-24-3872", "disNo": "802-011", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 12, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "07-24-3873", "disNo": "802-012", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 13, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "07-24-3870", "disNo": "802-013", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 14, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-616", "seriNo": "08-25-5369", "disNo": "-", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 15, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-616", "seriNo": "08-25-5367", "disNo": "-", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 16, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "09-23-2312", "disNo": "802-014", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 17, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "09-23-2314", "disNo": "802-015", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 18, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "07-24-3871", "disNo": "802-016", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 19, "malzemeAdi": "LIFE WEST - CAN YELEĞİ", "parcaNo": "S-7200-511", "seriNo": "07-24-3874", "disNo": "802-017", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}];
+    const DEFAULT_SPARE_AIR = [{"sNo": 1, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "278939", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 2, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "278949", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 3, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "278957", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 4, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "278963", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 5, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "278967", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 6, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "283777", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 7, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "284143", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 8, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "284166", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 9, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "284313", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 10, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "287893", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 11, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "288286", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 12, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "288463", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 13, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "288485", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 14, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "288491", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 15, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "292501", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 16, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "297101", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 17, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "297411", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 18, "malzemeAdi": "SPARE AIR (HEED 3)", "parcaNo": "175-001-CE", "seriNo": "297424", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEVAM EDİYOR", "durum": "DEPODA", "color": "#ffffff"}];
+    const DEFAULT_HELMET_KIT = [{"sNo": 1, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-1", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 2, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-2", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 3, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-3", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 4, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-4", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 5, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-5", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 6, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-6", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 7, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-7", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 8, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-8", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 9, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-9", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 10, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-10", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 11, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-11", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 12, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-12", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 13, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-13", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 14, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-14", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 15, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-15", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 16, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-16", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 17, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-17", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 18, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-18", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 19, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-19", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 20, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-20", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}, {"sNo": 21, "malzemeAdi1": "HELMET KIT", "parcaNo1": "18852G-01", "seriNo1": "-", "malzemeAdi2": "DAVID CLARK", "parcaNo2": "H-10-13X", "seriNo2": "H-10-13X-21", "notlar": "-", "aciklamalar": "DEPODA", "tarih": "DEPODA", "durum": "DEPODA", "color": "#ffffff"}];
+    const DEFAULT_PERSONNEL = [{"id": "p_1", "adSoyad": "OKAN AKÇA", "unvan": "Teknisyen"}, {"id": "p_2", "adSoyad": "KEMAL CAN", "unvan": "Teknisyen"}, {"id": "p_3", "adSoyad": "DOĞAN ÖZTÜRK", "unvan": "Teknisyen"}, {"id": "p_4", "adSoyad": "SERDAR TOY", "unvan": "Teknisyen"}, {"id": "p_5", "adSoyad": "TAŞKIN ÇALIŞIR", "unvan": "Teknisyen"}, {"id": "p_6", "adSoyad": "FATİH YAŞBAY", "unvan": "Teknisyen"}, {"id": "p_7", "adSoyad": "ÖZGÜR UYAR", "unvan": "Teknisyen"}, {"id": "p_8", "adSoyad": "UĞUR GÜRCAN", "unvan": "Teknisyen"}, {"id": "p_9", "adSoyad": "URAL UÇURUM", "unvan": "Teknisyen"}, {"id": "p_10", "adSoyad": "YUNUS EROL", "unvan": "Teknisyen"}, {"id": "p_11", "adSoyad": "SELÇUK İBİŞ", "unvan": "Teknisyen"}, {"id": "p_12", "adSoyad": "ALİ TOPALAN", "unvan": "Teknisyen"}, {"id": "p_13", "adSoyad": "FATİH PARLAK", "unvan": "Teknisyen"}, {"id": "p_14", "adSoyad": "TALAT TÖNGÜŞ", "unvan": "Teknisyen"}, {"id": "p_15", "adSoyad": "AHMET BİLGEN", "unvan": "Teknisyen"}, {"id": "p_16", "adSoyad": "BARIŞ BUĞRA KARACA", "unvan": "Teknisyen"}, {"id": "p_17", "adSoyad": "BARIŞ ÇELİKER", "unvan": "Teknisyen"}, {"id": "p_18", "adSoyad": "FERDİ GÖL", "unvan": "Teknisyen"}, {"id": "p_19", "adSoyad": "KEMAL ÇAKMAK", "unvan": "Teknisyen"}, {"id": "p_20", "adSoyad": "BURHAN GÜLER", "unvan": "Pilot"}, {"id": "p_21", "adSoyad": "ALPER GİDER", "unvan": "Pilot"}, {"id": "p_22", "adSoyad": "OSMAN AKTAŞ", "unvan": "Pilot"}, {"id": "p_23", "adSoyad": "KAĞAN BASKAK", "unvan": "Pilot"}, {"id": "p_24", "adSoyad": "ATAKAN TANSÜYER", "unvan": "Pilot"}, {"id": "p_25", "adSoyad": "MUZAFFER BARIŞ COŞAR", "unvan": "Pilot"}, {"id": "p_26", "adSoyad": "ŞENER TURAN", "unvan": "Pilot"}, {"id": "p_27", "adSoyad": "SERDAR KADEMLİOĞLU", "unvan": "Pilot"}, {"id": "p_28", "adSoyad": "AYDINER ÇILDIR", "unvan": "Pilot"}, {"id": "p_29", "adSoyad": "MEHMET AKİF BOZKURT", "unvan": "Pilot"}, {"id": "p_30", "adSoyad": "OSMAN UZUNER", "unvan": "Pilot"}, {"id": "p_31", "adSoyad": "RECEP BEKEN", "unvan": "Pilot"}, {"id": "p_32", "adSoyad": "OĞUZHAN ŞENSÖZ", "unvan": "Pilot"}];
+
+    let canYelegiList = JSON.parse(JSON.stringify(DEFAULT_CAN_YELEGI));
+    let spareAirList = JSON.parse(JSON.stringify(DEFAULT_SPARE_AIR));
+    let helmetKitList = JSON.parse(JSON.stringify(DEFAULT_HELMET_KIT));
+    let personnelItems = JSON.parse(JSON.stringify(DEFAULT_PERSONNEL));
+    let personnelList = personnelItems.map(p => p.adSoyad);
+    let zimmetList = [];
+    let activeRoleFilter = 'ALL';
+    let currentModalAction = 'devret';
+    let currentActiveRecord = null;
+
+    // STEP WIZARD STATE
+    let wizardCurrentStep = 1;
+    let wizardSelectedPerson = '';
+    let wizardSelectedPersonRole = 'Teknisyen';
+    let wizardSelectedLifeVest = '';
+    let wizardSelectedSpareAir = '';
+    let wizardSelectedHelmetKit = '';
+
+    function getRowColor(item) {
+      const assigned = (item.aciklamalar || '').trim();
+      const isEmpty = !assigned || assigned === '-' || assigned.toUpperCase() === 'DEPODA' || assigned.toUpperCase() === 'BOŞTA';
+
+      if (item.durum === 'KAYIT SİLME' || (item.aciklamalar && item.aciklamalar.includes('KAYIT SİLME'))) {
+        return 'bg-[#ff0000] text-white font-bold';
+      }
+      if (item.durum === 'BAKIMA GİDECEK' || (item.aciklamalar && (item.aciklamalar.includes('DOLUM') || item.aciklamalar.includes('ARIZALI') || item.aciklamalar.includes('BAKIMA')))) {
+        return 'bg-[#00b0f0] text-slate-900 font-bold';
+      }
+      if (item.durum === 'ONARIMDA') {
+        return 'bg-[#ffff00] text-slate-900 font-bold';
+      }
+      if (isEmpty) {
+        return 'bg-white hover:bg-slate-50 text-slate-800';
+      }
+      if (item.color === '#92d050' || item.durum === 'GÖREV BÖLGESİNDE' || (!isEmpty)) {
+        return 'bg-[#92d050]/80 text-slate-900 font-bold hover:bg-[#92d050]';
+      }
+      return 'bg-white hover:bg-slate-50 text-slate-800';
+    }
+
+    function switchPublicTab(t) {
+      const tabIds = ['personnel', 'zimmetler', 'can_yelegi', 'spare_air', 'helmet_kit'];
+      tabIds.forEach(id => {
+        const sec = document.getElementById('section_' + id);
+        const tab = document.getElementById('tab_' + id);
+        if (id === t) {
+          if (sec) sec.classList.remove('hidden');
+          if (tab) tab.className = "px-3 sm:px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-1.5 bg-[#0b3d1d] text-white shadow-xs cursor-pointer";
+        } else {
+          if (sec) sec.classList.add('hidden');
+          if (tab) tab.className = "px-3 sm:px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition flex items-center gap-1.5 bg-white text-slate-700 hover:bg-slate-100 cursor-pointer shadow-2xs";
+        }
+      });
+      if (t === 'personnel') {
+        renderPersonnelTable();
+      } else if (t === 'zimmetler') {
+        renderZimmetler();
+      } else {
+        renderStocks();
+      }
+    }
+
+    function renderPersonnelTable() {
+      const query = (document.getElementById('htmlSearchInput')?.value || '').trim().toLowerCase();
+      const filtered = personnelItems.filter(p => {
+        return !query || p.adSoyad.toLowerCase().includes(query) || (p.unvan || '').toLowerCase().includes(query);
+      });
+
+      const tbody = document.getElementById('tbody_personnel');
+      if (!tbody) return;
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="p-8 text-center text-slate-400">Aranan kriterlere uygun personel bulunamadı.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filtered.map((p, i) => {
+        const rawZimmet = zimmetList.find(z => z.personelAdi.toUpperCase() === p.adSoyad.toUpperCase() && z.durum === 'GÖREVDE');
+        const hasActiveItems = rawZimmet && (
+          (rawZimmet.lifeVestSn && rawZimmet.lifeVestSn !== '-') ||
+          (rawZimmet.spareAirSn && rawZimmet.spareAirSn !== '-') ||
+          (rawZimmet.helmetKitSn && rawZimmet.helmetKitSn !== '-')
+        );
+        const activeZimmet = hasActiveItems ? rawZimmet : null;
+        
+        return `
+          <tr class="hover:bg-slate-50 border-b border-slate-200 text-center transition">
+            <td class="py-3 px-2 font-bold text-slate-500 border-r border-slate-200 font-mono">${i + 1}</td>
+            <td class="py-3 px-4 font-black text-slate-900 border-r border-slate-200 text-left font-sans">
+              <span class="text-sm text-slate-950 font-black">${p.adSoyad}</span>
+            </td>
+            <td class="py-3 px-3 border-r border-slate-200 text-center font-sans font-bold">
+              <span class="px-2.5 py-1 rounded-full text-xs ${
+                p.unvan === 'Teknisyen' ? 'bg-amber-100 text-amber-950 border border-amber-300' :
+                p.unvan === 'Pilot' ? 'bg-blue-100 text-blue-950 border border-blue-300' : 'bg-slate-100 text-slate-800 border border-slate-300'
+              }">
+                ${p.unvan === 'Teknisyen' ? '🛠️ Teknisyen' : (p.unvan === 'Pilot' ? '✈️ Pilot' : '👤 ' + (p.unvan || 'Personel'))}
+              </span>
+            </td>
+            <td class="py-3 px-3 border-r border-slate-200 font-sans text-center">
+              ${activeZimmet ? `
+                <span class="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-950 font-black border border-emerald-300 text-xs">
+                  📍 ${activeZimmet.gorevYeri || 'MİLAS'}
+                </span>
+              ` : `
+                <span class="text-slate-300 select-none">-</span>
+              `}
+            </td>
+            <td class="py-3 px-4 border-r border-slate-200 text-left font-sans">
+              ${activeZimmet ? `
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="inline-flex items-center gap-1 text-[11px] bg-amber-100 text-amber-950 px-2.5 py-0.5 rounded-full border border-amber-300 font-mono font-black">
+                    <span>🦺 LV: ${activeZimmet.lifeVestSn}</span>
+                  </span>
+                  <span class="inline-flex items-center gap-1 text-[11px] bg-cyan-100 text-cyan-950 px-2.5 py-0.5 rounded-full border border-cyan-300 font-mono font-black">
+                    <span>💨 SA: ${activeZimmet.spareAirSn}</span>
+                  </span>
+                  <span class="inline-flex items-center gap-1 text-[11px] bg-purple-100 text-purple-950 px-2.5 py-0.5 rounded-full border border-purple-300 font-mono font-black">
+                    <span>🪖 HK: ${activeZimmet.helmetKitSn}</span>
+                  </span>
+                </div>
+              ` : `
+                <span class="text-slate-400 font-bold text-xs italic">aktif zimmet yok</span>
+              `}
+            </td>
+            <td class="py-3 px-3 text-center">
+              <div class="flex items-center justify-center gap-1.5 flex-wrap">
+                ${activeZimmet ? `
+                  <button 
+                    type="button" 
+                    onclick="openFinishModal('${activeZimmet.id}')" 
+                    class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-xs transition cursor-pointer flex items-center gap-1.5"
+                    title="Zimmeti devret veya depoya teslim et"
+                  >
+                    <i class="fa-solid fa-arrow-right-arrow-left text-[11px]"></i>
+                    <span>Devret</span>
+                  </button>
+                  <button 
+                    type="button" 
+                    onclick="openSwapItemModal('${activeZimmet.id}')" 
+                    class="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-800 active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-xs transition cursor-pointer flex items-center gap-1.5"
+                    title="Görevdeyken parça veya ekipman değiştir"
+                  >
+                    <i class="fa-solid fa-bolt text-[11px]"></i>
+                    <span>Değiştir</span>
+                  </button>
+                ` : `
+                  <button 
+                    type="button" 
+                    onclick="openStepByStepModal('${p.adSoyad}')" 
+                    class="px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-xs transition cursor-pointer flex items-center gap-1.5 mx-auto"
+                    title="Bu personele yeni zimmet ver"
+                  >
+                    <i class="fa-solid fa-plus text-[11px]"></i>
+                    <span>Zimmet Al</span>
+                  </button>
+                `}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderStocks() {
+      const query = (document.getElementById('htmlSearchInput')?.value || '').trim().toLowerCase();
+
+      // 1. Can Yeleği
+      const filteredCY = canYelegiList.filter(c => !query || 
+        (c.aciklamalar || '').toLowerCase().includes(query) || 
+        (c.notlar || '').toLowerCase().includes(query) || 
+        (c.seriNo || '').toLowerCase().includes(query) || 
+        (c.disNo || '').toLowerCase().includes(query) ||
+        (c.durum || '').toLowerCase().includes(query)
+      );
+      document.getElementById('count_cy').innerText = filteredCY.length;
+      document.getElementById('tbody_can_yelegi').innerHTML = filteredCY.map((c, i) => {
+        const isDepot = c.durum === 'DEPODA' || c.durum === 'BOŞTA' || c.aciklamalar === 'DEPODA' || c.aciklamalar === 'BOŞTA';
+        const origIdx = canYelegiList.indexOf(c);
+        return `
+          <tr class="border-b border-slate-300 ${getRowColor(c)} text-center">
+            <td class="py-2 px-2 border-r border-slate-300 font-mono">${c.sNo || i + 1}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans">${c.malzemeAdi}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono">${c.parcaNo}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono font-black">${c.seriNo}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono font-black">${c.disNo || '-'}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans text-slate-700 font-medium">${c.notlar || c.aciklama || '-'}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans font-black text-slate-900">${c.aciklamalar || '-'}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono">${c.tarih || (isDepot ? '-' : 'DEVAM EDİYOR')}</td>
+            <td class="py-2 px-2 bg-slate-50/70 border-r border-slate-300">
+              <div class="flex items-center justify-center gap-1">
+                ${!isDepot ? `
+                  <button type="button" onclick="quickDepotStockItem('can_yelegi', ${origIdx})" class="px-2.5 py-1 bg-slate-800 hover:bg-black active:scale-95 text-white rounded-lg text-[10px] font-black shadow-xs cursor-pointer flex items-center gap-1" title="Depoya Çek (Zimmetten Düşür)">
+                    <i class="fa-solid fa-warehouse text-[10px] text-amber-300"></i>
+                    <span>Depoya Çek</span>
+                  </button>
+                ` : `
+                  <span class="text-[10px] text-emerald-800 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-md border border-emerald-300">
+                    Depoda (Boşta)
+                  </span>
+                `}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      // 2. Spare Air
+      const filteredSA = spareAirList.filter(s => !query || 
+        (s.aciklamalar || '').toLowerCase().includes(query) || 
+        (s.notlar || '').toLowerCase().includes(query) || 
+        (s.seriNo || '').toLowerCase().includes(query) ||
+        (s.durum || '').toLowerCase().includes(query)
+      );
+      document.getElementById('count_sa').innerText = filteredSA.length;
+      document.getElementById('tbody_spare_air').innerHTML = filteredSA.map((s, i) => {
+        const isDepot = s.durum === 'DEPODA' || s.durum === 'BOŞTA' || s.aciklamalar === 'DEPODA' || s.aciklamalar === 'BOŞTA';
+        const origIdx = spareAirList.indexOf(s);
+        return `
+          <tr class="border-b border-slate-300 ${getRowColor(s)} text-center">
+            <td class="py-2 px-2 border-r border-slate-300 font-mono">${s.sNo || i + 1}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans">${s.malzemeAdi}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono">${s.parcaNo}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono font-black">${s.seriNo}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans text-slate-700 font-medium">${s.notlar || s.aciklama || '-'}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans font-black text-slate-900">${s.aciklamalar || '-'}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono">${s.tarih || (isDepot ? '-' : 'DEVAM EDİYOR')}</td>
+            <td class="py-2 px-2 bg-slate-50/70 border-r border-slate-300">
+              <div class="flex items-center justify-center gap-1">
+                ${!isDepot ? `
+                  <button type="button" onclick="quickDepotStockItem('spare_air', ${origIdx})" class="px-2.5 py-1 bg-slate-800 hover:bg-black active:scale-95 text-white rounded-lg text-[10px] font-black shadow-xs cursor-pointer flex items-center gap-1" title="Depoya Çek (Zimmetten Düşür)">
+                    <i class="fa-solid fa-warehouse text-[10px] text-amber-300"></i>
+                    <span>Depoya Çek</span>
+                  </button>
+                ` : `
+                  <span class="text-[10px] text-emerald-800 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-md border border-emerald-300">
+                    Depoda (Boşta)
+                  </span>
+                `}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      // 3. Helmet Kit
+      const filteredHK = helmetKitList.filter(h => !query || 
+        (h.aciklamalar || '').toLowerCase().includes(query) || 
+        (h.notlar || '').toLowerCase().includes(query) || 
+        (h.seriNo1 || '').toLowerCase().includes(query) || 
+        (h.seriNo2 || '').toLowerCase().includes(query) ||
+        (h.durum || '').toLowerCase().includes(query)
+      );
+      document.getElementById('count_hk').innerText = filteredHK.length;
+      document.getElementById('tbody_helmet_kit').innerHTML = filteredHK.map((h, i) => {
+        const isDepot = h.durum === 'DEPODA' || h.durum === 'BOŞTA' || h.aciklamalar === 'DEPODA' || h.aciklamalar === 'BOŞTA';
+        const origIdx = helmetKitList.indexOf(h);
+        return `
+          <tr class="border-b border-slate-300 ${getRowColor(h)} text-center">
+            <td class="py-2 px-2 border-r border-slate-300 font-mono">${h.sNo || i + 1}</td>
+            <td class="py-2 px-3 border-r border-slate-300 text-left font-sans">${h.malzemeAdi1}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono">${h.parcaNo1}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono font-bold">${h.seriNo1 || '-'}</td>
+            <td class="py-2 px-3 border-r border-slate-300 text-left font-sans">${h.malzemeAdi2}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono">${h.parcaNo2}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono font-black text-indigo-950 bg-indigo-50/60">${h.seriNo2 || '-'}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans text-slate-700 font-medium">${h.notlar || h.aciklama || '-'}</td>
+            <td class="py-2 px-4 border-r border-slate-300 text-left font-sans font-black text-slate-900">${h.aciklamalar || '-'}</td>
+            <td class="py-2 px-3 border-r border-slate-300 font-mono">${h.tarih || (isDepot ? '-' : 'DEVAM EDİYOR')}</td>
+            <td class="py-2 px-2 bg-slate-50/70 border-r border-slate-300">
+              <div class="flex items-center justify-center gap-1">
+                ${!isDepot ? `
+                  <button type="button" onclick="quickDepotStockItem('helmet_kit', ${origIdx})" class="px-2.5 py-1 bg-slate-800 hover:bg-black active:scale-95 text-white rounded-lg text-[10px] font-black shadow-xs cursor-pointer flex items-center gap-1" title="Depoya Çek (Zimmetten Düşür)">
+                    <i class="fa-solid fa-warehouse text-[10px] text-amber-300"></i>
+                    <span>Depoya Çek</span>
+                  </button>
+                ` : `
+                  <span class="text-[10px] text-emerald-800 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-md border border-emerald-300">
+                    Depoda (Boşta)
+                  </span>
+                `}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function quickDepotStockItem(type, index) {
+      const list = type === 'can_yelegi' ? canYelegiList : (type === 'spare_air' ? spareAirList : helmetKitList);
+      if (index < 0 || index >= list.length) return;
+      const item = list[index];
+      const sn = item.seriNo || item.seriNo2 || item.seriNo1;
+      const prev = item.aciklamalar || 'ilgili personel';
+
+      if (!confirm(`📦 ${sn} seri numaralı ürünü DEPOYA ÇEKMEK ve ${prev} personelinin zimmetinden düşürmek istiyor musunuz?\n\nNot: Eğer personelin üzerindeki tüm parçalar depoya dönerse zimmeti otomatik olarak kapatılacaktır.`)) {
+        return;
+      }
+
+      item.durum = 'DEPODA';
+      item.aciklamalar = 'DEPODA';
+      item.color = '#ffffff';
+      item.tarih = '-';
+
+      renderStocks();
+
+      try {
+        const res = await fetch(API_BASE + '/api/yasam-destek/stock-update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, items: list })
+        });
+        const json = await res.json();
+        if (json.status === 'success' && Array.isArray(json.records)) {
+          zimmetList = json.records;
+          renderPersonnelTable();
+          renderZimmetler();
+        }
+      } catch (err) {
+        console.warn('Quick depot error:', err);
+      }
+    }
+
+    function renderZimmetler() {
+      const query = (document.getElementById('htmlSearchInput')?.value || '').trim().toLowerCase();
+      const activeZM = zimmetList.filter(r => {
+        const status = (r.durum || '').toUpperCase().trim();
+        const isGorevde = status === 'GÖREVDE' || status === 'GÖREV BÖLGESİNDE';
+        const hasItems = (r.lifeVestSn && r.lifeVestSn !== '-') || (r.spareAirSn && r.spareAirSn !== '-') || (r.helmetKitSn && r.helmetKitSn !== '-');
+        return isGorevde && hasItems;
+      });
+      const filteredZM = activeZM.filter(r => !query || 
+        (r.personelAdi || '').toLowerCase().includes(query) ||
+        (r.gorevYeri || '').toLowerCase().includes(query) ||
+        (r.lifeVestSn || '').toLowerCase().includes(query) ||
+        (r.spareAirSn || '').toLowerCase().includes(query) ||
+        (r.helmetKitSn || '').toLowerCase().includes(query) ||
+        (r.baslangicTarihi || '').toLowerCase().includes(query) ||
+        (r.bitisTarihi || '').toLowerCase().includes(query) ||
+        (r.durum || '').toLowerCase().includes(query)
+      );
+
+      document.getElementById('count_zm').innerText = filteredZM.length;
+      const tbody = document.getElementById('tbody_zimmetler');
+      if (!tbody) return;
+
+      if (filteredZM.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="11" class="p-8 text-center text-slate-400">Henüz aktif zimmet kaydı bulunmamaktadır. Sağ üstteki "+ YENİ ZİMMET AL" butonu ile görev başlatabilirsiniz.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filteredZM.map((r, i) => `
+        <tr class="hover:bg-slate-50 border-b border-slate-200 text-center">
+          <td class="py-2 px-2 font-bold text-slate-500 border-r border-slate-200">${i + 1}</td>
+          <td class="py-2 px-4 font-black text-slate-900 border-r border-slate-200 text-left font-sans">${r.personelAdi}</td>
+          <td class="py-2 px-3 border-r border-slate-200 font-sans"><span class="px-2 py-0.5 rounded bg-slate-100 font-bold border border-slate-300 text-[10px]">📍 ${r.gorevYeri}</span></td>
+          <td class="py-2 px-3 border-r border-slate-200 text-slate-600">${r.baslangicTarihi}</td>
+          <td class="py-2 px-3 border-r border-slate-200 text-slate-600 font-bold text-emerald-800">${r.bitisTarihi || 'DEVAM EDİYOR'}</td>
+          <td class="py-2 px-3 border-r border-slate-200 font-bold text-amber-900 bg-amber-50/50">${r.lifeVestSn}</td>
+          <td class="py-2 px-3 border-r border-slate-200 font-bold text-cyan-900 bg-cyan-50/50">${r.spareAirSn}</td>
+          <td class="py-2 px-3 border-r border-slate-200 font-bold text-purple-900 bg-purple-50/50">${r.helmetKitSn}</td>
+          <td class="py-2 px-3 border-r border-slate-200 font-sans">
+            <span class="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+              r.durum === 'GÖREVDE' ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' :
+              r.durum === 'DEVREDİLDİ' ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-blue-100 text-blue-900 border border-blue-300'
+            }">${r.durum}</span>
+          </td>
+          <td class="py-2 px-4 border-r border-slate-200 text-left font-sans text-xs text-slate-700 font-medium">${r.notlar || '-'}</td>
+          <td class="py-2 px-2 bg-slate-50/50">
+            <div class="flex items-center justify-center gap-1.5">
+              ${r.durum === 'GÖREVDE' ? `
+                <button onclick="openFinishModal('${r.id}')" class="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-bold cursor-pointer">Devret</button>
+              ` : ''}
+              <button onclick="printTutanak('${r.id}')" class="p-1 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded text-xs cursor-pointer" title="Yazdır"><i class="fa-solid fa-print"></i></button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    // -------------------------------------------------------------
+    // STEP-BY-STEP (ADIM ADIM) MODAL LOGIC (OTOMATİK DOLDURMA)
+    // -------------------------------------------------------------
+    function openStepByStepModal(preSelectedPerson = '') {
+      wizardCurrentStep = 1;
+      
+      // Populate Personnel dropdown
+      populateWizardPersonnelDropdown();
+
+      if (preSelectedPerson) {
+        onWizardPersonnelSelect(preSelectedPerson);
+      } else if (personnelItems.length > 0) {
+        onWizardPersonnelSelect(personnelItems[0].adSoyad);
+      }
+
+      // Populate stock dropdowns with automatic selection of first available depot stock
+      populateWizardStockDropdowns();
+
+      // Today date
+      const today = new Date().toLocaleDateString('tr-TR');
+      document.getElementById('wizardBaslangicTarihi').value = today;
+
+      goToWizardStep(1);
+      document.getElementById('stepWizardModal').classList.remove('hidden');
+    }
+
+    function closeStepByStepModal() {
+      document.getElementById('stepWizardModal').classList.add('hidden');
+    }
+
+    function populateWizardPersonnelDropdown() {
+      const sel = document.getElementById('wizardPersonelSelect');
+      if (!sel) return;
+
+      sel.innerHTML = personnelItems.map(p => {
+        const hasZimmet = zimmetList.some(z => z.personelAdi.toUpperCase() === p.adSoyad.toUpperCase() && z.durum === 'GÖREVDE');
+        const roleIcon = p.unvan === 'Pilot' ? '✈️' : '🛠️';
+        return `<option value="${p.adSoyad}">${roleIcon} ${p.adSoyad} (${p.unvan || 'Teknisyen'})${hasZimmet ? ' - [ZİMMETLİ]' : ' - [MÜSAİT]'}</option>`;
+      }).join('');
+    }
+
+    function onWizardPersonnelSelect(name) {
+      if (!name && personnelItems.length > 0) name = personnelItems[0].adSoyad;
+      const p = personnelItems.find(x => x.adSoyad.toUpperCase() === (name || '').toUpperCase()) || { adSoyad: name, unvan: 'Teknisyen' };
+      
+      wizardSelectedPerson = p.adSoyad;
+      wizardSelectedPersonRole = p.unvan || 'Teknisyen';
+
+      const sel = document.getElementById('wizardPersonelSelect');
+      if (sel && sel.value !== p.adSoyad) {
+        sel.value = p.adSoyad;
+      }
+
+      document.getElementById('wizardSelectedPersonName').innerText = wizardSelectedPerson;
+      document.getElementById('wizardSelectedPersonRole').innerText = wizardSelectedPersonRole === 'Pilot' ? '✈️ Pilot' : '🛠️ Teknisyen';
+      document.getElementById('summaryPersonel').innerText = wizardSelectedPerson;
+
+      const activeZimmet = zimmetList.find(z => z.personelAdi.toUpperCase() === wizardSelectedPerson.toUpperCase() && z.durum === 'GÖREVDE');
+      const statusBox = document.getElementById('wizardPersonZimmetStatus');
+      if (statusBox) {
+        if (activeZimmet) {
+          statusBox.innerHTML = `
+            <div class="p-2.5 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 font-bold flex items-center justify-between">
+              <span>⚠️ Bu personelde halen aktif zimmet bulunmaktadır (${activeZimmet.gorevYeri || 'MİLAS'}).</span>
+            </div>
+          `;
+        } else {
+          statusBox.innerHTML = `
+            <div class="p-2 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 font-bold flex items-center gap-2">
+              <span>✅ Personelin üzerinde aktif zimmet bulunmamaktadır. Depodan tahsis yapılabilir.</span>
+            </div>
+          `;
+        }
+      }
+
+      populateWizardStockDropdowns();
+    }
+
+    function populateWizardStockDropdowns() {
+      // 1. Can Yeleği
+      const availableCY = canYelegiList.filter(c => {
+        const a = (c.aciklamalar || '').toUpperCase();
+        return c.durum !== 'KAYIT SİLME' && c.durum !== 'ONARIMDA' && (a === 'DEPODA' || a === 'BOŞTA' || a === '-' || !a);
+      });
+      const cySource = availableCY.length > 0 ? availableCY : canYelegiList;
+
+      const selLV = document.getElementById('wizardSelLifeVest');
+      if (selLV) {
+        selLV.innerHTML = cySource.map((c, idx) => 
+          `<option value="${c.seriNo}">${c.seriNo} (Dış No: ${c.disNo || '-'} - ${availableCY.length > 0 ? 'DEPODA/MÜSAİT' : 'STOK'})</option>`
+        ).join('');
+
+        if (cySource.length > 0) {
+          wizardSelectedLifeVest = cySource[0].seriNo;
+          selLV.value = wizardSelectedLifeVest;
+        }
+      }
+      document.getElementById('wizardDetailLifeVestSn').innerText = wizardSelectedLifeVest || '-';
+      document.getElementById('summaryLifeVest').innerText = wizardSelectedLifeVest || '-';
+
+      // 2. Spare Air
+      const availableSA = spareAirList.filter(s => {
+        const a = (s.aciklamalar || '').toUpperCase();
+        return s.durum !== 'KAYIT SİLME' && s.durum !== 'ONARIMDA' && (a === 'DEPODA' || a === 'BOŞTA' || a === '-' || !a);
+      });
+      const saSource = availableSA.length > 0 ? availableSA : spareAirList;
+
+      const selSA = document.getElementById('wizardSelSpareAir');
+      if (selSA) {
+        selSA.innerHTML = saSource.map((s, idx) => 
+          `<option value="${s.seriNo}">${s.seriNo} (P/N: 175-001-CE - ${availableSA.length > 0 ? 'DEPODA/MÜSAİT' : 'STOK'})</option>`
+        ).join('');
+
+        if (saSource.length > 0) {
+          wizardSelectedSpareAir = saSource[0].seriNo;
+          selSA.value = wizardSelectedSpareAir;
+        }
+      }
+      document.getElementById('wizardDetailSpareAirSn').innerText = wizardSelectedSpareAir || '-';
+      document.getElementById('summarySpareAir').innerText = wizardSelectedSpareAir || '-';
+
+      // 3. Helmet Kit
+      const availableHK = helmetKitList.filter(h => {
+        const a = (h.aciklamalar || '').toUpperCase();
+        return h.durum !== 'KAYIT SİLME' && h.durum !== 'ONARIMDA' && (a === 'DEPODA' || a === 'BOŞTA' || a === '-' || !a);
+      });
+      const hkSource = availableHK.length > 0 ? availableHK : helmetKitList;
+
+      const selHK = document.getElementById('wizardSelHelmetKit');
+      if (selHK) {
+        selHK.innerHTML = hkSource.map((h, idx) => {
+          const sn = h.seriNo2 || h.seriNo1 || `H-10-13X-${idx + 1}`;
+          return `<option value="${sn}">${sn} (David Clark H-10-13X - ${availableHK.length > 0 ? 'DEPODA/MÜSAİT' : 'STOK'})</option>`;
+        }).join('');
+
+        if (hkSource.length > 0) {
+          wizardSelectedHelmetKit = hkSource[0].seriNo2 || hkSource[0].seriNo1 || 'H-10-13X-1';
+          selHK.value = wizardSelectedHelmetKit;
+        }
+      }
+      document.getElementById('wizardDetailHelmetSn').innerText = wizardSelectedHelmetKit || '-';
+      document.getElementById('summaryHelmetKit').innerText = wizardSelectedHelmetKit || '-';
+    }
+
+    function onWizardLifeVestChange(val) {
+      wizardSelectedLifeVest = val;
+      document.getElementById('wizardDetailLifeVestSn').innerText = val;
+      document.getElementById('summaryLifeVest').innerText = val;
+    }
+
+    function onWizardSpareAirChange(val) {
+      wizardSelectedSpareAir = val;
+      document.getElementById('wizardDetailSpareAirSn').innerText = val;
+      document.getElementById('summarySpareAir').innerText = val;
+    }
+
+    function onWizardHelmetKitChange(val) {
+      wizardSelectedHelmetKit = val;
+      document.getElementById('wizardDetailHelmetSn').innerText = val;
+      document.getElementById('summaryHelmetKit').innerText = val;
+    }
+
+    function onWizardGorevYeriChange(val) {
+      const customInput = document.getElementById('wizardGorevYeriCustom');
+      if (val === 'DİĞER') {
+        if (customInput) customInput.classList.remove('hidden');
+      } else {
+        if (customInput) customInput.classList.add('hidden');
+      }
+      updateSummaryGorevYeri();
+    }
+
+    function updateSummaryGorevYeri() {
+      const selVal = document.getElementById('wizardGorevYeri')?.value || 'MİLAS';
+      const customVal = (document.getElementById('wizardGorevYeriCustom')?.value || '').trim();
+      const finalVal = (selVal === 'DİĞER' && customVal) ? customVal.toUpperCase() : (selVal === 'DİĞER' ? 'DİĞER' : selVal);
+      const sumEl = document.getElementById('summaryGorevYeri');
+      if (sumEl) sumEl.innerText = '📍 ' + finalVal;
+    }
+
+    function onModalDevredilenYerChange(val) {
+      const customInput = document.getElementById('modalDevredilenYerCustom');
+      if (val === 'DİĞER') {
+        if (customInput) customInput.classList.remove('hidden');
+      } else {
+        if (customInput) customInput.classList.add('hidden');
+      }
+    }
+
+    function goToWizardStep(step) {
+      if (step > 1 && !wizardSelectedPerson) {
+        alert('Lütfen 1. Adımda personel seçiniz.');
+        return;
+      }
+      if (step > 2 && !wizardSelectedLifeVest) {
+        alert('Lütfen 2. Adımda Can Yeleği seri numarasını seçiniz.');
+        return;
+      }
+      if (step > 3 && !wizardSelectedSpareAir) {
+        alert('Lütfen 3. Adımda Spare Air seri numarasını seçiniz.');
+        return;
+      }
+      if (step > 4 && !wizardSelectedHelmetKit) {
+        alert('Lütfen 4. Adımda Helmet Kit seri numarasını seçiniz.');
+        return;
+      }
+
+      wizardCurrentStep = step;
+
+      // Update sections visibility
+      for (let i = 1; i <= 5; i++) {
+        const sec = document.getElementById('stepSection' + i);
+        const tab = document.getElementById('stepTab' + i);
+        if (i === step) {
+          if (sec) sec.classList.remove('hidden');
+          if (tab) tab.className = 'text-emerald-700 underline font-black';
+        } else {
+          if (sec) sec.classList.add('hidden');
+          if (tab) tab.className = i < step ? 'text-emerald-900 font-bold' : 'text-slate-400';
+        }
+      }
+
+      // Progress bar
+      document.getElementById('wizardBar').style.width = `${step * 20}%`;
+
+      // Buttons visibility
+      const prevBtn = document.getElementById('wizardPrevBtn');
+      const nextBtn = document.getElementById('wizardNextBtn');
+      const submitBtn = document.getElementById('wizardSubmitBtn');
+      const cancelBtn = document.getElementById('wizardCancelBtn');
+
+      if (step === 1) {
+        prevBtn.classList.add('hidden');
+        cancelBtn.classList.remove('hidden');
+        nextBtn.classList.remove('hidden');
+        nextBtn.innerHTML = '<span>İleri (Can Yeleği)</span> <i class="fa-solid fa-arrow-right"></i>';
+        submitBtn.classList.add('hidden');
+      } else if (step === 2) {
+        prevBtn.classList.remove('hidden');
+        cancelBtn.classList.add('hidden');
+        nextBtn.classList.remove('hidden');
+        nextBtn.innerHTML = '<span>İleri (Spare Air)</span> <i class="fa-solid fa-arrow-right"></i>';
+        submitBtn.classList.add('hidden');
+      } else if (step === 3) {
+        prevBtn.classList.remove('hidden');
+        cancelBtn.classList.add('hidden');
+        nextBtn.classList.remove('hidden');
+        nextBtn.innerHTML = '<span>İleri (Helmet Kit)</span> <i class="fa-solid fa-arrow-right"></i>';
+        submitBtn.classList.add('hidden');
+      } else if (step === 4) {
+        prevBtn.classList.remove('hidden');
+        cancelBtn.classList.add('hidden');
+        nextBtn.classList.remove('hidden');
+        nextBtn.innerHTML = '<span>İleri (Görev Yeri ve Onay)</span> <i class="fa-solid fa-arrow-right"></i>';
+        submitBtn.classList.add('hidden');
+      } else if (step === 5) {
+        prevBtn.classList.remove('hidden');
+        cancelBtn.classList.add('hidden');
+        nextBtn.classList.add('hidden');
+        submitBtn.classList.remove('hidden');
+
+        // Refresh Summary Card
+        document.getElementById('summaryPersonel').innerText = wizardSelectedPerson;
+        updateSummaryGorevYeri();
+        document.getElementById('summaryLifeVest').innerText = wizardSelectedLifeVest;
+        document.getElementById('summarySpareAir').innerText = wizardSelectedSpareAir;
+        document.getElementById('summaryHelmetKit').innerText = wizardSelectedHelmetKit;
+      }
+    }
+
+    function wizardNextStep() {
+      goToWizardStep(wizardCurrentStep + 1);
+    }
+
+    function wizardPrevStep() {
+      goToWizardStep(wizardCurrentStep - 1);
+    }
+
+    function updateStockAssignment(lvSn, saSn, hkSn, personName, dateStr) {
+      if (lvSn && lvSn !== '-') {
+        const item = canYelegiList.find(c => c.seriNo === lvSn);
+        if (item) {
+          item.aciklamalar = personName;
+          item.durum = 'GÖREV BÖLGESİNDE';
+          item.color = '#92d050';
+          item.tarih = dateStr;
+        }
+      }
+      if (saSn && saSn !== '-') {
+        const item = spareAirList.find(s => s.seriNo === saSn);
+        if (item) {
+          item.aciklamalar = personName;
+          item.durum = 'GÖREV BÖLGESİNDE';
+          item.color = '#92d050';
+          item.tarih = dateStr;
+        }
+      }
+      if (hkSn && hkSn !== '-') {
+        const pure = hkSn.split(' (')[0].trim();
+        const item = helmetKitList.find(h => h.seriNo2 === pure || h.seriNo1 === pure || (h.aciklamalar && h.aciklamalar.includes(pure)));
+        if (item) {
+          item.aciklamalar = personName;
+          item.durum = 'GÖREV BÖLGESİNDE';
+          item.color = '#92d050';
+          item.tarih = dateStr;
+        }
+      }
+    }
+
+    function revertStockToDepot(lvSn, saSn, hkSn) {
+      if (lvSn && lvSn !== '-') {
+        const item = canYelegiList.find(c => c.seriNo === lvSn);
+        if (item) {
+          item.aciklamalar = 'DEPODA';
+          item.durum = 'DEPODA';
+          item.color = '#ffffff';
+          item.tarih = 'DEVAM EDİYOR';
+        }
+      }
+      if (saSn && saSn !== '-') {
+        const item = spareAirList.find(s => s.seriNo === saSn);
+        if (item) {
+          item.aciklamalar = 'DEPODA';
+          item.durum = 'DEPODA';
+          item.color = '#ffffff';
+          item.tarih = 'DEVAM EDİYOR';
+        }
+      }
+      if (hkSn && hkSn !== '-') {
+        const pure = hkSn.split(' (')[0].trim();
+        const item = helmetKitList.find(h => h.seriNo2 === pure || h.seriNo1 === pure || (h.aciklamalar && h.aciklamalar.includes(pure)));
+        if (item) {
+          item.aciklamalar = 'DEPODA';
+          item.durum = 'DEPODA';
+          item.color = '#ffffff';
+          item.tarih = 'DEPODA';
+        }
+      }
+    }
+
+    async function submitStepWizardZimmet() {
+      if (!wizardSelectedPerson) {
+        alert('Personel seçimi eksik.');
+        return;
+      }
+
+      const gorevYeriSel = document.getElementById('wizardGorevYeri').value || 'MİLAS';
+      const customGorevYeri = (document.getElementById('wizardGorevYeriCustom')?.value || '').trim();
+      const gorevYeri = (gorevYeriSel === 'DİĞER' && customGorevYeri) ? customGorevYeri.toUpperCase() : (gorevYeriSel === 'DİĞER' ? 'DİĞER' : gorevYeriSel);
+      const baslangicTarihi = document.getElementById('wizardBaslangicTarihi').value || new Date().toLocaleDateString('tr-TR');
+      const notlar = document.getElementById('wizardNotlar').value.trim();
+
+      const newRecord = {
+        id: `yd_${Date.now()}`,
+        siraNo: zimmetList.length + 1,
+        personelAdi: wizardSelectedPerson,
+        gorevYeri: gorevYeri,
+        baslangicTarihi: baslangicTarihi,
+        bitisTarihi: '-',
+        lifeVestSn: wizardSelectedLifeVest || '-',
+        spareAirSn: wizardSelectedSpareAir || '-',
+        helmetKitSn: wizardSelectedHelmetKit || '-',
+        durum: 'GÖREVDE',
+        devredilenPersonel: '-',
+        teslimAlanPersonel: 'Depo Sorumlusu',
+        notlar: notlar
+      };
+
+      // Optimistic instant update
+      zimmetList.unshift(newRecord);
+      updateStockAssignment(wizardSelectedLifeVest, wizardSelectedSpareAir, wizardSelectedHelmetKit, wizardSelectedPerson, baslangicTarihi);
+
+      renderPersonnelTable();
+      renderZimmetler();
+      renderStocks();
+
+      closeStepByStepModal();
+      switchPublicTab('personnel');
+
+      try {
+        const payload = {
+          personelAdi: wizardSelectedPerson,
+          gorevYeri: gorevYeri,
+          baslangicTarihi: baslangicTarihi,
+          lifeVestSn: wizardSelectedLifeVest || '-',
+          spareAirSn: wizardSelectedSpareAir || '-',
+          helmetKitSn: wizardSelectedHelmetKit || '-',
+          durum: 'GÖREVDE',
+          notlar: notlar
+        };
+
+        const res = await fetch(API_BASE + '/api/yasam-destek/assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json.status === 'success' && Array.isArray(json.records)) {
+            zimmetList = json.records;
+            renderPersonnelTable();
+            renderZimmetler();
+          }
+        }
+      } catch (err) {
+        console.warn('Background sync warning:', err);
+      }
+
+      alert(`✅ ${wizardSelectedPerson} personeline zimmet başarıyla verildi!\nEkipman stokları yeşil dolgu ile güncellendi.`);
+    }
+
+    // -------------------------------------------------------------
+    // FINISH / DEVİR & TESLİM MODAL
+    // -------------------------------------------------------------
+    function openFinishModal(id) {
+      const r = zimmetList.find(x => x.id === id);
+      if (!r) return;
+      currentActiveRecord = r;
+
+      document.getElementById('modalCurrentPersonel').innerText = r.personelAdi;
+      document.getElementById('modalCurrentInfo').innerText = `📍 ${r.gorevYeri} | Can Yeleği: ${r.lifeVestSn} | Spare Air: ${r.spareAirSn} | Helmet Kit: ${r.helmetKitSn}`;
+      document.getElementById('modalBitisTarihi').value = new Date().toLocaleDateString('tr-TR');
+      document.getElementById('modalNotes').value = '';
+
+      // Populate Devredilecek personel dropdown
+      const selDevredilen = document.getElementById('modalDevredilenPersonel');
+      selDevredilen.innerHTML = personnelItems
+        .filter(p => p.adSoyad.toUpperCase() !== r.personelAdi.toUpperCase())
+        .map(p => `<option value="${p.adSoyad}">${p.adSoyad} (${p.unvan || 'Teknisyen'})</option>`)
+        .join('');
+
+      setModalAction('devret');
+      document.getElementById('finishModal').classList.remove('hidden');
+    }
+
+    function closeFinishModal() {
+      document.getElementById('finishModal').classList.add('hidden');
+      currentActiveRecord = null;
+    }
+
+    function setModalAction(action) {
+      currentModalAction = action;
+      const btnD = document.getElementById('btnDevret');
+      const btnT = document.getElementById('btnTeslim');
+      const secD = document.getElementById('secDevret');
+      const secT = document.getElementById('secTeslim');
+
+      if (action === 'devret') {
+        btnD.className = "p-3 rounded-xl border-2 border-indigo-600 bg-indigo-50/50 text-indigo-950 font-bold text-left cursor-pointer";
+        btnT.className = "p-3 rounded-xl border-2 border-slate-200 bg-white text-slate-600 text-left cursor-pointer";
+        secD.classList.remove('hidden');
+        secT.classList.add('hidden');
+      } else {
+        btnT.className = "p-3 rounded-xl border-2 border-blue-600 bg-blue-50/50 text-blue-950 font-bold text-left cursor-pointer";
+        btnD.className = "p-3 rounded-xl border-2 border-slate-200 bg-white text-slate-600 text-left cursor-pointer";
+        secT.classList.remove('hidden');
+        secD.classList.add('hidden');
+      }
+    }
+
+    async function submitFinishModal() {
+      if (!currentActiveRecord) return;
+      const bitis = document.getElementById('modalBitisTarihi').value.trim() || new Date().toLocaleDateString('tr-TR');
+      const devredilenPersonel = document.getElementById('modalDevredilenPersonel').value.trim().toUpperCase();
+      const devredilenYerSel = document.getElementById('modalDevredilenYer').value || 'MİLAS';
+      const customDevredilenYer = (document.getElementById('modalDevredilenYerCustom')?.value || '').trim();
+      const devredilenYer = (devredilenYerSel === 'DİĞER' && customDevredilenYer) ? customDevredilenYer.toUpperCase() : (devredilenYerSel === 'DİĞER' ? 'DİĞER' : devredilenYerSel);
+      const teslimAlan = document.getElementById('modalTeslimAlan').value.trim();
+      const notlar = document.getElementById('modalNotes').value.trim();
+
+      if (currentModalAction === 'devret' && !devredilenPersonel) {
+        alert('Lütfen devredilecek personeli seçiniz.');
+        return;
+      }
+
+      // Optimistic local state update
+      const oldId = currentActiveRecord.id;
+      const oldTargetIdx = zimmetList.findIndex(x => x.id === oldId);
+      
+      if (oldTargetIdx >= 0) {
+        const oldRec = zimmetList[oldTargetIdx];
+        if (currentModalAction === 'devret') {
+          // Mark old record as devredildi (so previous person has no active zimmet)
+          oldRec.durum = 'DEVREDİLDİ';
+          oldRec.bitisTarihi = bitis;
+          oldRec.devredilenPersonel = devredilenPersonel;
+
+          // Create new active record for new person
+          const newZimmet = {
+            id: `yd_${Date.now()}`,
+            siraNo: zimmetList.length + 1,
+            personelAdi: devredilenPersonel,
+            gorevYeri: devredilenYer || oldRec.gorevYeri || 'MİLAS',
+            baslangicTarihi: bitis,
+            bitisTarihi: '-',
+            lifeVestSn: oldRec.lifeVestSn,
+            spareAirSn: oldRec.spareAirSn,
+            helmetKitSn: oldRec.helmetKitSn,
+            durum: 'GÖREVDE',
+            devredilenPersonel: '-',
+            teslimAlanPersonel: 'Devir Teslim',
+            notlar: notlar || `${oldRec.personelAdi} personelinden devir alındı.`
+          };
+          zimmetList.unshift(newZimmet);
+
+          // Update stock descriptions to new person
+          updateStockAssignment(oldRec.lifeVestSn, oldRec.spareAirSn, oldRec.helmetKitSn, devredilenPersonel, bitis);
+        } else {
+          // Depoya teslim
+          oldRec.durum = 'TESLİM EDİLDİ';
+          oldRec.bitisTarihi = bitis;
+          oldRec.teslimAlanPersonel = teslimAlan || 'Depo Sorumlusu';
+          revertStockToDepot(oldRec.lifeVestSn, oldRec.spareAirSn, oldRec.helmetKitSn);
+        }
+      }
+
+      closeFinishModal();
+      renderPersonnelTable();
+      renderZimmetler();
+      renderStocks();
+
+      try {
+        const payload = {
+          zimmetId: oldId,
+          action: currentModalAction,
+          bitisTarihi: bitis,
+          devredilenPersonel: devredilenPersonel,
+          devredilenYer: devredilenYer,
+          teslimAlanPersonel: teslimAlan,
+          notlar: notlar
+        };
+
+        const res = await fetch(API_BASE + '/api/yasam-destek/finish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json.status === 'success' && Array.isArray(json.records)) {
+            zimmetList = json.records;
+            renderPersonnelTable();
+            renderZimmetler();
+          }
+        }
+      } catch (e) {
+        console.warn('Background sync error:', e);
+      }
+
+      alert(currentModalAction === 'devret' 
+        ? `✅ Ekipmanlar başarıyla ${devredilenPersonel} personeline devredildi!\nEski personeldeki zimmet boşa çıkarıldı.` 
+        : `✅ Ekipmanlar depoya başarıyla iade edildi!`);
+    }
+
+    // -------------------------------------------------------------
+    // SWAP ITEM MODAL (GÖREVDEYKEN TEKİL PARÇA DEĞİŞİMİ)
+    // -------------------------------------------------------------
+    let currentSwapRecord = null;
+
+    function openSwapItemModal(id) {
+      const r = zimmetList.find(x => x.id === id);
+      if (!r) return;
+      currentSwapRecord = r;
+
+      document.getElementById('swapPersonelName').innerText = r.personelAdi;
+      document.getElementById('swapGorevYeriBadge').innerText = '📍 ' + (r.gorevYeri || 'MİLAS');
+      document.getElementById('swapCurrentLv').innerText = r.lifeVestSn || '-';
+      document.getElementById('swapCurrentSa').innerText = r.spareAirSn || '-';
+      document.getElementById('swapCurrentHk').innerText = r.helmetKitSn || '-';
+      document.getElementById('swapNotes').value = '';
+
+      onSwapItemTypeChange('can_yelegi');
+      document.getElementById('swapItemModal').classList.remove('hidden');
+    }
+
+    function closeSwapItemModal() {
+      document.getElementById('swapItemModal').classList.add('hidden');
+      currentSwapRecord = null;
+    }
+
+    function onSwapItemTypeChange(type) {
+      const sel = document.getElementById('swapNewSnSelect');
+      if (!sel || !currentSwapRecord) return;
+
+      const currentSn = type === 'can_yelegi' 
+        ? (currentSwapRecord.lifeVestSn || '').trim()
+        : (type === 'spare_air' 
+            ? (currentSwapRecord.spareAirSn || '').trim() 
+            : (currentSwapRecord.helmetKitSn || '').trim());
+
+      if (type === 'can_yelegi') {
+        const available = canYelegiList.filter(c => {
+          const a = (c.aciklamalar || '').toUpperCase().trim();
+          const isDepot = c.durum === 'DEPODA' || c.durum === 'BOŞTA' || a === 'DEPODA' || a === 'BOŞTA' || a === '-' || !a;
+          return isDepot && c.durum !== 'KAYIT SİLME' && c.durum !== 'ONARIMDA' && c.durum !== 'BAKIMA GİDECEK' && c.seriNo !== currentSn;
+        });
+
+        if (available.length === 0) {
+          sel.innerHTML = '<option value="">⚠️ Depoda müsait başka Can Yeleği bulunamadı</option>';
+        } else {
+          sel.innerHTML = available.map(c => 
+            `<option value="${c.seriNo}">${c.seriNo} (${c.disNo && c.disNo !== '-' ? c.disNo + ' - ' : ''}DEPODA/MÜSAİT)</option>`
+          ).join('');
+        }
+      } else if (type === 'spare_air') {
+        const available = spareAirList.filter(s => {
+          const a = (s.aciklamalar || '').toUpperCase().trim();
+          const isDepot = s.durum === 'DEPODA' || s.durum === 'BOŞTA' || a === 'DEPODA' || a === 'BOŞTA' || a === '-' || !a;
+          return isDepot && s.durum !== 'KAYIT SİLME' && s.durum !== 'ONARIMDA' && s.durum !== 'BAKIMA GİDECEK' && s.seriNo !== currentSn;
+        });
+
+        if (available.length === 0) {
+          sel.innerHTML = '<option value="">⚠️ Depoda müsait başka Spare Air bulunamadı</option>';
+        } else {
+          sel.innerHTML = available.map(s => 
+            `<option value="${s.seriNo}">${s.seriNo} (DEPODA/MÜSAİT)</option>`
+          ).join('');
+        }
+      } else if (type === 'helmet_kit') {
+        const pureCurrent = currentSn.split(' (')[0].trim();
+        const available = helmetKitList.filter(h => {
+          const a = (h.aciklamalar || '').toUpperCase().trim();
+          const isDepot = h.durum === 'DEPODA' || h.durum === 'BOŞTA' || a === 'DEPODA' || a === 'BOŞTA' || a === '-' || !a;
+          const sn = (h.seriNo2 || h.seriNo1 || '').trim();
+          return isDepot && h.durum !== 'KAYIT SİLME' && h.durum !== 'ONARIMDA' && h.durum !== 'BAKIMA GİDECEK' && sn !== pureCurrent && h.seriNo1 !== pureCurrent && h.seriNo2 !== pureCurrent;
+        });
+
+        if (available.length === 0) {
+          sel.innerHTML = '<option value="">⚠️ Depoda müsait başka Helmet Kit bulunamadı</option>';
+        } else {
+          sel.innerHTML = available.map(h => {
+            const sn = h.seriNo2 || h.seriNo1 || 'H-10-13X';
+            const name = h.malzemeAdi2 || h.malzemeAdi1 || 'David Clark';
+            return `<option value="${sn}">${sn} (${name} - DEPODA/MÜSAİT)</option>`;
+          }).join('');
+        }
+      }
+    }
+
+    async function submitSwapItemModal() {
+      if (!currentSwapRecord) return;
+      const itemType = document.getElementById('swapItemTypeSelect').value;
+      const newSn = document.getElementById('swapNewSnSelect').value;
+      const notlar = document.getElementById('swapNotes').value.trim();
+
+      if (!newSn) {
+        alert('Lütfen değiştirilecek yeni seri numarasını seçiniz.');
+        return;
+      }
+
+      let oldSn = '-';
+      if (itemType === 'can_yelegi') oldSn = currentSwapRecord.lifeVestSn;
+      else if (itemType === 'spare_air') oldSn = currentSwapRecord.spareAirSn;
+      else if (itemType === 'helmet_kit') oldSn = currentSwapRecord.helmetKitSn;
+
+      // Optimistic local update
+      if (itemType === 'can_yelegi') {
+        currentSwapRecord.lifeVestSn = newSn;
+        revertStockToDepot(oldSn, '-', '-');
+        updateStockAssignment(newSn, '-', '-', currentSwapRecord.personelAdi, new Date().toLocaleDateString('tr-TR'));
+      } else if (itemType === 'spare_air') {
+        currentSwapRecord.spareAirSn = newSn;
+        revertStockToDepot('-', oldSn, '-');
+        updateStockAssignment('-', newSn, '-', currentSwapRecord.personelAdi, new Date().toLocaleDateString('tr-TR'));
+      } else if (itemType === 'helmet_kit') {
+        currentSwapRecord.helmetKitSn = newSn;
+        revertStockToDepot('-', '-', oldSn);
+        updateStockAssignment('-', '-', newSn, currentSwapRecord.personelAdi, new Date().toLocaleDateString('tr-TR'));
+      }
+
+      const savedPersonName = currentSwapRecord.personelAdi;
+      closeSwapItemModal();
+      renderPersonnelTable();
+      renderZimmetler();
+      renderStocks();
+
+      try {
+        const res = await fetch(API_BASE + '/api/yasam-destek/swap-item', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            zimmetId: currentSwapRecord?.id,
+            personelAdi: savedPersonName,
+            itemType: itemType,
+            oldSn: oldSn,
+            newSn: newSn,
+            notlar: notlar,
+            tarih: new Date().toLocaleDateString('tr-TR')
+          })
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.status === 'success' && Array.isArray(json.records)) {
+            zimmetList = json.records;
+            renderPersonnelTable();
+            renderZimmetler();
+          }
+        }
+      } catch (err) {
+        console.warn('Swap background sync error:', err);
+      }
+
+      alert(`✅ ${savedPersonName} personeline ait ekipman başarıyla değiştirildi (${newSn})!\nEski parça depoya alındı.`);
+    }
+
+    function printTutanak(id) {
+      const r = zimmetList.find(x => x.id === id);
+      if (!r) return;
+      document.getElementById('prtPersonel').innerText = r.personelAdi;
+      document.getElementById('prtGorevYeri').innerText = r.gorevYeri;
+      document.getElementById('prtBaslangic').innerText = r.baslangicTarihi;
+      document.getElementById('prtBitis').innerText = r.bitisTarihi || 'DEVAM EDİYOR';
+      document.getElementById('prtDurum').innerText = r.durum;
+      document.getElementById('prtDevredilen').innerText = r.devredilenPersonel || '-';
+      document.getElementById('prtTeslimAlan').innerText = r.teslimAlanPersonel || '-';
+      document.getElementById('prtLifeVest').innerText = r.lifeVestSn || '-';
+      document.getElementById('prtSpareAir').innerText = r.spareAirSn || '-';
+      document.getElementById('prtHelmetKit').innerText = r.helmetKitSn || '-';
+      document.getElementById('prtSign1').innerText = r.personelAdi;
+      document.getElementById('prtSign2').innerText = r.teslimAlanPersonel || r.devredilenPersonel || 'Ankara Depo Sorumlusu';
+      window.print();
+    }
+
+    // -------------------------------------------------------------
+    // LIVE FETCH DATA (SERVER & GOOGLE SHEETS SYNC)
+    // -------------------------------------------------------------
+    async function fetchData() {
+      // 1. Fetch Stocks
+      try {
+        const r1 = await fetch(API_BASE + '/api/yasam-destek/all-stocks');
+        const j1 = await r1.json();
+        if (j1 && j1.status === 'success') {
+          if (Array.isArray(j1.canYelegi) && j1.canYelegi.length > 0) canYelegiList = j1.canYelegi;
+          if (Array.isArray(j1.spareAir) && j1.spareAir.length > 0) spareAirList = j1.spareAir;
+          if (Array.isArray(j1.helmetKit) && j1.helmetKit.length > 0) helmetKitList = j1.helmetKit;
+        }
+      } catch (e) {
+        console.warn('Backend stocks fetch error:', e);
+      }
+
+      // 2. Fetch Zimmet Records
+      try {
+        const r2 = await fetch(API_BASE + '/api/yasam-destek');
+        const j2 = await r2.json();
+        if (j2 && j2.status === 'success' && Array.isArray(j2.records)) {
+          zimmetList = j2.records;
+        }
+      } catch (e) {
+        console.warn('Backend zimmet fetch error:', e);
+      }
+
+      // 3. Fetch Personnel List
+      try {
+        const r3 = await fetch(API_BASE + '/api/yasam-destek/personnel-list');
+        const j3 = await r3.json();
+        if (j3 && j3.status === 'success' && Array.isArray(j3.items) && j3.items.length > 0) {
+          personnelItems = j3.items;
+          personnelList = j3.personnel || personnelItems.map(p => p.adSoyad);
+        }
+      } catch (e) {
+        console.warn('Backend personnel fetch error:', e);
+      }
+
+      // Update counters & views
+      document.getElementById('count_cy').innerText = canYelegiList.length;
+      document.getElementById('count_sa').innerText = spareAirList.length;
+      document.getElementById('count_hk').innerText = helmetKitList.length;
+      document.getElementById('count_zm').innerText = zimmetList.length;
+      document.getElementById('count_personnel').innerText = personnelItems.length;
+
+      renderStocks();
+      renderZimmetler();
+      renderPersonnelTable();
+    }
+
+
+
+    // INITIAL LAUNCH: Render default seed datasets immediately
+    renderStocks();
+    renderZimmetler();
+    renderPersonnelTable();
+
+    // Clock
+    setInterval(() => {
+      const now = new Date();
+      const clockEl = document.getElementById('liveClock');
+      if (clockEl) {
+        clockEl.innerText = now.toLocaleDateString('tr-TR') + ' ' + now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+      }
+    }, 1000);
+
+    // Initial background fetch
+    fetchData().then(() => {
+      switchPublicTab('personnel');
+    });
+
+    // Auto refresh every 10 minutes (600,000 ms)
+    setInterval(() => {
+      fetchData();
+    }, 10 * 60 * 1000);
+  </script>
+</body>
+</html>

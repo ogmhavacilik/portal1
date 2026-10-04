@@ -19,8 +19,19 @@ export interface DepoTransaction {
   date?: string; // GG.AA.YYYY (Excel formatı)
   type: DepoTransactionType | string;
   itemName: string;
+  name?: string;
   pn: string;
   sn: string;
+  itemDesc?: string;
+  partNumber?: string;
+  serialNumber?: string;
+  adet?: number;
+  category?: string;
+  depoYeri?: string;
+  islemTuru?: string;
+  kuyrukKodu?: string;
+  teslimAlan?: string;
+  kabulYapan?: string;
   sourceLocation?: string;
   targetLocation?: string;
   sourceLoc?: string;
@@ -32,10 +43,16 @@ export interface DepoTransaction {
   operator?: string; // TESLİM ALAN
   receivedBy?: string; // KABUL YAPAN
   location?: string; // DEPO YERİ
+  sheetName?: string; // SAYFA ADI (Örn: DEPO HAREKET GEÇMİŞİ-AT-802)
   notes?: string;
   kitComponentsData?: KitComponent[];
   kitCount?: number;
   isUndone?: boolean;
+  isNewSessionTx?: boolean;
+  sistemStok?: number;
+  sayilanAdet?: number;
+  fark?: number;
+  isEdit?: boolean;
 }
 
 export interface KitComponent {
