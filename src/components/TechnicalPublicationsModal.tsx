@@ -33,7 +33,9 @@ import {
   Cloud,
   CheckCheck,
   ShieldCheck,
-  Plane
+  Plane,
+  CheckCircle2,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GOOGLE_SCRIPT_URL, fileToBase64 } from '../App';
@@ -200,7 +202,8 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     customUnit: string;
     customCategory: string;
     customRevision: string;
-    isZip?: boolean;
+    progress?: number;
+    status?: 'pending' | 'uploading' | 'success' | 'error';
   }[]>([]);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<string>('');
@@ -931,7 +934,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     return '';
   }, [activePub, downloadedBlobUrl]);
 
-  // Handle Multi-file selection (Directly handle ZIP for server-side extraction speed)
+  // Handle Multi-file selection (Reverting to Client-side ZIP extraction for individual tracking)
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const files: File[] = Array.from(e.target.files);
@@ -942,19 +945,35 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
 
     for (const file of files) {
       if (file.name.toLowerCase().endsWith('.zip')) {
-        const zipName = file.name.replace(/\.[^/.]+$/, '');
-        setUploadSection('custom');
-        setUploadCustomSection(zipName);
-        
-        newSelected.push({
-          file,
-          customTitle: zipName,
-          customSection: zipName,
-          customUnit: uploadUnit,
-          customCategory: uploadCategory,
-          customRevision: uploadRevision || todayStr,
-          isZip: true
-        });
+        try {
+          const zip = new JSZip();
+          const loadedZip = await zip.loadAsync(file);
+          const zipFiles = Object.values(loadedZip.files);
+          const zipName = file.name.replace(/\.[^/.]+$/, '');
+          
+          setUploadSection('custom');
+          setUploadCustomSection(zipName);
+
+          for (const zipEntry of zipFiles) {
+            if (!zipEntry.dir && zipEntry.name.toLowerCase().endsWith('.pdf')) {
+              const content = await zipEntry.async('blob');
+              const extractedFile = new File([content], zipEntry.name.split('/').pop() || zipEntry.name, { type: 'application/pdf' });
+              
+              newSelected.push({
+                file: extractedFile,
+                customTitle: extractedFile.name.replace(/\.[^/.]+$/, ''),
+                customSection: zipName,
+                customUnit: uploadUnit,
+                customCategory: uploadCategory,
+                customRevision: uploadRevision || todayStr,
+                progress: 0,
+                status: 'pending'
+              });
+            }
+          }
+        } catch (err) {
+          showNotification('ZIP dosyası açılamadı.', 'error');
+        }
       } else if (file.name.toLowerCase().endsWith('.pdf')) {
         let title = file.name.replace(/\.[^/.]+$/, '');
         newSelected.push({
@@ -963,7 +982,9 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
           customSection: initialSection,
           customUnit: uploadUnit,
           customCategory: uploadCategory,
-          customRevision: uploadRevision || todayStr
+          customRevision: uploadRevision || todayStr,
+          progress: 0,
+          status: 'pending'
         });
       }
     }
@@ -974,186 +995,116 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     e.target.value = '';
   };
 
-  // Perform multi-file upload with concurrency for speed
+  // Perform multi-file upload sequentially with individual progress tracking
   const handlePerformUpload = async () => {
     if (selectedFiles.length === 0) {
-      showNotification('Lütfen en az bir PDF dosyası seçiniz.', 'error');
+      showNotification('Lütfen döküman seçiniz.', 'error');
       return;
     }
 
     setIsUploading(true);
-    setUploadProgress(`Başlatılıyor... 0/${selectedFiles.length}`);
+    setSuccessCount(0);
+    setFailCount(0);
     
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const uploadDateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-
     const newPubs: TechPublication[] = [];
-    setSuccessCount(0);
-    setFailCount(0);
-    let sCount = 0;
-    let fCount = 0;
 
-    const concurrency = 3;
-    const items = [...selectedFiles];
-    
-    // Case 1: ZIP Upload (Fast Server-side path)
-    const zipItem = items.find(it => it.isZip);
-    if (zipItem) {
-      setUploadProgress(`ZIP paketi hazırlanıyor ve sunucuya gönderiliyor...`);
-      try {
-        const base64Zip = await fileToBase64(zipItem.file);
-        const unitOption = UNIT_FOLDER_OPTIONS.find(u => u.key === zipItem.customUnit) || UNIT_FOLDER_OPTIONS[1];
-        
-        const resp = await fetch('/api/upload-tech-publication-zip', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            base64Zip,
-            unit: unitOption.label,
-            unitKey: zipItem.customUnit,
-            category: zipItem.customCategory,
-            revision: zipItem.customRevision,
-            section: zipItem.customSection.trim() || uploadSection
-          })
-        });
-        
-        const result = await resp.json();
-        if (result.status === 'success') {
-          showNotification(result.message || 'ZIP içeriği başarıyla Drive\'a aktarıldı.', 'success');
-          setSelectedFiles([]);
-          setIsUploadModalOpen(false);
-          setTimeout(() => fetchDrivePublications(true), 1500);
-        } else {
-          throw new Error(result.message || 'ZIP yükleme hatası');
-        }
-      } catch (err: any) {
-        showNotification(`ZIP Yükleme Hatası: ${err.message}`, 'error');
-      } finally {
-        setIsUploading(false);
-        setUploadProgress('');
-      }
-      return;
-    }
+    // Local refs to track counts
+    let currentSuccess = 0;
+    let currentFail = 0;
 
-    // Case 2: Standard PDF Upload (Existing parallelism)
-    const processItem = async (item: any, index: number) => {
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const item = selectedFiles[i];
+      if (item.status === 'success') continue;
+
+      // Update item status to uploading
+      setSelectedFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'uploading', progress: 10 } : f));
+      setUploadProgress(`Yükleniyor (${i + 1}/${selectedFiles.length}): ${item.customTitle}`);
+
       const unitOption = UNIT_FOLDER_OPTIONS.find(u => u.key === item.customUnit) || UNIT_FOLDER_OPTIONS[1];
       const sectionName = item.customSection.trim() || 'Genel Teknik Döküman';
       const cleanFileName = `pub_${unitOption.key}_${item.customTitle.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
 
       try {
+        // Step 1: Base64 Conversion (20%)
         const base64Data = await fileToBase64(item.file);
-        let driveFileId = '';
-        let viewUrl = '';
+        setSelectedFiles(prev => prev.map((f, idx) => idx === i ? { ...f, progress: 20 } : f));
 
-        try {
-          const resp = await fetch('/api/upload-tech-publication', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fileName: cleanFileName,
-              base64Data: base64Data,
-              unit: unitOption.label,
-              unitKey: item.customUnit,
-              category: item.customCategory || 'IPC',
-              title: item.customTitle,
-              revision: item.customRevision || 'Rev. 01',
-              section: sectionName,
-              notes: '',
-              originalFileName: item.file.name
-            })
-          });
-          
-          if (resp.ok) {
-            const result = await resp.json();
-            if (result.status === 'success' || result.fileId) {
-              driveFileId = result.fileId || '';
-              viewUrl = result.viewUrl || '';
-            } else {
-              throw new Error(result.message || 'Upload failed');
-            }
-          } else {
-            throw new Error(`HTTP Error ${resp.status}`);
-          }
-        } catch (serverErr) {
-          // Direct GAS Fallback
-          const gasResp = await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({
-              action: 'uploadTechPublication',
-              fileName: cleanFileName,
-              base64Data: base64Data,
-              unit: unitOption.label,
-              unitKey: item.customUnit,
-              category: item.customCategory || 'IPC',
-              title: item.customTitle,
-              revision: item.customRevision || 'Rev. 01',
-              section: sectionName,
-              notes: '',
-              originalFileName: item.file.name
-            })
-          });
-          const result = await gasResp.json();
-          if (result.status === 'success' || result.fileId) {
-            driveFileId = result.fileId || '';
-            viewUrl = result.viewUrl || '';
-          }
+        // Step 2: Upload to Server (Progress will jump to 90 on start and 100 on end since we use fetch)
+        setSelectedFiles(prev => prev.map((f, idx) => idx === i ? { ...f, progress: 50 } : f));
+        
+        const resp = await fetch('/api/upload-tech-publication', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileName: cleanFileName,
+            base64Data: base64Data,
+            unit: unitOption.label,
+            unitKey: item.customUnit,
+            category: item.customCategory || 'IPC',
+            title: item.customTitle,
+            revision: item.customRevision || 'Rev. 01',
+            section: sectionName,
+            notes: '',
+            originalFileName: item.file.name
+          })
+        });
+
+        setSelectedFiles(prev => prev.map((f, idx) => idx === i ? { ...f, progress: 90 } : f));
+
+        const result = await resp.json();
+        if (result.status === 'success' || result.fileId) {
+          const driveFileId = result.fileId || '';
+          const viewUrl = result.viewUrl || '';
+
+          const newPub: TechPublication = {
+            id: driveFileId ? `pub_drive_${driveFileId}` : `pub_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+            unit: item.customUnit as any,
+            unitLabel: unitOption.label,
+            category: item.customCategory || 'IPC',
+            revision: item.customRevision || 'Rev. 01',
+            section: sectionName,
+            title: item.customTitle,
+            fileName: item.file.name,
+            fileSize: `${(item.file.size / (1024 * 1024)).toFixed(1)} MB`,
+            uploadDate: uploadDateStr,
+            driveFileId: driveFileId,
+            viewUrl: viewUrl,
+            base64Data: base64Data,
+            notes: ''
+          };
+
+          newPubs.push(newPub);
+          currentSuccess++;
+          setSuccessCount(currentSuccess);
+          setSelectedFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'success', progress: 100 } : f));
+        } else {
+          throw new Error(result.message || 'Hata oluştu');
         }
-
-        const newPub: TechPublication = {
-          id: driveFileId ? `pub_drive_${driveFileId}` : `pub_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-          unit: item.customUnit as any,
-          unitLabel: unitOption.label,
-          category: item.customCategory || 'IPC',
-          revision: item.customRevision || 'Rev. 01',
-          section: sectionName,
-          title: item.customTitle,
-          fileName: item.file.name,
-          fileSize: `${(item.file.size / (1024 * 1024)).toFixed(1)} MB`,
-          uploadDate: uploadDateStr,
-          driveFileId: driveFileId,
-          viewUrl: viewUrl,
-          base64Data: base64Data,
-          notes: ''
-        };
-
-        newPubs.push(newPub);
-        sCount++;
-        setSuccessCount(sCount);
       } catch (err) {
-        console.error(`Dosya yükleme hatası (${item.file.name}):`, err);
-        fCount++;
-        setFailCount(fCount);
-      } finally {
-        const completed = sCount + fCount;
-        setUploadProgress(`Yükleniyor (${completed}/${items.length}): ${item.customTitle}`);
+        console.error('Upload error:', err);
+        currentFail++;
+        setFailCount(currentFail);
+        setSelectedFiles(prev => prev.map((f, idx) => idx === i ? { ...f, status: 'error', progress: 100 } : f));
       }
-    };
-
-    // Execute with concurrency
-    for (let i = 0; i < items.length; i += concurrency) {
-      const chunk = items.slice(i, i + concurrency);
-      await Promise.all(chunk.map((item, idx) => processItem(item, i + idx)));
     }
 
     if (newPubs.length > 0) {
       const updatedList = [...newPubs, ...publications];
       savePublications(updatedList);
+      showNotification(`${currentSuccess} dosya başarıyla yüklendi.`, 'success');
       
-      if (fCount === 0) {
-        showNotification(`${sCount} adet teknik yayın başarıyla Drive'a yüklendi.`, 'success');
-      } else {
-        showNotification(`${sCount} dosya yüklendi, ${fCount} dosya hata aldı.`, 'info');
+      // If all success, clear list and close modal
+      if (currentFail === 0) {
+        setSelectedFiles([]);
+        setIsUploadModalOpen(false);
+        setActivePub(newPubs[0]);
+        setTimeout(() => fetchDrivePublications(true), 1500);
       }
-      
-      setSelectedFiles([]);
-      setIsUploadModalOpen(false);
-      setActivePub(newPubs[0]);
-      setTimeout(() => fetchDrivePublications(false), 1000);
     } else {
-      showNotification('Dosyalar yüklenirken bir hata oluştu. Lütfen bağlantınızı kontrol edin.', 'error');
+      showNotification('Dosyalar yüklenirken hata oluştu.', 'error');
     }
 
     setIsUploading(false);
@@ -2280,198 +2231,221 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
             </div>
 
             <div className="p-6 overflow-y-auto space-y-5 flex-1">
-              {isUploading ? (
-                /* HIPZHILI MODERN LOADING VIEW */
-                <div className="flex flex-col items-center justify-center py-12 space-y-6">
-                  <div className="relative">
-                    <div className="w-24 h-24 rounded-full border-4 border-slate-800 border-t-emerald-500 animate-spin"></div>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <Cloud className="w-8 h-8 text-emerald-400 animate-pulse" />
-                    </div>
+              {/* Unit & Category Selector */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Hedef Hava Aracı</label>
+                  <select
+                    value={uploadUnit}
+                    onChange={e => setUploadUnit(e.target.value)}
+                    disabled={isUploading}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer disabled:opacity-50"
+                  >
+                    {UNIT_FOLDER_OPTIONS.filter(u => u.key !== 'all').map(u => (
+                      <option key={u.key} value={u.key}>{u.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Yayın Türü / Kategori</label>
+                  <select
+                    value={uploadCategory}
+                    onChange={e => setUploadCategory(e.target.value)}
+                    disabled={isUploading}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer disabled:opacity-50"
+                  >
+                    <option value="IPC">IPC (Parça Kataloğu)</option>
+                    <option value="AMM">AMM (Bakım El Kitabı)</option>
+                    <option value="CMM">CMM (Komponent Bakım)</option>
+                    <option value="ŞEMA">ŞEMA / WDM</option>
+                    <option value="EL KİTABI">EL KİTABI</option>
+                    <option value="STANDART">STANDART</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Rev. Tarihi</label>
+                    <input
+                      type="date"
+                      value={uploadRevisionDate}
+                      disabled={isUploading}
+                      onChange={e => {
+                        const date = e.target.value;
+                        setUploadRevisionDate(date);
+                        if (date) {
+                          const d = new Date(date);
+                          const revLabel = `Rev. ${d.toLocaleDateString('tr-TR')}`;
+                          setUploadRevision(revLabel);
+                          setSelectedFiles(prev => prev.map(f => ({ ...f, customRevision: revLabel })));
+                        }
+                      }}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-[10px] text-white outline-none cursor-pointer disabled:opacity-50"
+                    />
                   </div>
-                  
-                  <div className="text-center space-y-2">
-                    <h4 className="text-lg font-black text-white uppercase tracking-widest">DOSYALAR YÜKLENİYOR</h4>
-                    <p className="text-sm text-emerald-400 font-mono font-bold">{uploadProgress}</p>
-                    <div className="w-64 h-1.5 bg-slate-800 rounded-full mt-4 overflow-hidden mx-auto">
-                      <motion.div 
-                        className="h-full bg-emerald-500"
-                        initial={{ width: "0%" }}
-                        animate={{ 
-                          width: `${((successCount + failCount) / selectedFiles.length) * 100}%` 
-                        }}
-                      />
-                    </div>
-                    <p className="text-[10px] text-slate-500 mt-2">Hızlandırmak için paralel (3'lü) yükleme yapılıyor...</p>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Etiket</label>
+                    <input
+                      type="text"
+                      value={uploadRevision}
+                      disabled={isUploading}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setUploadRevision(val);
+                        setSelectedFiles(prev => prev.map(f => ({ ...f, customRevision: val })));
+                      }}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-[10px] text-white outline-none disabled:opacity-50"
+                    />
                   </div>
                 </div>
-              ) : (
-                <>
-                  {/* Unit & Category Selector */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Hedef Hava Aracı</label>
-                      <select
-                        value={uploadUnit}
-                        onChange={e => setUploadUnit(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
-                      >
-                        {UNIT_FOLDER_OPTIONS.filter(u => u.key !== 'all').map(u => (
-                          <option key={u.key} value={u.key}>{u.label}</option>
-                        ))}
-                      </select>
-                    </div>
+              </div>
 
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Yayın Türü / Kategori</label>
-                      <select
-                        value={uploadCategory}
-                        onChange={e => setUploadCategory(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
-                      >
-                        <option value="IPC">IPC (Parça Kataloğu)</option>
-                        <option value="AMM">AMM (Bakım El Kitabı)</option>
-                        <option value="CMM">CMM (Komponent Bakım)</option>
-                        <option value="ŞEMA">ŞEMA / WDM</option>
-                        <option value="EL KİTABI">EL KİTABI</option>
-                        <option value="STANDART">STANDART</option>
-                      </select>
-                    </div>
+              {/* Section selector (Folder Name) */}
+              <div className="p-4 bg-slate-950/50 border border-slate-800 rounded-2xl space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-emerald-400 mb-1.5 uppercase tracking-wider flex items-center gap-2">
+                    <Layers className="w-3.5 h-3.5" />
+                    Klasör / Bölüm Adı
+                  </label>
+                  <select
+                    value={uploadSection}
+                    disabled={isUploading}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setUploadSection(val);
+                      if (val !== 'custom') {
+                        setUploadCustomSection('');
+                        setSelectedFiles(prev => prev.map(f => ({ ...f, customSection: val })));
+                      }
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer disabled:opacity-50"
+                  >
+                    {SECTION_SUGGESTIONS.map(sec => (
+                      <option key={sec} value={sec}>{sec}</option>
+                    ))}
+                    <option value="custom">+ Yeni Klasör / Özel Bölüm</option>
+                  </select>
+                </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-300 mb-1">Rev. Tarihi</label>
-                        <input
-                          type="date"
-                          value={uploadRevisionDate}
-                          onChange={e => {
-                            const date = e.target.value;
-                            setUploadRevisionDate(date);
-                            if (date) {
-                              const d = new Date(date);
-                              const revLabel = `Rev. ${d.toLocaleDateString('tr-TR')}`;
-                              setUploadRevision(revLabel);
-                              setSelectedFiles(prev => prev.map(f => ({ ...f, customRevision: revLabel })));
-                            }
-                          }}
-                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-[10px] text-white outline-none cursor-pointer"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-300 mb-1">Etiket</label>
-                        <input
-                          type="text"
-                          value={uploadRevision}
-                          onChange={e => {
-                            const val = e.target.value;
-                            setUploadRevision(val);
-                            setSelectedFiles(prev => prev.map(f => ({ ...f, customRevision: val })));
-                          }}
-                          className="w-full bg-slate-950 border border-slate-700 rounded-xl px-2 py-2 text-[10px] text-white outline-none"
-                        />
-                      </div>
-                    </div>
+                {(uploadSection === 'custom' || uploadSection === '') && (
+                  <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1">Klasör Adı Girin</label>
+                    <input
+                      type="text"
+                      value={uploadCustomSection}
+                      disabled={isUploading}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setUploadCustomSection(val);
+                        setSelectedFiles(prev => prev.map(f => ({ ...f, customSection: val })));
+                      }}
+                      placeholder="Örn: PART CATALOG OCAK 2026"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none disabled:opacity-50"
+                    />
+                  </motion.div>
+                )}
+              </div>
+
+              {/* File Dropzone */}
+              {!isUploading && (
+                <div className="border-2 border-dashed border-slate-700/80 hover:border-emerald-500/60 rounded-2xl p-6 text-center bg-slate-950/40 transition-colors relative cursor-pointer group">
+                  <input
+                    type="file"
+                    multiple
+                    accept=".pdf,application/pdf,.zip"
+                    onChange={handleFileInputChange}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                  />
+                  <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 mx-auto mb-2 group-hover:scale-105 transition-transform">
+                    <FileText className="w-6 h-6" />
                   </div>
+                  <h4 className="text-xs font-bold text-white mb-1">PDF / ZIP Dökümanlarını Seçiniz veya Sürükleyiniz</h4>
+                  <p className="text-[11px] text-slate-400">ZIP dosyaları otomatik olarak dökümanlara ayrılacaktır</p>
+                </div>
+              )}
 
-                  {/* Section selector (Folder Name) */}
-                  <div className="p-4 bg-slate-950/50 border border-slate-800 rounded-2xl space-y-3">
-                    <div>
-                      <label className="block text-xs font-bold text-emerald-400 mb-1.5 uppercase tracking-wider flex items-center gap-2">
-                        <Layers className="w-3.5 h-3.5" />
-                        Klasör / Bölüm Adı
-                      </label>
-                      <select
-                        value={uploadSection}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setUploadSection(val);
-                          if (val !== 'custom') {
-                            setUploadCustomSection('');
-                            setSelectedFiles(prev => prev.map(f => ({ ...f, customSection: val })));
-                          }
-                        }}
-                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none cursor-pointer"
-                      >
-                        {SECTION_SUGGESTIONS.map(sec => (
-                          <option key={sec} value={sec}>{sec}</option>
-                        ))}
-                        <option value="custom">+ Yeni Klasör / Özel Bölüm</option>
-                      </select>
+              {/* Selected files list with Individual Progress Tracking */}
+              {selectedFiles.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-400 px-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold">Seçilen Yayınlar ({selectedFiles.length})</span>
+                      {isUploading && (
+                        <span className="text-emerald-400 animate-pulse text-[10px] font-mono">
+                          ({successCount + failCount}/{selectedFiles.length} Tamamlandı)
+                        </span>
+                      )}
                     </div>
-
-                    {(uploadSection === 'custom' || uploadSection === '') && (
-                      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-                        <label className="block text-xs font-semibold text-slate-400 mb-1">Klasör Adı Girin</label>
-                        <input
-                          type="text"
-                          value={uploadCustomSection}
-                          onChange={e => {
-                            const val = e.target.value;
-                            setUploadCustomSection(val);
-                            setSelectedFiles(prev => prev.map(f => ({ ...f, customSection: val })));
-                          }}
-                          placeholder="Örn: PART CATALOG OCAK 2026"
-                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:border-emerald-500 outline-none"
-                        />
-                      </motion.div>
+                    {!isUploading && (
+                      <button
+                        onClick={() => setSelectedFiles([])}
+                        className="text-rose-400 hover:text-rose-300 text-[11px]"
+                      >
+                        Listeyi Temizle
+                      </button>
                     )}
                   </div>
-
-                  {/* File Dropzone */}
-                  <div className="border-2 border-dashed border-slate-700/80 hover:border-emerald-500/60 rounded-2xl p-6 text-center bg-slate-950/40 transition-colors relative cursor-pointer group">
-                    <input
-                      type="file"
-                      multiple
-                      accept=".pdf,application/pdf"
-                      onChange={handleFileInputChange}
-                      className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                    />
-                    <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 mx-auto mb-2 group-hover:scale-105 transition-transform">
-                      <FileText className="w-6 h-6" />
-                    </div>
-                    <h4 className="text-xs font-bold text-white mb-1">PDF Dökümanlarını Seçiniz veya Sürükleyiniz</h4>
-                    <p className="text-[11px] text-slate-400">Tek veya çoklu PDF seçimi yapabilirsiniz</p>
-                  </div>
-
-                  {/* Selected files list */}
-                  {selectedFiles.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs text-slate-400 px-1">
-                        <span>Seçilen Yayınlar ({selectedFiles.length})</span>
-                        <button
-                          onClick={() => setSelectedFiles([])}
-                          className="text-rose-400 hover:text-rose-300 text-[11px]"
-                        >
-                          Listeyi Temizle
-                        </button>
-                      </div>
-                      <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-                        {selectedFiles.map((item, idx) => (
-                          <div key={idx} className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl flex items-center gap-3">
-                            <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <input
-                                type="text"
-                                value={item.customTitle}
-                                onChange={e => {
-                                  const val = e.target.value;
-                                  setSelectedFiles(prev => prev.map((f, i) => i === idx ? { ...f, customTitle: val } : f));
-                                }}
-                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white outline-none truncate"
-                              />
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {selectedFiles.map((item, idx) => (
+                      <div 
+                        key={idx} 
+                        className={`p-3 rounded-xl border transition-all ${
+                          item.status === 'uploading' ? 'bg-emerald-500/10 border-emerald-500/50 ring-1 ring-emerald-500/20' :
+                          item.status === 'success' ? 'bg-slate-950/40 border-emerald-500/30 opacity-70' :
+                          item.status === 'error' ? 'bg-rose-500/10 border-rose-500/50' :
+                          'bg-slate-950 border-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {item.status === 'success' ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                          ) : item.status === 'error' ? (
+                            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                          ) : item.status === 'uploading' ? (
+                            <RefreshCw className="w-4 h-4 text-emerald-400 shrink-0 animate-spin" />
+                          ) : (
+                            <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+                          )}
+                          
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span className="text-xs text-white font-medium truncate">
+                                {item.customTitle}
+                              </span>
+                              {item.progress !== undefined && (item.status === 'uploading' || item.status === 'success') && (
+                                <span className={`text-[10px] font-mono font-bold ${item.status === 'success' ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                  %{item.progress}
+                                </span>
+                              )}
                             </div>
+                            
+                            {/* Individual Progress Bar */}
+                            {(item.status === 'uploading' || item.status === 'success' || item.status === 'error') && (
+                              <div className="w-full h-1 bg-slate-900 rounded-full overflow-hidden">
+                                <motion.div 
+                                  className={`h-full ${item.status === 'error' ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${item.progress || 0}%` }}
+                                  transition={{ duration: 0.3 }}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {!isUploading && item.status !== 'success' && (
                             <button
                               onClick={() => setSelectedFiles(prev => prev.filter((_, i) => i !== idx))}
-                              className="p-1 rounded-lg text-slate-400 hover:text-rose-400"
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-400/10"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
-                          </div>
-                        ))}
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
 

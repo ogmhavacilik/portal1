@@ -709,26 +709,40 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Fetch Onay Bekleyenler List
-  const fetchOnayBekleyenler = async () => {
+  // Fetch Onay Bekleyenler List (Live data support)
+  const fetchOnayBekleyenler = async (silent = false) => {
     try {
-      setIsLoadingOnayList(true);
+      if (!silent) setIsLoadingOnayList(true);
       const res = await fetch('/api/onay-bekleyenler');
       const data = await res.json();
       if (data && data.status === 'success' && Array.isArray(data.items)) {
-        setOnayBekleyenlerList(data.items);
+        // Only update if data changed to avoid unnecessary re-renders
+        setOnayBekleyenlerList(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(data.items)) return prev;
+          return data.items;
+        });
       }
     } catch (err) {
       console.warn("Failed to load onay bekleyenler:", err);
     } finally {
-      setIsLoadingOnayList(false);
+      if (!silent) setIsLoadingOnayList(false);
     }
   };
 
   useEffect(() => {
+    let interval: any;
     if (isOpen) {
+      // Initial fetch
       fetchOnayBekleyenler();
+      
+      // Auto-refresh every 10 seconds for LIVE data as requested
+      interval = setInterval(() => {
+        fetchOnayBekleyenler(true);
+      }, 10000);
     }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [isOpen]);
 
   const pendingApprovalCount = useMemo(() => {
@@ -8950,9 +8964,15 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                   <Clock className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-200">
-                    ONAY BEKLEYEN ÇIKIŞ TALEPLERİ — {currentUnit === 'all' ? 'TÜM BİRİMLER' : currentUnit.toUpperCase()}
-                  </h3>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-200">
+                      ONAY BEKLEYEN ÇIKIŞ TALEPLERİ — {currentUnit === 'all' ? 'TÜM BİRİMLER' : currentUnit.toUpperCase()}
+                    </h3>
+                    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 rounded-full shrink-0">
+                      <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                      <span className="text-[9px] font-black text-emerald-400 uppercase tracking-tighter">CANLI</span>
+                    </div>
+                  </div>
                   <p className="text-[10px] text-slate-400">
                     Drive Excel 'ONAY BEKLEYENLER' sayfası ile senkronize canlı talep listesi
                   </p>
@@ -8961,7 +8981,7 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={fetchOnayBekleyenler}
+                  onClick={() => fetchOnayBekleyenler(false)}
                   className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs flex items-center gap-1 cursor-pointer"
                   title="Yenile"
                 >

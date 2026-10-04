@@ -1356,10 +1356,86 @@ async function startServer() {
 
   // ─── ONAY BEKLEYENLER (APPROVAL REQUESTS) ENDPOINTS ───
   // GET /api/onay-bekleyenler
-  app.get("/api/onay-bekleyenler", (req, res) => {
+  app.get("/api/onay-bekleyenler", async (req, res) => {
     try {
-      const items = readOnayBekleyenler();
-      return res.json({ status: "success", items: items });
+      let localItems = readOnayBekleyenler();
+      
+      // Try to fetch LIVE data from Google Sheets (GViz CSV Export)
+      try {
+        const spreadsheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+        const sheetName = "ONAY BEKLEYENLER -AT802";
+        const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+        
+        const sheetRes = await fetch(url, { signal: AbortSignal.timeout(4000) });
+        if (sheetRes.ok) {
+          const csvText = await sheetRes.text();
+          if (csvText && !csvText.includes("<!DOCTYPE")) {
+            const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+            const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+            
+            if (lines.length > 1) {
+              const remoteItems: any[] = [];
+              for (let i = 1; i < lines.length; i++) {
+                const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
+                if (cols.length >= 1) {
+                  const id = cols[0];
+                  if (!id) continue;
+                  
+                  remoteItems.push({
+                    id: id,
+                    date: cols[1] || "",
+                    category: cols[2] === "KİMYASAL" ? "kimyasal" : "sarf",
+                    itemName: cols[3] || "",
+                    pn: cols[4] || "",
+                    sn: cols[5] || "",
+                    depot: cols[6] || "",
+                    quantity: Number(cols[7]) || 1,
+                    tailNo: cols[8] || "",
+                    requestedBy: cols[9] || "",
+                    notes: cols[10] || "",
+                    status: cols[11] || "ONAY BEKLİYOR",
+                    unit: "at802", // Primary unit for this sheet
+                    fromRemote: true
+                  });
+                }
+              }
+              
+              // Merge Remote with Local (Prioritize Local status if it changed, but keep new items from remote)
+              const merged: any[] = [...localItems];
+              remoteItems.forEach(ri => {
+                const existingIdx = merged.findIndex(li => li.id === ri.id);
+                if (existingIdx === -1) {
+                  // New item from portal/excel
+                  merged.unshift(ri);
+                } else {
+                  // Existing item: Update fields if status is still pending, but keep local for others
+                  // This is a simple merge, we trust remote status if it's ONAYLANDI for example
+                  if (ri.status !== merged[existingIdx].status) {
+                    merged[existingIdx].status = ri.status;
+                  }
+                }
+              });
+              
+              // Sort by date/timestamp descending
+              merged.sort((a, b) => {
+                const da = new Date(a.timestamp || a.date).getTime();
+                const db = new Date(b.timestamp || b.date).getTime();
+                return db - da;
+              });
+
+              // Update local cache if changed
+              if (JSON.stringify(localItems) !== JSON.stringify(merged)) {
+                writeOnayBekleyenler(merged);
+                localItems = merged;
+              }
+            }
+          }
+        }
+      } catch (syncErr) {
+        console.warn("Live approval sync warning:", syncErr.message);
+      }
+
+      return res.json({ status: "success", items: localItems });
     } catch (err: any) {
       return res.json({ status: "success", items: [] });
     }
