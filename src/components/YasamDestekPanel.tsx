@@ -6,6 +6,7 @@ import {
   Layers, ChevronDown, Eye
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { GOOGLE_SCRIPT_URL } from '../App';
 
 export interface YasamDestekRecord {
   id: string;
@@ -114,8 +115,85 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
   const fetchAllStocks = async () => {
     try {
       setIsStockLoading(true);
-      const res = await fetch('/api/yasam-destek/all-stocks');
-      const json = await res.json();
+      let json: any = null;
+      try {
+        const res = await fetch('/api/yasam-destek/all-stocks');
+        if (res.ok) {
+          json = await res.json();
+        }
+      } catch (e) {}
+
+      // Netlify / Static fallback: Google Drive Excel'inden doğrudan oku
+      if (!json || json.status !== 'success') {
+        try {
+          const directRes = await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'readExcelFromDrive',
+              fileName: 'hava_araçları_yer_destek_at-802.xlsx',
+              folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
+            })
+          });
+          if (directRes.ok) {
+            const driveResult = await directRes.json();
+            if (driveResult && driveResult.status === 'success' && driveResult.base64) {
+              const binaryString = atob(driveResult.base64);
+              const len = binaryString.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+              const workbook = XLSX.read(bytes, { type: 'array' });
+
+              const cySheet = workbook.Sheets['CAN YELEĞİ'] || workbook.Sheets['CAN YELEGI'];
+              const saSheet = workbook.Sheets['SPARE AIR'];
+              const hkSheet = workbook.Sheets['HELMET KIT'] || workbook.Sheets['KASK KİTİ'];
+
+              if (cySheet) {
+                const cyRows: any[] = XLSX.utils.sheet_to_json(cySheet);
+                setCanYelegiList(cyRows.map((r, i) => ({
+                  sNo: r['SIRA NO'] || r['S.NO'] || i + 1,
+                  malzemeAdi: r['MALZEME ADI'] || 'CAN YELEĞİ',
+                  parcaNo: r['PARÇA NO'] || r['P/N'] || '-',
+                  seriNo: r['SERİ NO'] || r['S/N'] || '-',
+                  disNo: r['DIŞ NO'] || '-',
+                  durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
+                  aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
+                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+                })));
+              }
+              if (saSheet) {
+                const saRows: any[] = XLSX.utils.sheet_to_json(saSheet);
+                setSpareAirList(saRows.map((r, i) => ({
+                  sNo: r['SIRA NO'] || r['S.NO'] || i + 1,
+                  malzemeAdi: r['MALZEME ADI'] || 'SPARE AIR',
+                  parcaNo: r['PARÇA NO'] || r['P/N'] || '-',
+                  seriNo: r['SERİ NO'] || r['S/N'] || '-',
+                  durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
+                  aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
+                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+                })));
+              }
+              if (hkSheet) {
+                const hkRows: any[] = XLSX.utils.sheet_to_json(hkSheet);
+                setHelmetKitList(hkRows.map((r, i) => ({
+                  sNo: r['SIRA NO'] || r['S.NO'] || i + 1,
+                  malzemeAdi1: r['MALZEME ADI 1'] || 'KASK',
+                  parcaNo1: r['PARÇA NO 1'] || '-',
+                  seriNo1: r['SERİ NO 1'] || '-',
+                  malzemeAdi2: r['MALZEME ADI 2'] || 'KULAKLIK',
+                  parcaNo2: r['PARÇA NO 2'] || '-',
+                  seriNo2: r['SERİ NO 2'] || '-',
+                  durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
+                  aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
+                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+                })));
+              }
+              return;
+            }
+          }
+        } catch (e) {}
+      }
+
       if (json && json.status === 'success') {
         setCanYelegiList(json.canYelegi || []);
         setSpareAirList(json.spareAir || []);
@@ -130,14 +208,48 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
 
   const fetchPersonnel = async () => {
     try {
-      const res = await fetch('/api/yasam-destek/personnel-list');
-      const json = await res.json();
-      console.log('DEBUG: Personnel list response:', json);
+      let json: any = null;
+      try {
+        const res = await fetch('/api/yasam-destek/personnel-list');
+        if (res.ok) json = await res.json();
+      } catch (e) {}
+
+      // Netlify fallback: Google Sheets 5-Personel_Bilgi sayfasını oku
+      if (!json || json.status !== 'success') {
+        try {
+          const directRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=5-Personel_Bilgi`);
+          if (directRes.ok) {
+            const sheetResult = await directRes.json();
+            if (sheetResult && sheetResult.data && Array.isArray(sheetResult.data)) {
+              const rows = sheetResult.data;
+              const parsedItems: any[] = [];
+              const namesList: string[] = [];
+              rows.forEach((r: any[], idx: number) => {
+                if (idx === 0) return; // skip header
+                const name = String(r[1] || r[0] || '').trim();
+                const unvan = String(r[2] || r[1] || 'Teknisyen').trim();
+                if (name && name.length > 2 && name.toUpperCase() !== 'AD SOYAD' && name.toUpperCase() !== 'PERSONEL') {
+                  namesList.push(name);
+                  parsedItems.push({
+                    id: `gas_p_${idx}`,
+                    adSoyad: name,
+                    unvan: unvan
+                  });
+                }
+              });
+              if (parsedItems.length > 0) {
+                setPersonnelList(namesList);
+                setPersonnelItems(parsedItems);
+                return;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
       if (json && json.status === 'success') {
         if (Array.isArray(json.personnel)) setPersonnelList(json.personnel);
         if (Array.isArray(json.items)) setPersonnelItems(json.items);
-      } else {
-        console.warn('DEBUG: Personnel list fetch unsuccessful:', json);
       }
     } catch (e) {
       console.error('DEBUG: Personnel list fetch error:', e);

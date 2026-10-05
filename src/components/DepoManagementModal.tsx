@@ -37,7 +37,7 @@ import { TEKNISYEN_PERSONEL_SCRIPT_URL } from '../utils/personnelData';
 
 export { TEKNISYEN_PERSONEL_SCRIPT_URL };
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzhXYZBlJvYarhEYpSK_UdceV-pQwGRIHTjWAVN_UTumI7_qla7vZnAZofdJGeK0e-ZVQ/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
 export const DRIVE_FOLDER_ID = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
 
 export const UNITS = [
@@ -1452,12 +1452,36 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
       targetFileId = targetCat === 'kimyasal' ? '' : '1tu8hDWSgIYkGn-7i_gDTC_UpUFUyaOzf';
     }
 
-    fetch('/api/read-excel-from-drive', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileName: targetFileName, fileId: targetFileId })
-    })
-      .then(res => res.json())
+    const doFetchDriveExcel = async () => {
+      let result: any = null;
+      try {
+        const res = await fetch('/api/read-excel-from-drive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: targetFileName, fileId: targetFileId })
+        });
+        if (res.ok) {
+          result = await res.json();
+        }
+      } catch (e) {}
+
+      // Netlify / Static fallback
+      if (!result || result.status !== 'success' || !result.base64) {
+        try {
+          const directRes = await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'readExcelFromDrive', fileName: targetFileName, fileId: targetFileId, folderId: DRIVE_FOLDER_ID })
+          });
+          if (directRes.ok) {
+            result = await directRes.json();
+          }
+        } catch (e) {}
+      }
+      return result;
+    };
+
+    doFetchDriveExcel()
       .then(result => {
         if (result && result.status === 'success' && result.base64) {
           try {

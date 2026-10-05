@@ -26,7 +26,7 @@ import { cleanAndFormatDateString } from '../utils/driveExcelSync';
 import { publishCrossSystemEvent, subscribeCrossSystemEvents } from '../utils/crossSystemBridge';
 import { downloadStandaloneSystemZip } from '../utils/zipExporter';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
 export const DRIVE_FOLDER_ID = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
 
 export const DEPO_CATEGORIES = [

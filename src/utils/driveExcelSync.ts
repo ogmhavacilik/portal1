@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxBVLlhvSrYDsIY5-Z8-RQ4f2-kTrHbLrZN3Bk7hB3AtQotugE9xqXRscIZd6ruinlqTg/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
 export const DRIVE_TECHIZAT_FOLDER_ID = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
 
 export interface DriveExcelFile {
