@@ -261,7 +261,7 @@ import { BarkodOkuyucuModal } from './components/BarkodOkuyucuModal';
 import { GunTakipModal } from './components/GunTakipModal';
 import { DepoSlipPrintModal } from './components/DepoSlipPrintModal';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzhXYZBlJvYarhEYpSK_UdceV-pQwGRIHTjWAVN_UTumI7_qla7vZnAZofdJGeK0e-ZVQ/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
 export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
