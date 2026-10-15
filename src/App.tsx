@@ -236,7 +236,9 @@ import {
   Save,
   Bell,
   Barcode,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Gauge,
+  Flame
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -247,6 +249,7 @@ import { TechnicalPublicationsModal } from './components/TechnicalPublicationsMo
 import { ExcelExportModal } from './components/ExcelExportModal';
 import { NewProductModal } from './components/NewProductModal';
 import { DepoManagementModal } from './components/DepoManagementModal';
+import KaraAraclariApp from './kara-araclari/KaraAraclariApp';
 import { KaraAraclariDocModal } from './components/KaraAraclariDocModal';
 import { DataSyncModal } from './components/DataSyncModal';
 import { AuditTrailModal } from './components/AuditTrailModal';
@@ -254,6 +257,7 @@ import { BakimYapildiModal } from './components/BakimYapildiModal';
 import { AuditLogEntry, DepoTransaction, VehicleDocument } from './types';
 import { DEFAULT_AT802_DATA } from './data/defaultTechizatData';
 import { unmergeAndFillWorksheet, groupMultiLocationRowsHelper, cleanAndFormatDateString, isHeaderLikeRow, detectHeaderRowIndex } from './utils/driveExcelSync';
+import { publishCrossSystemEvent } from './utils/crossSystemBridge';
 import { getAllHangarPdfDocs, saveHangarPdfDoc, deleteHangarPdfDoc, getHangarPdfDocById, syncHangarPdfDocsFromDrive, findMatchingDocs, isDocMatchingRow, normalizeDocKey, HangarPdfDoc, getFileCategory, getDocMimeType } from './utils/hangarPdfStorage';
 import { PdfPreviewModal } from './components/PdfPreviewModal';
 import { OlayTakipCizelgesiModal } from './components/OlayTakipCizelgesiModal';
@@ -261,7 +265,7 @@ import { BarkodOkuyucuModal } from './components/BarkodOkuyucuModal';
 import { GunTakipModal } from './components/GunTakipModal';
 import { DepoSlipPrintModal } from './components/DepoSlipPrintModal';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxCKs0JMpW5AMsHb2spwU2DGq_mSOwCkUkOSiokvE8a3SXmLgQMPJrSL6-012pszQfDXA/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
 export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
@@ -682,11 +686,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Durumu', label: 'Durumu' },
       { key: 'Aciklama', label: 'Açıklama' }
     ],
-    defaultRows: [
-      { Tarih: "2026-06-15", Personel_Adi_Soyadi: "Ahmet Yılmaz", Unvani_Gorevi: "Teknik Koordinatör", Gorev_Yeri: "Ankara Hangar 2", Durumu: "Aktif", Aciklama: "Bell 429 haftalık kontrol" },
-      { Tarih: "2026-06-16", Personel_Adi_Soyadi: "Mehmet Kaya", Unvani_Gorevi: "Baş Teknisyen", Gorev_Yeri: "Muğla Helikopter Üssü", Durumu: "Aktif", Aciklama: "At-802F Yangın Söndürme Sezonu Görevi" },
-      { Tarih: "2026-06-17", Personel_Adi_Soyadi: "Cem Şahin", Unvani_Gorevi: "Aviyonik Uzmanı", Gorev_Yeri: "Ankara Merkez", Durumu: "Planlandı", Aciklama: "T-70 telsiz bakım desteği" }
-    ]
+    defaultRows: []
   },
   21: {
     title: 'YAZ DÖNEMİ PLANLAMASI (BELL 429)',
@@ -700,10 +700,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Nobetci_Teknisyen', label: 'Nöbetçi Teknisyen' },
       { key: 'Yedek_Personel', label: 'Yedek Personel' }
     ],
-    defaultRows: [
-      { Donem_Hafta: "Haziran 1. Hafta", Baslangic_Tarihi: "2026-06-01", Bitis_Tarihi: "2026-06-07", Nobetci_Muhendis: "Ayşe Demir (Bell 429)", Nobetci_Teknisyen: "Ömer Faruk", Yedek_Personel: "Ali Vural" },
-      { Donem_Hafta: "Haziran 2. Hafta", Baslangic_Tarihi: "2026-06-08", Bitis_Tarihi: "2026-06-14", Nobetci_Muhendis: "Murat Tandoğan (Bell 429)", Nobetci_Teknisyen: "Veli Can", Yedek_Personel: "Burak Çelik" }
-    ]
+    defaultRows: []
   },
   22: {
     title: 'YAZ DÖNEMİ PLANLAMASI (T-70)',
@@ -717,10 +714,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Nobetci_Teknisyen', label: 'Nöbetçi Teknisyen' },
       { key: 'Yedek_Personel', label: 'Yedek Personel' }
     ],
-    defaultRows: [
-      { Donem_Hafta: "Haziran 1. Hafta", Baslangic_Tarihi: "2026-06-01", Bitis_Tarihi: "2026-06-07", Nobetci_Muhendis: "Hasan Yıldız (T-70)", Nobetci_Teknisyen: "Süleyman Ak", Yedek_Personel: "Selin Tan" },
-      { Donem_Hafta: "Haziran 2. Hafta", Baslangic_Tarihi: "2026-06-08", Bitis_Tarihi: "2026-06-14", Nobetci_Muhendis: "Cemil Pek (T-70)", Nobetci_Teknisyen: "Hakan Güler", Yedek_Personel: "Tuncay Yaman" }
-    ]
+    defaultRows: []
   },
   23: {
     title: 'YAZ DÖNEMİ PLANLAMASI (AT-802)',
@@ -734,10 +728,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Nobetci_Teknisyen', label: 'Nöbetçi Teknisyen' },
       { key: 'Yedek_Personel', label: 'Yedek Personel' }
     ],
-    defaultRows: [
-      { Donem_Hafta: "Haziran 1. Hafta", Baslangic_Tarihi: "2026-06-01", Bitis_Tarihi: "2026-06-07", Nobetci_Muhendis: "Mert Sökmen (AT-802)", Nobetci_Teknisyen: "Bülent Er", Yedek_Personel: "Yasin Kaya" },
-      { Donem_Hafta: "Haziran 2. Hafta", Baslangic_Tarihi: "2026-06-08", Bitis_Tarihi: "2026-06-14", Nobetci_Muhendis: "Fikret Şen (AT-802)", Nobetci_Teknisyen: "Selim Tok", Yedek_Personel: "Kadir Bal" }
-    ]
+    defaultRows: []
   },
   24: {
     title: 'ANKARA BEKLEME GÖREV PLANLAMASI (BELL 429)',
@@ -750,9 +741,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Pilot', label: 'Pilot' },
       { key: 'Teknisyen', label: 'Teknisyen' }
     ],
-    defaultRows: [
-      { Hafta_No: "1", Gorev_Periyodu: "7 Mayıs 2026", Gun: "5", Pilot: "Ahmet Yılmaz\nCem Şahin", Teknisyen: "Alper ÖZMETİN" }
-    ]
+    defaultRows: []
   },
   25: {
     title: 'ANKARA BEKLEME GÖREV PLANLAMASI (C-650/B-360)',
@@ -767,17 +756,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'B360_Pilot', label: 'B-360 Pilot' },
       { key: 'B360_Teknisyen', label: 'B-360 Teknisyen' }
     ],
-    defaultRows: [
-      { 
-        Hafta_No: "1", 
-        Gorev_Periyodu: "7 Mayıs 2026", 
-        Gun: "5", 
-        C650_Pilot: "Mahmut OKUDAN\nMurat AKMEŞE\nYılmaz MAMUNLUOĞLU\nCengiz ÖZDEMİR", 
-        C650_Teknisyen: "Ali ÖZKAVSAL\nUtku GÖKGÖZ\nAlper ÖZMETİN", 
-        B360_Pilot: "Aydın TÜTÜNCÜOĞLU\nAltan Alkan SÖZEN\nDevrim Ferhat ÇALIŞKAN\nAydemir TEZGEL\nSerkan KEBAPCI", 
-        B360_Teknisyen: "Aycan TAN\nÖmer ERSOY\nTezcan GÜZER\nHasan AKSOY\nFerhat ÖZCAN" 
-      }
-    ]
+    defaultRows: []
   },
   3: {
     title: 'BAKIM YETKİ ÇİZELGELERİ',
@@ -791,11 +770,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Yetki_Seviyesi', label: 'Yetki Seviyesi' },
       { key: 'Yetkilendirme_Tarihi', label: 'Yetkilendirme Tarihi' }
     ],
-    defaultRows: [
-      { Personel_Sicil_No: "SIC-1042", Adi_Soyadi: "Salih Bostan", Bransi: "Gövde Motor", Bulundugu_Hava_Araci_Tipi: "T-70", Yetki_Seviyesi: "Level 3 - Baş Denetçi", Yetkilendirme_Tarihi: "2024-03-12" },
-      { Personel_Sicil_No: "SIC-2195", Adi_Soyadi: "Zeynep Elmas", Bransi: "Aviyonik", Bulundugu_Hava_Araci_Tipi: "Bell 429", Yetki_Seviyesi: "Level 2 - Teknisyen", Yetkilendirme_Tarihi: "2025-05-20" },
-      { Personel_Sicil_No: "SIC-8841", Adi_Soyadi: "Kemal Sun", Bransi: "Sistem Bakım", Bulundugu_Hava_Araci_Tipi: "AT-802F", Yetki_Seviyesi: "Level 1 - Yardımcı", Yetkilendirme_Tarihi: "2026-01-10" }
-    ]
+    defaultRows: []
   },
   5: {
     title: 'PERSONEL BİLGİ ÇİZELGELERİ',
@@ -815,10 +790,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Yakinin_Adi_Soyadi', label: 'Yakının Adı-Soyadı' },
       { key: 'Es_Telefon_Numaralari', label: 'Eş Telefon Numaraları' }
     ],
-    defaultRows: [
-      { Sira_No: "1", Adi_Soyadi: "Mahmut OKUDAN", TC_Kimlik: "29122439024", Sicil_No: "45537", Kadro_Unvan_Gorev: "Pilot", Dogum_Tarihi: "27595", Gorev_Yeri: "OGM", Telefon_No: "533 3497446", Kan_Grubu: "A Rh+", Adres_Bilgisi: "Ankara Merkez", Yakinin_Adi_Soyadi: "Hatice OKUDAN (Eşi)", Es_Telefon_Numaralari: "533 3497447" },
-      { Sira_No: "2", Adi_Soyadi: "Rıfat ÖNAL", TC_Kimlik: "66577226922", Sicil_No: "45540", Kadro_Unvan_Gorev: "Pilot", Dogum_Tarihi: "24289", Gorev_Yeri: "HANGAR", Telefon_No: "530 656 3112", Kan_Grubu: "0 Rh+", Adres_Bilgisi: "Ankara Keçiören", Yakinin_Adi_Soyadi: "Selin ÖNAL (Eşi)", Es_Telefon_Numaralari: "530 656 3113" }
-    ]
+    defaultRows: []
   },
   6: {
     title: 'PERSONEL UÇUŞ-HİZMET YILLARI ÇİZELGESİ',
@@ -831,11 +803,7 @@ export const TABLE_CONFIGS: Record<number, TableConfig> = {
       { key: 'Toplam_Ucus_Saati', label: 'Toplam Uçuş Saati' },
       { key: 'Ucus_Tazminati_Durumu', label: 'Uçuş Tazminatı Durumu' }
     ],
-    defaultRows: [
-      { Adi_Soyadi: "Salih Bostan", Memuriyet_Baslangici: "2008-01-15", Toplam_Hizmet_Yili: "18", Toplam_Ucus_Saati: "1450", Ucus_Tazminati_Durumu: "Aktif / Ödeniyor" },
-      { Adi_Soyadi: "Zeynep Elmas", Memuriyet_Baslangici: "2014-06-01", Toplam_Hizmet_Yili: "12", Toplam_Ucus_Saati: "680", Ucus_Tazminati_Durumu: "Aktif / Ödeniyor" },
-      { Adi_Soyadi: "Kemal Sun", Memuriyet_Baslangici: "2019-10-10", Toplam_Hizmet_Yili: "7", Toplam_Ucus_Saati: "320", Ucus_Tazminati_Durumu: "Beklemede" }
-    ]
+    defaultRows: []
   },
   7: {
     title: 'DEPO SAYIM KAYITLARI',
@@ -886,6 +854,22 @@ const LiveClock = React.memo(() => {
 export default function App() {
   // Splash screen state
   const [splashVisible, setSplashVisible] = useState(true);
+
+  // Focus-mode injected styles
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.innerHTML = `
+      div#root:nth-of-type(1) > div:nth-of-type(1) > div#system-modal:nth-of-type(3) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > button:nth-of-type(1) > div:nth-of-type(2) > button:nth-of-type(1) {
+        font-weight: 800 !important;
+        color: #10b981 !important;
+      }
+      div#root:nth-of-type(1) > div:nth-of-type(1) > div#system-modal:nth-of-type(3) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(3) > div:nth-of-type(2) > table:nth-of-type(1) > tbody:nth-of-type(1) > tr:nth-of-type(1) > td:nth-of-type(1) {
+        background-color: #ecfdf5 !important;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => { document.head.removeChild(style); };
+  }, []);
 
   // Mobile detection with debounced listener
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -2113,6 +2097,8 @@ export default function App() {
   const [isTechPubsOpen, setIsTechPubsOpen] = useState<boolean>(false);
   const [isOlayTakipOpen, setIsOlayTakipOpen] = useState<boolean>(false);
   const [olayTakipInitialUnit, setOlayTakipInitialUnit] = useState<string>('at802');
+  const [olayTakipInitialSheet, setOlayTakipInitialSheet] = useState<string>('Ng Limit Aşımları Detayı');
+  const [olayTakipAutoOpenMvp, setOlayTakipAutoOpenMvp] = useState<boolean>(false);
   const [isBarkodOkuyucuOpen, setIsBarkodOkuyucuOpen] = useState<boolean>(false);
   const [barkodOkuyucuInitialUnit, setBarkodOkuyucuInitialUnit] = useState<string>('at802');
 
@@ -2437,226 +2423,122 @@ export default function App() {
 
   // States for each of the categories
   const [techizatBell429Columns, setTechizatBell429Columns] = useState<string[]>(() => {
-    const saved = localStorage.getItem('excel_techizat_bell429_cols');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.map((col: string) => {
-          if (col === "SON BAKIM" || col === "SON KONTROL" || col === "SON KONTROL / BAKIM") return "SON KONTROL / KALİBRASYON / BAKIM";
-          if (col === "GELECEK BAKIM" || col === "GELECEK KONTROL" || col === "GELECEK KONTROL / BAKIM") return "GELECEK KONTROL / KALİBRASYON / BAKIM";
-          return col;
-        });
-      } catch (e) { console.error(e); }
-    }
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_bell429_data') || localStorage.getItem('excel_techizat_bell429_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatBell429Data, setTechizatBell429Data] = useState<string[][]>(() => []);
 
   const [techizatAt802Columns, setTechizatAt802Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_at802_data') || localStorage.getItem('excel_techizat_at802_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatAt802Data, setTechizatAt802Data] = useState<string[][]>(() => []);
 
   const [techizatAt802OzelAletColumns, setTechizatAt802OzelAletColumns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatAt802OzelAletData, setTechizatAt802OzelAletData] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_at802_ozel_alet_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatAt802OzelAletData, setTechizatAt802OzelAletData] = useState<string[][]>(() => []);
 
   const [techizatT70Columns, setTechizatT70Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70Data, setTechizatT70Data] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_t70_data') || localStorage.getItem('excel_techizat_t70_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatT70Data, setTechizatT70Data] = useState<string[][]>(() => []);
 
   const [techizatT70BumbiBacketColumns, setTechizatT70BumbiBacketColumns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_t70_bumbi_backet_data') || localStorage.getItem('excel_techizat_t70_bumbi_backet_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatT70BumbiBacketData, setTechizatT70BumbiBacketData] = useState<string[][]>(() => []);
 
   const [techizatT70HelitakColumns, setTechizatT70HelitakColumns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "MODEL / TİP", "SERİ NO (S/N)", "KAPASİTE", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatT70HelitakData, setTechizatT70HelitakData] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_t70_helitak_data') || localStorage.getItem('excel_techizat_t70_helitak_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatT70HelitakData, setTechizatT70HelitakData] = useState<string[][]>(() => []);
 
   const [techizatB360Columns, setTechizatB360Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatB360Data, setTechizatB360Data] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_b360_data') || localStorage.getItem('excel_techizat_b360_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatB360Data, setTechizatB360Data] = useState<string[][]>(() => []);
 
   const [techizatC650Columns, setTechizatC650Columns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
   });
-  const [techizatC650Data, setTechizatC650Data] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_c650_data') || localStorage.getItem('excel_techizat_c650_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatC650Data, setTechizatC650Data] = useState<string[][]>(() => []);
 
   const [techizatHangarColumns, setTechizatHangarColumns] = useState<string[]>(() => {
     return ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", "BAKIMA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ", "BELGE YÜKLE"];
   });
-  const [techizatHangarData, setTechizatHangarData] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('techizat_hangar_data') || localStorage.getItem('excel_techizat_hangar_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch(e) {}
-    return [];
-  });
+  const [techizatHangarData, setTechizatHangarData] = useState<string[][]>(() => []);
 
   const [techizatKaraAraclariColumns, setTechizatKaraAraclariColumns] = useState<string[]>(() => {
     return [
-      "SIRA NO", 
-      "ARAÇ PLAKASI / TANIMI", 
-      "MARKA", 
-      "MODEL", 
-      "YAKIT TÜRÜ", 
-      "BULUNDUĞU YER", 
-      "SON KM Sİ", 
-      "DURUMU", 
-      "BAKIMA TABİ", 
-      "SON KONTROL / KALİBRASYON / BAKIM", 
-      "GELECEK KONTROL / KALİBRASYON / BAKIM", 
-      "SON KONTROLÜ YAPAN FİRMA", 
-      "AÇIKLAMA", 
-      "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+      "Sıra No",
+      "Araç Plaka",
+      "Marka",
+      "Model",
+      "Yakıt Türü",
+      "Son Bakım Km",
+      "DURUMU",
+      "Bakım Tarihi",
+      "Sonraki Bakım Tarihi yada KM'si",
+      "SON KONTROLÜ YAPAN FİRMA",
+      "AÇIKLAMA"
     ];
   });
-  const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>(() => {
-    try {
-      const stored = localStorage.getItem('excel_techizat_kara_araclari_data') || localStorage.getItem('techizat_kara_araclari_data');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (e) { console.error(e); }
-    return [
-      ["1", "06 CUK 695", "FORD", "RANGER 4x4", "Dizel", "ANKARA", "124500", "FAAL", "EVET", "15.01.2025", "15.01.2026", "FORD YETKİLİ SERVİS", "Periyodik bakım yapıldı", ""],
-      ["2", "06 FV 2359", "TOYOTA", "HILUX 4x4", "Dizel", "ANTALYA", "158200", "FAAL", "EVET", "10.02.2025", "10.02.2026", "TOYOTA PLAZA", "Genel kontrol ve periyodik servis", ""],
-      ["3", "06 OGM 1001", "ISUZU", "D-MAX", "Dizel", "İZMİR", "4500", "FAAL", "EVET", "05.03.2025", "05.03.2026", "ISUZU SERVİS", "Rutin muayene", ""],
-      ["4", "06 OGM 1002", "FORD", "TRANSIT CUSTOM", "Dizel", "MUĞLA", "18200", "FAAL", "EVET", "20.01.2025", "20.01.2026", "FORD OTO", "Yağ filtre bakımı", ""],
-      ["5", "06 OGM 1003", "MERCEDES-BENZ", "SPRINTER", "Dizel", "ADANA", "9400", "FAAL", "EVET", "18.02.2025", "18.02.2026", "MERCEDES HAS", "10.000 KM periyodik servis", ""],
-      ["6", "06 OGM 1004", "RENAULT", "DUSTER 4x4", "Benzin", "ANKARA", "3200", "FAAL", "EVET", "12.04.2025", "12.04.2026", "MAİS ANKARA", "İlk rodaj muayene", ""]
-    ];
-  });
+  const [techizatKaraAraclariData, setTechizatKaraAraclariData] = useState<string[][]>(() => []);
 
   const convertOldKaraAraclariRowToNew = (row: string[]): string[] => {
-    const isOldFormat = row.length >= 11 && (row[6] === "FAAL" || row[6] === "ARIZALI" || row[6] === "FAAL DEĞİL" || row[6] === "GAYRİ FAAL");
-    if (!isOldFormat) {
-      const r = [...row];
-      while (r.length < 11) r.push("");
-      return r.slice(0, 11);
-    }
+    const r = [...row];
+    while (r.length < 11) r.push("");
     
-    const SIRA_NO = row[0] || "";
-    const PLAKA = row[1] || "";
-    const MODEL = row[3] || row[2] || ""; 
-    const YER = row[5] || "";
-    
-    let km = "";
-    let aciklama = row[10] || "";
-    if (row[10] && !isNaN(Number(row[10].trim()))) {
-      km = row[10].trim();
-      aciklama = "Dönüş KM: " + km;
-    } else {
-      if (PLAKA.includes("CUK 695")) km = "124500";
-      else if (PLAKA.includes("FV 2359")) km = "158200";
-      else if (PLAKA.includes("1001")) km = "4500";
-      else if (PLAKA.includes("1002")) km = "18200";
-      else if (PLAKA.includes("1003")) km = "9400";
-      else if (PLAKA.includes("1004")) km = "3200";
-    }
-    
-    const DURUM = row[6] || "";
-    const SON_BAKIM = row[7] || "";
-    const GELECEK_BAKIM = row[8] || "";
-    const FIRMA = row[9] || "";
-    const MAIL = row[11] || "";
+    let siraNo = r[0] || "";
+    let plaka = r[1] || "";
+    let marka = r[2] || "-";
+    let model = r[3] || "";
+    let yakit = r[4] || "";
+    let km = r[5] || "-";
+    let durum = r[6] || "FAAL";
+    let bakimTarihi = r[7] || "";
+    let sonrakiBakim = r[8] || "";
+    let firma = r[9] || "-";
+    let aciklama = r[10] || "";
 
-    return [
-      SIRA_NO,
-      PLAKA,
-      MODEL,
-      YER,
-      km,
-      DURUM,
-      SON_BAKIM,
-      GELECEK_BAKIM,
-      FIRMA,
-      aciklama,
-      MAIL
-    ];
+    // Self-healing: Case 1
+    if (marka === "Hilux 4x4") {
+      marka = "Toyota";
+      model = "Hilux 4x4";
+    } else if (marka === "Axor 3340") {
+      marka = "Mercedes";
+      model = "Axor 3340";
+    } else if (marka === "Forklift 3 Tonluk") {
+      marka = "Bobcat";
+      model = "Forklift 3 Tonluk";
+    } else if (marka === "Mazot Römork" || marka === "Benzin Römork" || marka === "Traktör" || marka === "Timsan çekici" || marka === "Eagle Çekici") {
+      model = marka;
+      marka = "-";
+    }
+
+    // Self-healing: Case 2
+    const isNumericModel = /^\d+$/.test(model);
+    if (isNumericModel) {
+      const numericVal = model;
+      if (km === "-" || km === "" || km === "Mazot" || km === "Benzin" || !/^\d+$/.test(km)) {
+        km = numericVal;
+      }
+      const pClean = plaka.replace(/\s+/g, "").toUpperCase();
+      if (pClean.includes("CUK695") || marka === "Toyota" || marka === "Hilux") {
+        marka = "Toyota";
+        model = "Hilux 4x4";
+      } else if (pClean.includes("FV2359") || marka === "Mercedes" || marka === "Axor") {
+        marka = "Mercedes";
+        model = "Axor 3340";
+      } else {
+        model = "-";
+      }
+    }
+
+    if (/^\d+$/.test(yakit)) {
+      yakit = "Mazot";
+    }
+
+    return [siraNo, plaka, marka, model, yakit, km, durum, bakimTarihi, sonrakiBakim, firma, aciklama];
   };
 
   const lastPopulatedPlaka = useRef<string>("");
@@ -2691,8 +2573,12 @@ export default function App() {
     setModalOpen(true);
     setTechizatSearchQuery('');
     setActiveTechizatMatchIdx(0);
-    // Google Drive'dan tam dosya adı eşleştirmesi ile canlı senkronizasyon
-    pullTechizatUnitFromDrive(actualType, true);
+    // Veriler ARA butonuna basılmadan önce asla gösterilmez, sıfırdan boş başlar
+    if (actualType === 'at802') {
+      setTechizatAt802Data([]);
+    } else if (actualType === 'at802_ozel_alet') {
+      setTechizatAt802OzelAletData([]);
+    }
   };
 
   // Open Depo Management Modal directly in the main system
@@ -2721,7 +2607,7 @@ export default function App() {
 
   const [depoTransactions, setDepoTransactions] = useState<DepoTransaction[]>(() => {
     try {
-      const saved = localStorage.getItem('ogm_depo_transfers_v5') || localStorage.getItem('form_7_sayimlar_txs');
+      const saved = localStorage.getItem('ogm_depo_transfers_v5');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -2815,6 +2701,7 @@ export default function App() {
     const targetKey = storageKeyMap[targetUnit];
 
     if (targetSetter && targetKey) {
+      recordTechizatUpdate(targetUnit);
       targetSetter(prev => {
         const nextIndex = prev.length + 1;
         const rowWithIndex = [...formattedRow];
@@ -2981,8 +2868,7 @@ export default function App() {
         !!lastRow &&
         (
           isNameEmptyOrDash ||
-          (isSameName && (isSamePn || !rawPn || !lastPn)) ||
-          (isSameSira && (isSamePn || isSameName))
+          (isSameSira && (isSamePn || isSameName || !rawPn))
         );
 
       if (isSubLocation && lastRow) {
@@ -3067,19 +2953,17 @@ export default function App() {
     ];
 
     const localKaraCols = [
-      "SIRA NO", 
-      "ARAÇ PLAKASI / TANIMI", 
-      "MARKA", 
-      "PARÇA NO (P/N) / MODEL", 
-      "BULUNDUĞU YER", 
-      "SON KM Sİ", 
-      "DURUMU", 
-      "BAKIMA TABİ", 
-      "SON KONTROL / KALİBRASYON / BAKIM", 
-      "GELECEK KONTROL / KALİBRASYON / BAKIM", 
-      "SON KONTROLÜ YAPAN FİRMA", 
-      "AÇIKLAMA", 
-      "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+      "Sıra No",
+      "Araç Plaka",
+      "Marka",
+      "Model",
+      "Yakıt Türü",
+      "Son Bakım Km",
+      "DURUMU",
+      "Bakım Tarihi",
+      "Sonraki Bakım Tarihi yada KM'si",
+      "SON KONTROLÜ YAPAN FİRMA",
+      "AÇIKLAMA"
     ];
 
     if (modalType === 'techizat_matrix' && activeTechizatType) {
@@ -4396,10 +4280,14 @@ export default function App() {
   }, [selectedFormId, selectedSummerMonth, pdfMetadataList]);
 
   // Google Drive klasöründen teçhizat resimlerini listeler ve senkronize eder
+  // Google Drive klasöründen teçhizat resimlerini listeler ve senkronize eder
   const fetchImagesFromDrive = async () => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
       const targetUrl = `${GOOGLE_SCRIPT_URL}?action=listImagesFromDrive`;
-      const response = await fetch(targetUrl);
+      const response = await fetch(targetUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (response.ok) {
         const result = await response.json();
         if (result && result.status === "success" && result.images) {
@@ -4410,8 +4298,12 @@ export default function App() {
           });
         }
       }
-    } catch (error) {
-      console.error("Resim senkronizasyon hatası:", error);
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.warn("Resim senkronizasyon zaman aşımına uğradı.");
+      } else {
+        console.error("Resim senkronizasyon hatası:", error);
+      }
     }
   };
 
@@ -4444,8 +4336,11 @@ export default function App() {
   // Google E-Tablo üzerindeki 'güncelleme tarihleri' sayfasından son senkronizasyon zamanlarını çeker
   const fetchUpdateDatesFromGoogleSheet = async () => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
       const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("güncelleme tarihleri")}`;
-      const response = await fetch(targetUrl);
+      const response = await fetch(targetUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (response.ok) {
         const result = await response.json();
         if (result && result.status === "success" && Array.isArray(result.data)) {
@@ -4528,8 +4423,12 @@ export default function App() {
           });
         }
       }
-    } catch (e) {
-      console.error("Failed to fetch update dates from Google Sheet:", e);
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        console.warn("Güncelleme tarihleri fetch zaman aşımına uğradı.");
+      } else {
+        console.error("Failed to fetch update dates from Google Sheet:", e);
+      }
     }
   };
 
@@ -4558,6 +4457,20 @@ export default function App() {
     });
   };
 
+  const getFormattedTimestamp = () => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  };
+
+  const recordTechizatUpdate = (uKey: string) => {
+    const ts = getFormattedTimestamp();
+    setFormUpdateDates(prev => {
+      const next = { ...prev, [`techizat_${uKey}`]: ts };
+      try { localStorage.setItem('form_update_dates', JSON.stringify(next)); } catch(e){}
+      return next;
+    });
+  };
   const getDetailedSummerUpdateInfo = () => {
     // 1. Get all summer PDFs from pdfMetadataList
     const summerPdfs = pdfMetadataList.filter(m => {
@@ -4960,18 +4873,29 @@ export default function App() {
   // Google Apps Script üzerinden tüm e-tablo sayfalarını ve gid kodlarını çeker
   const fetchAllGoogleSheetsList = async () => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       const targetUrl = `${GOOGLE_SCRIPT_URL}?action=getSheets`;
-      const response = await fetch(targetUrl);
+      const response = await fetch(targetUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
       if (response.ok) {
         const result = await response.json();
         if (result && result.sheets) {
           setAllOnlineSheets(result.sheets);
         }
+      } else {
+        console.error("Sheets info fetch failed: Server returned", response.status);
       }
       await fetchPdfMetadata();
       await fetchUpdateDatesFromGoogleSheet();
-    } catch (e) {
-      console.error("Sheets info fetch failed:", e);
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        console.error("Sheets info fetch failed: Request timed out");
+      } else {
+        console.error("Sheets info fetch failed: Network or server error", e);
+      }
     }
   };
 
@@ -4998,60 +4922,8 @@ export default function App() {
     }
   };
 
-  // Core sheets data hooks (initialized from localStorage with dynamic header mapping)
-  const [tableData, setTableData] = useState<Record<number, Record<string, string>[]>>(() => {
-    const initial: Record<number, Record<string, string>[]> = {};
-    [1, 21, 22, 23, 24, 25, 3, 5, 6].forEach(id => {
-      const config = TABLE_CONFIGS[id];
-      const saved = localStorage.getItem(config.storageKey);
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            // Normalize: map code-friendly keys like 'Personel_Adi_Soyadi' to Turkish labels like 'Personel Adı Soyadı'
-            initial[id] = parsed.map((r: any) => {
-              const item: Record<string, string> = {};
-              // First translate defined columns
-              config.columns.forEach(col => {
-                const value = r[col.label] ?? r[col.key] ?? "";
-                item[col.label] = String(value);
-              });
-              // Then also retain any other custom keys present in the parsed data (from direct spreadsheet uploads)
-              Object.keys(r).forEach(k => {
-                if (!item[k] && !config.columns.some(col => col.key === k)) {
-                  item[k] = String(r[k]);
-                }
-              });
-              return item;
-            });
-          } else {
-            throw new Error("Not an array");
-          }
-        } catch (e) {
-          // Initialize from default rows, mapping keys to friendly labels
-          initial[id] = config.defaultRows.map(r => {
-            const item: Record<string, string> = {};
-            config.columns.forEach(col => {
-              item[col.label] = r[col.key] || "";
-            });
-            return item;
-          });
-        }
-      } else {
-        // First load: map default rows to beautiful user friendly headers
-        const initialRows = config.defaultRows.map(r => {
-          const item: Record<string, string> = {};
-          config.columns.forEach(col => {
-            item[col.label] = r[col.key] || "";
-          });
-          return item;
-        });
-        initial[id] = initialRows;
-        localStorage.setItem(config.storageKey, JSON.stringify(initialRows));
-      }
-    });
-    return initial;
-  });
+  // Core sheets data hooks
+  const [tableData, setTableData] = useState<Record<number, Record<string, string>[]>>({});
 
   // Dynamically extract current table column headers (first row's keys)
   const getFormColumns = (formId: number): string[] => {
@@ -5088,9 +4960,9 @@ export default function App() {
     fetchPdfMetadata();
     fetchImagesFromDrive();
     fetchUpdateDatesFromGoogleSheet();
-    pullAllTechizatFromGoogleSheets(true);
-    pullDataFromGoogleSheets(5, true);
-    pullKaraAraclariGorevEmirleri();
+    // Veriler başlangıçta çekilmez, kullanıcı ARA butonuna basınca Drive'dan canlı çekilir
+    // pullDataFromGoogleSheets(5, true);
+    // pullKaraAraclariGorevEmirleri();
     getAllHangarPdfDocs().then(docs => {
       if (Array.isArray(docs) && docs.length > 0) {
         setHangarPdfDocs(docs);
@@ -5408,70 +5280,26 @@ export default function App() {
 
   const formatKaraAraclariRow = (row: string[]) => {
     const r = [...row];
-    // Handle upgrade from 12-column to 13-column (insertion of MARKA)
-    if (r.length <= 12) {
-      const col6 = (r[6] || "").trim().toUpperCase();
-      const col7 = (r[7] || "").trim().toUpperCase();
-      if ((col6 === "EVET" || col6 === "HAYIR") && (col7 !== "EVET" && col7 !== "HAYIR")) {
-        const combinedText = `${r[1] || ''} ${r[2] || ''}`.toUpperCase();
-        let guessedMarka = "-";
-        if (combinedText.includes("FORD")) guessedMarka = "FORD";
-        else if (combinedText.includes("TOYOTA")) guessedMarka = "TOYOTA";
-        else if (combinedText.includes("ISUZU")) guessedMarka = "ISUZU";
-        else if (combinedText.includes("MERCEDES")) guessedMarka = "MERCEDES";
-        else if (combinedText.includes("FIAT")) guessedMarka = "FIAT";
-        else if (combinedText.includes("RENAULT")) guessedMarka = "RENAULT";
-        else if (combinedText.includes("VOLKSWAGEN") || combinedText.includes("VW")) guessedMarka = "VOLKSWAGEN";
-        
-        r.splice(2, 0, guessedMarka);
-      }
-    }
-
-    const col7Upper = (r[7] || "").trim().toUpperCase();
-    if (col7Upper !== "EVET" && col7Upper !== "HAYIR") {
-      r.splice(7, 0, "EVET");
-    }
-    while (r.length < 13) {
+    while (r.length < 11) {
       r.push("");
     }
-    // Clean up 90 gun mail column (index 12)
-    const mailVal = String(r[12] || "").trim().toLowerCase();
-    if (mailVal === 'kara_araclari' || mailVal === 'yer_destek' || mailVal === '-' || mailVal === '--' || mailVal.includes('belirtilme')) {
-      r[12] = "";
-    }
-    return r.slice(0, 13);
+    return r.slice(0, 11);
   };
 
   const formatKaraAraciToStandardRow = (row: string[]) => {
     const r = formatKaraAraclariRow(row);
-    const sira = r[0];
-    const plaka = r[1];
-    const marka = r[2];
-    const model = r[3];
-    const yer = r[4];
-    const km = r[5] ? `${r[5]} KM` : "";
-    const durum = r[6];
-    const kalibrasyonTabi = r[7];
-    const sonBakim = r[8];
-    const gelecekBakim = r[9];
-    const firma = r[10];
-    const aciklama = r[11];
-    const mail = r[12];
-    
     return [
-      sira,
-      plaka,
-      marka !== "-" ? `${marka} ${model}`.trim() : model,
-      km, 
-      "1", 
-      yer,
-      durum,
-      kalibrasyonTabi,
-      sonBakim,
-      gelecekBakim,
-      firma,
-      aciklama,
-      mail
+      r[0] || "1",
+      r[1] || "",
+      r[2] || "-",
+      r[3] || "",
+      r[4] || "-",
+      r[5] || "FAAL",
+      r[6] || "-",
+      r[7] || "-",
+      r[8] || "-",
+      r[9] || "-",
+      r[10] || ""
     ];
   };
 
@@ -5527,7 +5355,19 @@ export default function App() {
         let fileName = techizatFileNames[`${techType}_${subSec}`] || fallbackFileName;
 
         const headers = techType === 'kara_araclari'
-          ? ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "MARKA", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "BAKIMA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"]
+          ? [
+              "Sıra No",
+              "Araç Plaka",
+              "Marka",
+              "Model",
+              "Yakıt Türü",
+              "Son Bakım Km",
+              "DURUMU",
+              "Bakım Tarihi",
+              "Sonraki Bakım Tarihi yada KM'si",
+              "SON KONTROLÜ YAPAN FİRMA",
+              "AÇIKLAMA"
+            ]
           : (subSec === 'depo_sarf' || subSec === 'depo_kimyasal')
             ? ["SIRA NO", "MALZEME / PARÇA ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER", "DURUMU", "ÖMÜRLÜ PARÇA MI?", "ÖMÜR BİTİŞ TARİHİ", "TEDARİK EDİLEN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"]
             : ["SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)", "MİKTAR / KAPASİTE", "BULUNDUĞU YER", "DURUMU", (techType === 'hangar' ? "BAKIMA TABİ" : "KALİBRASYONA TABİ"), "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"];
@@ -6515,7 +6355,7 @@ export default function App() {
 
         const getVal = (idx: number, fallback = "") => {
           if (idx >= 0 && rawRow[idx] !== undefined && rawRow[idx] !== null) {
-            const valStr = String(rawRow[idx]).trim();
+            const valStr = String(rawRow[idx]).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
             if (valStr !== "") return valStr;
           }
           return fallback;
@@ -6552,20 +6392,60 @@ export default function App() {
 
         let targetRow: string[] = [];
         if (isKara) {
-          targetRow = [
-            rawSira,                                      // 0: SIRA NO (boş ise boş kalsın, gruplamada ardışık atanır)
-            rawName,                                      // 1: ARAÇ PLAKASI / TANIMI
-            rawPn,                                        // 2: PARÇA NO (P/N) / MODEL
-            rawLoc,                                       // 3: BULUNDUĞU YER
-            rawMiktar || rawSonBakim || "",               // 4: SON KM Sİ
-            rawDurum || "FAAL",                           // 5: DURUMU
-            rawSonBakim,                                  // 6: SON KONTROL
-            rawGelecekBakim,                              // 7: GELECEK KONTROL
-            rawFirma,                                     // 8: FİRMA
-            rawAciklama,                                  // 9: AÇIKLAMA
-            rawMail,                                      // 10: MAIL TARIHI
-            subSection !== 'all' ? subSection : 'kara_araclari' // 11: KATEGORİ
+          const karaSiraIdx = findColIdx(["SIRA NO", "SIRA", "S.N.", "NO."]);
+          const karaPlakaIdx = findColIdx(["ARAÇ PLAKA", "ARAC PLAKA", "PLAKA", "ARAÇ PLAKASI"]);
+          const karaMarkaIdx = findColIdx(["MARKA"]);
+          const karaModelIdx = findColIdx(["MODEL", "TİP", "TIP"]);
+          const karaYakitIdx = findColIdx(["YAKIT TÜRÜ", "YAKIT TURU", "YAKIT", "BENZİN", "BENZIN", "MAZOT", "DİZEL", "DIZEL"]);
+          const karaKmIdx = findColIdx(["SON BAKIM KM", "SON BAKIM", "KM Sİ", "KM SI", "SON KM", "KM"]);
+          const karaDurumIdx = findColIdx(["DURUM", "DURUMU"]);
+          const karaBakimTarihiIdx = findColIdx(["BAKIM TARİHİ", "BAKIM TARIHI"], ["SONRAKİ", "SONRAKI", "GELECEK"]);
+          const karaSonrakiBakimIdx = findColIdx(["SONRAKİ BAKIM TARİHİ", "SONRAKI BAKIM TARIHI", "SONRAKİ BAKIM", "SONRAKI BAKIM", "GELECEK BAKIM", "SONRAKİ", "SONRAKI", "GELECEK"]);
+          const karaFirmaIdx = findColIdx(["SON KONTROLÜ YAPAN", "SON KONTROLU YAPAN", "YAPAN FİRMA", "YAPAN FIRMA", "FİRMA", "FIRMA", "SERVİS", "MÜDÜRLÜĞÜ"]);
+          const karaAciklamaIdx = findColIdx(["AÇIKLAMA", "ACIKLAMA", "NOT"]);
+
+          const hasSiraInExcel = karaSiraIdx >= 0 && (karaPlakaIdx > karaSiraIdx || karaPlakaIdx < 0);
+          const pIdx = karaPlakaIdx >= 0 ? karaPlakaIdx : (hasSiraInExcel ? 1 : 0);
+          const mIdx = karaMarkaIdx >= 0 ? karaMarkaIdx : (hasSiraInExcel ? 2 : 1);
+          const moIdx = karaModelIdx >= 0 ? karaModelIdx : (hasSiraInExcel ? 3 : 2);
+          const yIdx = karaYakitIdx >= 0 ? karaYakitIdx : (hasSiraInExcel ? 4 : 3);
+          const dIdx = karaDurumIdx >= 0 ? karaDurumIdx : (hasSiraInExcel ? 5 : 4);
+          const kIdx = karaKmIdx >= 0 ? karaKmIdx : (hasSiraInExcel ? 6 : 5);
+          const btIdx = karaBakimTarihiIdx >= 0 ? karaBakimTarihiIdx : (hasSiraInExcel ? 7 : 6);
+          const sbtIdx = karaSonrakiBakimIdx >= 0 ? karaSonrakiBakimIdx : (hasSiraInExcel ? 8 : 7);
+          const fIdx = karaFirmaIdx >= 0 ? karaFirmaIdx : (hasSiraInExcel ? 9 : 8);
+          const aIdx = karaAciklamaIdx >= 0 ? karaAciklamaIdx : (hasSiraInExcel ? 10 : 9);
+
+          let rawSiraVal = getVal(karaSiraIdx, "");
+          let rawPlakaVal = getVal(pIdx, "");
+          let rawMarkaVal = getVal(mIdx, "-");
+          let rawModelVal = getVal(moIdx, "");
+          let rawYakitVal = getVal(yIdx, "");
+          let rawDurumVal = getVal(dIdx, "FAAL") || "FAAL";
+          let rawKmVal = getVal(kIdx, "-");
+          let rawBakimTarihiVal = cleanAndFormatDateString(getVal(btIdx, ""));
+          let rawSonrakiBakimVal = cleanAndFormatDateString(getVal(sbtIdx, ""));
+          let rawFirmaVal = getVal(fIdx, "");
+          let rawAciklamaVal = getVal(aIdx, "");
+
+          const targetRow = [
+            rawSiraVal,
+            rawPlakaVal,
+            rawMarkaVal,
+            rawModelVal,
+            rawYakitVal,
+            rawDurumVal,
+            rawKmVal,
+            rawBakimTarihiVal,
+            rawSonrakiBakimVal,
+            rawFirmaVal,
+            rawAciklamaVal
           ];
+
+          if (rawPlakaVal || rawMarkaVal || rawModelVal || rawAciklamaVal || rawKmVal) {
+            rawParsedRows.push(targetRow);
+          }
+          continue;
         } else if (isDepoType) {
           targetRow = [
             rawSira,                                      // 0: SIRA NO
@@ -6606,14 +6486,22 @@ export default function App() {
         }
       }
 
+      if (isKara) {
+        return rawParsedRows.map((row, idx) => {
+          const r = [...row];
+          r[0] = String(idx + 1);
+          return r;
+        });
+      }
+
       return groupMultiLocationRows(
         rawParsedRows,
         1,
-        isKara ? 3 : 5,
-        isKara ? -1 : 4,
+        5,
+        4,
         0,
         2,
-        isKara ? -1 : 3
+        3
       );
     } catch (e) {
       console.error("Excel parse error for " + techType, e);
@@ -6674,7 +6562,7 @@ export default function App() {
 
     let updater: (prev: string[][]) => string[][];
 
-    if (subSection === 'all') {
+    if (techType === 'at802' || techType === 'at802_ozel_alet' || subSection === 'all') {
       updater = () => newRows;
     } else {
       updater = (prev) => {
@@ -6698,25 +6586,25 @@ export default function App() {
     }
 
     if (techType === 'at802_ozel_alet' || (techType === 'at802' && subSection === 'ozel_alet')) {
-      setTechizatAt802OzelAletData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_at802_ozel_alet_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatAt802OzelAletData(prev => updater(prev));
     } else if (techType === 'bell429') {
-      setTechizatBell429Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_bell429_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatBell429Data(prev => updater(prev));
     } else if (techType === 'at802') {
-      setTechizatAt802Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_at802_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatAt802Data(prev => updater(prev));
     } else if (techType === 't70') {
-      setTechizatT70Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_t70_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatT70Data(prev => updater(prev));
     } else if (techType === 't70_bumbi_backet') {
-      setTechizatT70BumbiBacketData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_t70_bumbi_backet_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatT70BumbiBacketData(prev => updater(prev));
     } else if (techType === 't70_helitak') {
-      setTechizatT70HelitakData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_t70_helitak_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatT70HelitakData(prev => updater(prev));
     } else if (techType === 'b360') {
-      setTechizatB360Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_b360_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatB360Data(prev => updater(prev));
     } else if (techType === 'c650') {
-      setTechizatC650Data(prev => { const res = updater(prev); try { localStorage.setItem('techizat_c650_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatC650Data(prev => updater(prev));
     } else if (techType === 'hangar') {
-      setTechizatHangarData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_hangar_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatHangarData(prev => updater(prev));
     } else if (techType === 'kara_araclari') {
-      setTechizatKaraAraclariData(prev => { const res = updater(prev); try { localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(res)); } catch(e){} return res; });
+      setTechizatKaraAraclariData(prev => updater(prev));
     }
   };
 
@@ -6737,25 +6625,62 @@ export default function App() {
         kara_araclari: 'kara_araclari_servis_cizelgesi.xlsx'
       };
 
-      const keysToFetch: string[] = (targetUnitKey && targetUnitKey !== 'all')
-        ? [targetUnitKey]
-        : Object.keys(UNIT_EXCEL_MAP);
+      const UNIT_FILE_IDS: Record<string, string> = {
+        at802: '1PY6ZHqBS5iELDHBZX-wUdOeyUNkqbSf3',
+        at802_ozel_alet: '1idYaGtP9-4zMnUP9R28yHZwd47gy_QL8',
+        bell429: '1oICd57xCIGHza96IrWfOBCh1p5jTv3mB',
+        t70: '1xDxoQPBpKIWTvbAhcMv7cUsdTtKHxwkJ',
+        t70_bumbi_backet: '1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q',
+        b360: '1_oxUU31nloWuKb9dMOOU8Q8XfvD4iAkz',
+        c650: '1BRvs2LxZ21BMl3YRjKL1rtMzli9J5Kuf',
+        hangar: '1-KGVWi0EN5UnI0NEC_EC3-zORYHsbqvu'
+      };
+
+      let keysToFetch: string[] = [];
+      if (targetUnitKey === 'at802' || targetUnitKey === 'at802_ozel_alet') {
+        keysToFetch = ['at802', 'at802_ozel_alet'];
+      } else if (targetUnitKey && targetUnitKey !== 'all') {
+        keysToFetch = [targetUnitKey];
+      } else {
+        keysToFetch = Object.keys(UNIT_EXCEL_MAP);
+      }
 
       let totalLoadedCount = 0;
 
       await Promise.all(keysToFetch.map(async (uKey) => {
         const targetFileName = UNIT_EXCEL_MAP[uKey] || `hava_araçları_yer_destek_${uKey}.xlsx`;
+        const explicitFileId = UNIT_FILE_IDS[uKey] || '';
         try {
-          const res = await fetch('/api/read-excel-from-drive', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fileName: targetFileName,
-              folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
-            })
-          });
-          if (!res.ok) return;
-          const result = await res.json();
+          let result: any = null;
+          // 1. Local backend proxy'yi dene
+          try {
+            const res = await fetch('/api/read-excel-from-drive', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fileName: targetFileName,
+                fileId: explicitFileId,
+                folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
+              })
+            });
+            if (res.ok) {
+              result = await res.json();
+            }
+          } catch (e) {}
+
+          // 2. Netlify / Static ortamda doğrudan Google Apps Script GET isteği ile oku (CORS problemsiz)
+          if (!result || result.status !== 'success' || !result.base64) {
+            try {
+              const gasUrl = `${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileName=${encodeURIComponent(targetFileName)}&folderId=1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP&t=${Date.now()}`;
+              const gasRes = await fetch(gasUrl);
+              if (gasRes.ok) {
+                result = await gasRes.json();
+              }
+            } catch (gasErr) {
+              console.warn("GAS GET readExcel error:", gasErr);
+            }
+          }
+
           if (result && result.status === 'success' && result.base64) {
             if (result.updated) {
               setFormUpdateDates(prev => {
@@ -6799,12 +6724,23 @@ export default function App() {
         }
       }));
 
-      if (!silent) {
-        if (totalLoadedCount > 0) {
-          const unitLabel = targetUnitKey && targetUnitKey !== 'all' ? targetUnitKey.toUpperCase() : 'Birimler';
+      if (totalLoadedCount > 0) {
+        const nowStr = getFormattedTimestamp();
+        setFormUpdateDates(prev => {
+          const next = { ...prev };
+          keysToFetch.forEach(k => {
+            next[`techizat_${k}`] = nowStr;
+          });
+          try { localStorage.setItem('form_update_dates', JSON.stringify(next)); } catch(e){}
+          return next;
+        });
+        const unitLabel = targetUnitKey && targetUnitKey !== 'all' ? targetUnitKey.toUpperCase() : 'Birimler';
+        if (!silent) {
           showNotification(`Google Drive'dan [${unitLabel}] için (${totalLoadedCount} kayıt) Excel verileri başarıyla yüklendi!`);
-        } else {
-          showNotification("Google Drive'dan güncel veriler kontrol edildi.");
+        }
+      } else {
+        if (!silent) {
+          showNotification("❌ Google Drive'dan canlı veri çekilemedi: Dosya bulunamadı veya bağlantı hatası oluştu! Önbellek kullanımı kesinlikle yasaktır.");
         }
       }
     } catch (err) {
@@ -7577,19 +7513,17 @@ export default function App() {
             let targetRow: string[] = [];
             if (isKara) {
               targetRow = [
-                rawSira,                                      // 0: SIRA NO (boş ise boş kalsın, gruplamada ardışık atanır)
-                rawName,                                      // 1: ARAÇ PLAKASI / TANIMI
-                rawPn,                                        // 2: PARÇA NO (P/N) / MODEL
-                rawLoc,                                       // 3: BULUNDUĞU YER
-                rawMiktar || rawSonBakim || "",               // 4: SON KM Sİ
-                rawDurum || "FAAL",                           // 5: DURUMU
-                rawKalib || "EVET",                           // 6: KALİBRASYONA TABİ
-                rawSonBakim,                                  // 7: SON KONTROL / BAKIM
-                rawGelecekBakim,                              // 8: GELECEK KONTROL / BAKIM
+                rawSira,                                      // 0: Sıra No
+                rawName,                                      // 1: Araç Plaka
+                "-",                                          // 2: Marka
+                rawPn,                                        // 3: Model
+                "-",                                          // 4: Yakıt Türü
+                rawMiktar || "-",                             // 5: Son Bakım Km
+                rawDurum || "FAAL",                           // 6: DURUMU
+                rawSonBakim,                                  // 7: Bakım Tarihi
+                rawGelecekBakim,                              // 8: Sonraki Bakım Tarihi yada KM'si
                 rawFirma,                                     // 9: SON KONTROLÜ YAPAN FİRMA
-                rawAciklama,                                  // 10: AÇIKLAMA
-                rawMail,                                      // 11: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
-                subSection                                    // 12: BÖLÜM
+                rawAciklama                                   // 10: AÇIKLAMA
               ];
             } else if (isDepoType) {
               targetRow = [
@@ -8997,6 +8931,8 @@ export default function App() {
                           id="btn-unit-olay-takip-at802"
                           onClick={() => {
                             setOlayTakipInitialUnit('at802');
+                            setOlayTakipInitialSheet('Ng Limit Aşımları Detayı');
+                            setOlayTakipAutoOpenMvp(false);
                             setIsOlayTakipOpen(true);
                           }}
                           className="bg-white hover:bg-emerald-50/50 border-2 border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
@@ -9007,6 +8943,28 @@ export default function App() {
                           <span className="text-[#0b3d1d] font-black tracking-widest text-base mb-2 uppercase">OLAY TAKİP ÇİZELGESİ</span>
                           <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono font-bold">
                             AT-802 Kaza-Kırım & Limit Aşımları
+                          </span>
+                        </button>
+
+                        <button
+                          id="btn-unit-mvp-analiz-at802"
+                          onClick={() => {
+                            setOlayTakipInitialUnit('at802');
+                            setOlayTakipInitialSheet('Ng Limit Aşımları Detayı');
+                            setOlayTakipAutoOpenMvp(true);
+                            setIsOlayTakipOpen(true);
+                          }}
+                          className="bg-white hover:bg-orange-50/50 border-2 border-orange-500/40 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group relative overflow-hidden"
+                        >
+                          <div className="absolute top-3 right-3 px-2.5 py-0.5 rounded-full bg-orange-500 text-white text-[9px] font-black uppercase tracking-wider animate-pulse">
+                            MVP / CSV
+                          </div>
+                          <div className="w-16 h-16 bg-orange-100/80 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-orange-200 transition-all shadow-sm text-orange-600">
+                            <Gauge className="w-8 h-8 text-orange-600" />
+                          </div>
+                          <span className="text-orange-950 font-black tracking-widest text-base mb-2 uppercase">NG LİMİT & MVP ANALİZİ</span>
+                          <span className="text-[10px] text-orange-700/80 uppercase tracking-widest font-mono font-bold">
+                            Uçuş Veri & Sınır Aşımı Analiz Motoru
                           </span>
                         </button>
 
@@ -10412,7 +10370,8 @@ export default function App() {
 
           {/* TEÇHİZAT TAKİP MATRİS EKRANI */}
           {modalType === 'techizat_matrix' && activeTechizatType && (() => {
-            const isKaraAraci = activeTechizatType === 'kara_araclari';
+            const currType = activeTechizatType as string;
+            const isKaraAraci = currType === 'kara_araclari';
             const isDepo = techizatActiveSection === 'depo_sarf' || techizatActiveSection === 'depo_kimyasal' || techizatActiveSection === 'depo_all';
 
             const isHangar = activeTechizatType === 'hangar';
@@ -10467,19 +10426,17 @@ export default function App() {
             ];
 
             const karaAraclariColumns = [
-              "SIRA NO", 
-              "ARAÇ PLAKASI / TANIMI", 
-              "MARKA", 
-              "PARÇA NO (P/N) / MODEL", 
-              "BULUNDUĞU YER", 
-              "SON KM Sİ", 
+              "Sıra No", 
+              "Araç Plaka", 
+              "Marka", 
+              "Model", 
+              "Yakıt Türü", 
+              "Son Bakım Km", 
               "DURUMU", 
-              "BAKIMA TABİ", 
-              "SON KONTROL / KALİBRASYON / BAKIM", 
-              "GELECEK KONTROL / KALİBRASYON / BAKIM", 
+              "Bakım Tarihi", 
+              "Sonraki Bakım Tarihi yada KM'si", 
               "SON KONTROLÜ YAPAN FİRMA", 
-              "AÇIKLAMA", 
-              "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+              "AÇIKLAMA"
             ];
 
             const hangarColumns = [
@@ -10803,8 +10760,8 @@ export default function App() {
                 <div className="w-full max-w-[1920px] mx-auto flex flex-col h-full">
                   
                   {/* Header Titles */}
-                  <div className="text-center mb-6 select-none print:hidden">
-                    <h3 className="text-xl sm:text-2xl font-black text-slate-800 uppercase tracking-tighter">
+                  <div className="text-center mb-2 select-none print:hidden">
+                    <h3 className="text-base sm:text-lg font-black text-slate-800 uppercase tracking-tighter">
                       {isDepo ? '📦' : '🛠️'} {modalTitle}
                     </h3>
                     {formUpdateDates[`techizat_${activeTechizatType}`] && (
@@ -10857,9 +10814,11 @@ export default function App() {
                     <>
                       {/* Collapsible Search and Utility Controls Drawer */}
                       <div className="mb-6 select-none print:hidden">
-                        <button
-                          type="button"
+                        <div
+                          role="button"
+                          tabIndex={0}
                           onClick={() => setIsTechizatFilterOpen(prev => !prev)}
+                          onKeyDown={(e) => { if(e.key === 'Enter' || e.key === ' ') setIsTechizatFilterOpen(prev => !prev); }}
                           className="w-full flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 hover:from-slate-800 hover:to-slate-850 text-white rounded-2xl border border-slate-700/80 shadow-md transition-all cursor-pointer group"
                         >
                           <div className="flex items-center gap-3">
@@ -10884,13 +10843,27 @@ export default function App() {
                           </div>
                           
                           <div className="flex items-center gap-2">
+                            {/* Manual Ara Button */}
+                            <button
+                                onClick={async (e) => {
+                                    e.stopPropagation();
+                                    await pullTechizatUnitFromDrive(activeTechizatType, false);
+                                }}
+                                disabled={isTechizatDriveLoading}
+                                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black text-xs rounded-xl flex items-center gap-2 shadow-lg cursor-pointer transition-all"
+                                title="Google Drive'dan bu birime ait Excel dosyasını canlı olarak indirir ve tabloyu doldurur"
+                            >
+                                <RefreshCw className={`w-3 h-3 ${isTechizatDriveLoading ? 'animate-spin' : ''}`} />
+                                <span>{isTechizatDriveLoading ? 'ÇEKİLİYOR...' : 'ARA'}</span>
+                            </button>
+
                             <span className={`text-xs font-black px-3.5 py-1.5 rounded-xl border transition-all ${
                               isTechizatFilterOpen ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'
                             }`}>
                               {isTechizatFilterOpen ? '▲ KAPAT' : '▼ FİLTRELERİ GÖSTER'}
                             </span>
                           </div>
-                        </button>
+                        </div>
 
                         {isTechizatFilterOpen && (
                           <div className="mt-3 bg-slate-900 text-slate-200 rounded-3xl p-5 flex flex-col xl:flex-row gap-4 items-center justify-between shadow-xl border border-slate-800 transition-all">
@@ -11178,7 +11151,7 @@ export default function App() {
                   <div className="flex-1 bg-white border-2 border-slate-200/60 rounded-[2.5rem] shadow-xl overflow-hidden flex flex-col print:border-none print:shadow-none min-h-[400px]">
                     
                     {/* Table Title Bar */}
-                    <div className="bg-slate-900 px-6 py-4 border-b border-slate-800 flex items-center justify-between print:hidden shrink-0 flex-wrap gap-3">
+                    <div className="bg-slate-900 px-4 py-1.5 border-b border-slate-800 flex items-center justify-between print:hidden shrink-0 flex-wrap gap-2">
                       {Object.keys(selectedTechizatItems).length > 0 ? (
                         <div className="flex items-center gap-3 animate-fade-in flex-wrap">
                           <span className="text-xs font-black text-amber-400 bg-amber-950/40 border border-amber-900 px-3 py-1.5 rounded-xl">
@@ -11254,8 +11227,8 @@ export default function App() {
                     <div className="flex-1 overflow-auto max-h-[85vh] print:max-h-none print:overflow-visible relative">
                       <table className="w-full border-collapse text-left min-w-[1200px]">
                         <thead>
-                          <tr className="bg-slate-900 border-b border-slate-800 print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10">
-                            <th className="px-3 py-3.5 text-center text-[10px] font-black text-slate-300 uppercase font-mono border-r border-slate-800 w-[50px] print:hidden">
+                          <tr className="bg-slate-900 border-b border-slate-800 print:bg-[#0b3d1d] shrink-0 sticky top-0 z-10 h-7">
+                            <th className="px-2 py-1 text-center text-[10px] leading-tight font-black text-slate-300 uppercase font-mono border-r border-slate-800 w-[40px] print:hidden">
                               <input
                                 type="checkbox"
                                 onChange={(e) => {
@@ -11295,7 +11268,7 @@ export default function App() {
                             {cols.map((col, cIdx) => (
                               <th 
                                 key={cIdx} 
-                                className="px-4 py-3.5 text-center text-[10px] font-black tracking-wider text-slate-300 uppercase font-mono border-r border-slate-800 last:border-r-0"
+                                className="px-2 py-1 text-center text-[10px] leading-tight font-black tracking-wider text-slate-300 uppercase font-mono border-r border-slate-800 last:border-r-0"
                               >
                                 {col}
                               </th>
@@ -11319,20 +11292,36 @@ export default function App() {
                                     </p>
                                   </div>
                                 ) : (
-                                  <div className="flex flex-col items-center justify-center gap-3 py-6">
-                                    <div className="w-16 h-16 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center shadow-inner">
-                                      <FileSpreadsheet className="w-8 h-8 text-slate-500" />
+                                  <div className="flex flex-col items-center justify-center gap-4 py-12">
+                                    <div className="w-20 h-20 rounded-3xl bg-slate-100 border-2 border-dashed border-slate-300 flex items-center justify-center shadow-inner">
+                                      <FileSpreadsheet className="w-10 h-10 text-slate-500" />
                                     </div>
-                                    <span className="text-slate-800 font-black text-base uppercase tracking-wider">
-                                      {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter 
-                                        ? "🔍 ARAMA KRİTERLERİNE UYGUN KAYIT BULUNAMADI" 
-                                        : "BU BİRİME AİT KAYITLI EXCEL BULUNAMADI"}
-                                    </span>
-                                    <p className="text-xs text-slate-500 font-medium max-w-md text-center leading-relaxed">
-                                      {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter
-                                        ? "Filtreleri temizleyerek tüm listeyi görebilirsiniz."
-                                        : "Sistemde henüz bu birime ait bir Excel dosyası yok veya dosya boş. 'VERİ GÜNCELLE' butonuyla Excel yükleyebilir veya 'YENİ EKLE' ile ilk kaydı oluşturabilirsiniz."}
-                                    </p>
+                                    <div className="text-center max-w-lg">
+                                      <span className="text-slate-800 font-black text-base uppercase tracking-wider block mb-1">
+                                        {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter 
+                                          ? "🔍 ARAMA KRİTERLERİNE UYGUN KAYIT BULUNAMADI" 
+                                          : "VERİLER HENÜZ GOOGLE DRIVE'DAN ÇEKİLMEDİ (LİSTE BOŞ)"}
+                                      </span>
+                                      <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                                        {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter
+                                          ? "Filtreleri temizleyerek tüm listeyi görebilirsiniz."
+                                          : "Önbellek ve yerel hafıza kullanımı tamamen kapatılmıştır. Doğrudan Google Drive üzerindeki güncel Excel dosyasından canlı verileri çekmek için lütfen aşağıdaki butona basınız."}
+                                      </p>
+                                    </div>
+                                    {!techizatSearchQuery && !techizatFirmaFilter && !techizatDurumFilter && (
+                                      <button
+                                        type="button"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          await pullTechizatUnitFromDrive(activeTechizatType, false);
+                                        }}
+                                        disabled={isTechizatDriveLoading}
+                                        className="mt-2 px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black font-mono text-sm rounded-2xl flex items-center gap-3 transition-all cursor-pointer shadow-xl shadow-emerald-950/20 border border-emerald-500"
+                                      >
+                                        <RefreshCw className={`w-4 h-4 text-white ${isTechizatDriveLoading ? 'animate-spin' : ''}`} />
+                                        <span>{isTechizatDriveLoading ? 'GOOGLE DRİVE BAĞLANIYOR...' : 'ARA / CANLI VERİLERİ GETİR'}</span>
+                                      </button>
+                                    )}
                                   </div>
                                 )}
                               </td>
@@ -12177,12 +12166,17 @@ export default function App() {
                                     const updatedKara = techizatKaraAraclariData.map(row => {
                                       if ((row[1] || "").toLowerCase() === gePlaka.toLowerCase()) {
                                         const copy = [...row];
-                                        copy[4] = geReturnKm;
+                                        copy[4] = geReturnKm; // Index 4 is Son KM Sİ (current mileage)
                                         return copy;
                                       }
                                       return row;
                                     });
                                     setTechizatKaraAraclariData(updatedKara);
+                                    localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedKara));
+                                    localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(updatedKara));
+                                    localStorage.setItem('excel_kara_araclari_data', JSON.stringify(updatedKara));
+                                    syncTechizatExcelToGoogleDrive('kara_araclari', updatedKara);
+                                    publishCrossSystemEvent('KARA_ARACI_UPDATED', 'portal', { count: updatedKara.length });
                                   }
 
                                   setGeStep(1);
@@ -13510,16 +13504,28 @@ export default function App() {
                     type="button"
                     onClick={async () => {
                       const copy = [...editRowValues];
-                      let totalQty = 0;
-                      regionalLocations.forEach(r => {
-                        const q = parseFloat(String(r.quantity)) || (r.serialNumbers.length > 0 ? r.serialNumbers.length : 1);
-                        totalQty += q;
-                      });
-                      copy[4] = totalQty > 0 ? `${totalQty} ADET` : (copy[4] || '1 ADET');
-                      const locStr = regionalLocations.map(r => `${r.location}${r.quantity ? ` (${r.quantity})` : ''}`).join(' ; ');
-                      copy[5] = locStr || copy[5];
-                      const allSns = regionalLocations.flatMap(r => r.serialNumbers);
-                      if (allSns.length > 0) copy[3] = allSns.join(' ; ');
+                      
+                      // Save regional location breakdowns as clean newline-separated lines so that they are saved as merged sub-cells in Excel and shown beautifully
+                      const locs = regionalLocations.map(r => r.location || 'MERKEZ');
+                      const qties = regionalLocations.map(r => String(r.quantity || '1'));
+                      const sns = regionalLocations.map(r => r.serialNumbers.join(', ') || '-');
+                      const sons = regionalLocations.map(r => r.sonKontrol || '-');
+                      const geleceks = regionalLocations.map(r => r.gelecekKontrol || '-');
+                      const firmas = regionalLocations.map(r => r.firma || '-');
+                      
+                      copy[4] = qties.join('\n'); // Miktar / Kapasite
+                      copy[5] = locs.join('\n');  // Bulunduğu Yer / Lokasyon
+                      copy[3] = sns.join('\n');   // Seri No (S/N)
+                      
+                      if (isDepo) {
+                        copy[8] = geleceks.join('\n');  // ÖMÜR BİTİŞ TARİHİ
+                        copy[9] = firmas.join('\n');    // TEDARİK EDİLEN FİRMA
+                      } else {
+                        copy[8] = sons.join('\n');     // Son Kontrol / Bakım
+                        copy[9] = geleceks.join('\n');  // Gelecek Kontrol / Bakım
+                        copy[10] = firmas.join('\n');   // Firma / Mülkiyet
+                      }
+
                       setEditRowValues(copy);
                       await handleSaveTechizatRow(copy, techType, rIdx);
                       showNotification("Bölge dağılımları ve kayıt başarıyla güncellendi!");
@@ -13713,9 +13719,14 @@ export default function App() {
       {isOlayTakipOpen && (
         <OlayTakipCizelgesiModal
           isOpen={isOlayTakipOpen}
-          onClose={() => setIsOlayTakipOpen(false)}
+          onClose={() => {
+            setIsOlayTakipOpen(false);
+            setOlayTakipAutoOpenMvp(false);
+          }}
           showNotification={showNotification}
           initialUnit={olayTakipInitialUnit}
+          initialSheetName={olayTakipInitialSheet}
+          autoOpenMvpModal={olayTakipAutoOpenMvp}
         />
       )}
 
@@ -14270,6 +14281,7 @@ export default function App() {
           activeSection={techizatActiveSection}
           onUpdateUnitData={(unitKey, _newCols, newRows) => {
             const cleanKey = unitKey.toLowerCase();
+            recordTechizatUpdate(cleanKey);
             if (cleanKey.includes('bell429')) {
               setTechizatBell429Data(newRows);
               try { localStorage.setItem('techizat_bell429_data', JSON.stringify(newRows)); } catch(e){}

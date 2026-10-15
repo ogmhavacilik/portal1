@@ -157,6 +157,7 @@ export interface DepoItem {
   toplamStok?: number;
   hasShelfLife?: 'EVET' | 'HAYIR' | boolean | string;
   shelfLifeDate?: string;
+  kritikStok?: number;
   durumu?: string;
   tedarikci?: string;
   zone?: string;
@@ -303,10 +304,52 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const fetchYasamDestekData = async () => {
     try {
       setIsYasamDestekLoading(true);
-      const res = await fetch('/api/yasam-destek');
-      const json = await res.json();
-      if (json && json.status === 'success' && Array.isArray(json.records)) {
-        setYasamDestekRecords(json.records);
+      let records: YasamDestekRecord[] = [];
+      try {
+        const res = await fetch('/api/yasam-destek');
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.status === 'success' && Array.isArray(json.records)) {
+            records = json.records;
+          }
+        }
+      } catch (e) {}
+
+      // Netlify / Static fallback - Google E-Tablo ZİMMETLER sayfasından canlı oku
+      if (records.length === 0) {
+        try {
+          const gasRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=ZİMMETLER&t=${Date.now()}`);
+          if (gasRes.ok) {
+            const sheetData = await gasRes.json();
+            if (sheetData && Array.isArray(sheetData.data) && sheetData.data.length > 1) {
+              const rows = sheetData.data;
+              for (let r = 1; r < rows.length; r++) {
+                const row = rows[r];
+                if (!row || row.length === 0) continue;
+                const pName = String(row[1] || '').trim();
+                if (!pName) continue;
+                records.push({
+                  id: `gas_zm_${r}`,
+                  siraNo: r,
+                  personelAdi: pName,
+                  gorevYeri: String(row[2] || '-'),
+                  baslangicTarihi: String(row[3] || '-'),
+                  bitisTarihi: String(row[4] || 'DEVAM EDİYOR'),
+                  lifeVestSn: String(row[5] || '-'),
+                  spareAirSn: String(row[6] || '-'),
+                  helmetKitSn: String(row[7] || '-'),
+                  durum: String(row[8] || 'GÖREVDE'),
+                  notlar: String(row[9] || '-'),
+                  devredilenPersonel: String(row[10] || '-')
+                });
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (records.length > 0) {
+        setYasamDestekRecords(records);
       }
     } catch (err) {
       console.warn('Yaşam destek fetch error:', err);
@@ -449,6 +492,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const [newItemInitialRegion, setNewItemInitialRegion] = useState<string>('ankara');
   const [newItemHasShelfLife, setNewItemHasShelfLife] = useState<'HAYIR' | 'EVET'>('HAYIR');
   const [newItemShelfLifeDate, setNewItemShelfLifeDate] = useState<string>('');
+  const [newItemKritikStok, setNewItemKritikStok] = useState<number>(0);
 
   // Multi-SN & Non-catalog detection state
   const [singleSnInput, setSingleSnInput] = useState<string>('');
@@ -478,13 +522,14 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const [isMuayeneDropdownOpen, setIsMuayeneDropdownOpen] = useState<boolean>(false);
   const [selectedMuayeneItem, setSelectedMuayeneItem] = useState<DepoItem | null>(null);
 
-  // Onay Bekleyenler Modalı State'leri (Drive Excel "ONAY BEKLEYENLER -AT802" Sayfası)
+  // Onay Bekleyenler Modalı State'leri (Drive Excel "ONAY BEKLEYENLER" Sayfası)
   const [isOnayPasswordModalOpen, setIsOnayPasswordModalOpen] = useState<boolean>(false);
   const [isOnayBekleyenlerModalOpen, setIsOnayBekleyenlerModalOpen] = useState<boolean>(false);
   const [onayPasswordInput, setOnayPasswordInput] = useState<string>('');
   const [onayPasswordError, setOnayPasswordError] = useState<string>('');
   const [onayBekleyenlerList, setOnayBekleyenlerList] = useState<any[]>([]);
   const [isLoadingOnayList, setIsLoadingOnayList] = useState<boolean>(false);
+  const [onaySelectedUnit, setOnaySelectedUnit] = useState<string>('all');
 
   // Muayene Oturum Listesi State'leri (Çoklu Ekleme Açılır Kart)
   const [muayeneSessionList, setMuayeneSessionList] = useState<any[]>([]);
@@ -677,6 +722,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const [rowEditNotes, setRowEditNotes] = useState<string>('');
   const [rowEditHasShelfLife, setRowEditHasShelfLife] = useState<'EVET' | 'HAYIR'>('HAYIR');
   const [rowEditShelfLifeDate, setRowEditShelfLifeDate] = useState<string>('');
+  const [rowEditKritikStok, setRowEditKritikStok] = useState<number>(0);
   const [rowEditPassword, setRowEditPassword] = useState<string>('');
   const [rowEditPasswordError, setRowEditPasswordError] = useState<string>('');
 
@@ -828,25 +874,22 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
     }
   }, [inventory]);
 
-  // Envanter bellekte/localStorage'da boşaldıysa diskteki kalıcı at802_sarf_data.json yedeğinden ANINDA kurtar
+  // Envanter açılışta Google Drive Excel'inden canlı olarak Sarf ve Kimyasal verilerini yükler
   useEffect(() => {
-    if (inventory.length === 0) {
-      fetch('/at802_sarf_data.json')
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data) && data.length > 0) {
-            setInventory(prev => {
-              if (prev.length > 0) return prev;
-              try {
-                localStorage.setItem('ogm_depo_inventory_v5', JSON.stringify(data));
-              } catch {}
-              return data;
-            });
-          }
-        })
-        .catch(() => {});
+    loadLiveDriveExcel(false, 'sarf');
+    loadLiveDriveExcel(false, 'kimyasal');
+  }, []);
+
+  // Birim veya sekme değiştiğinde o birimin verisi henüz yoksa otomatik Drive'dan çek
+  useEffect(() => {
+    if (currentDepoType === 'sarf' || currentDepoType === 'kimyasal') {
+      const u = currentUnit === 'all' ? 'at802' : currentUnit;
+      const hasUnitData = (inventory || []).some(i => (i.unit === u || (u === 'at802' && (!i.unit || i.unit === 'at802'))) && i.category === currentDepoType);
+      if (!hasUnitData) {
+        loadLiveDriveExcel(false, currentDepoType);
+      }
     }
-  }, [inventory.length]);
+  }, [currentUnit, currentDepoType]);
 
   const isItemInCatalog = useMemo(() => {
     if (!newItemDesc.trim() && !newItemPn.trim()) return true;
@@ -1112,7 +1155,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
           "MİLAS TRANSFER", "MİLAS ÇIKAN", "MİLAS MEVCUT",
           "BURSA TRANSFER", "BURSA ÇIKAN", "BURSA MEVCUT",
           "MUAYENE GİDEN", "MUAYENE GELEN", "MUAYENE TOPLAM",
-          "RAF ÖMRÜ VAR MI?", "RAF ÖMRÜ BİTİŞ TARİHİ"
+          "RAF ÖMRÜ VAR MI?", "RAF ÖMRÜ BİTİŞ TARİHİ", "KRİTİK STOK SEVİYESİ"
         ]
       ];
 
@@ -1143,7 +1186,8 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
           i.muayeneGelen || 0,
           i.muayeneToplam || 0,
           hasLife ? 'EVET' : 'HAYIR',
-          hasLife && i.shelfLifeDate && i.shelfLifeDate !== '-' ? i.shelfLifeDate : '-'
+          hasLife && i.shelfLifeDate && i.shelfLifeDate !== '-' ? i.shelfLifeDate : '-',
+          i.kritikStok !== undefined ? i.kritikStok : 0
         ]);
       });
       const wsSarf = XLSX.utils.aoa_to_sheet(sarfRows);
@@ -1465,14 +1509,11 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
         }
       } catch (e) {}
 
-      // Netlify / Static fallback
+      // Netlify / Static fallback - GET isteği ile CORS problemsiz doğrudan oku
       if (!result || result.status !== 'success' || !result.base64) {
         try {
-          const directRes = await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'readExcelFromDrive', fileName: targetFileName, fileId: targetFileId, folderId: DRIVE_FOLDER_ID })
-          });
+          const gasUrl = `${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileName=${encodeURIComponent(targetFileName)}&fileId=${encodeURIComponent(targetFileId || '')}&folderId=${DRIVE_FOLDER_ID}&t=${Date.now()}`;
+          const directRes = await fetch(gasUrl);
           if (directRes.ok) {
             result = await directRes.json();
           }
@@ -1513,6 +1554,9 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
 
               let descCol = normHeader.findIndex(c => c === 'DESCRIPTION' || c.includes('DESCRIPTION') || c.includes('MALZEME'));
               let pnCol = normHeader.findIndex(c => c.includes('P/N') || c.includes('PART NUMBER') || c.includes('PART'));
+              let snCol = normHeader.findIndex(c => c.includes('SERİ') || c.includes('SERI') || c.includes('MÜKERRER') || c.includes('MUKERRER'));
+              let locCol = normHeader.findIndex(c => c.includes('LOKASYON') || c.includes('RAF') || c.includes('KONUM'));
+              let gelenCol = normHeader.findIndex(c => c === 'GELEN' || c.includes('GELEN') || c.includes('MİKTAR'));
               let spainDescCol = normHeader.findIndex(c => c.includes('SPAIN DISCRIPTION') || c.includes('SPAIN DESCRIPTION'));
               let miktarCol = normHeader.findIndex(c => c === 'MIKTAR' || c.includes('MIKTAR QTY') || c === 'BIRIM');
               let sozlesmeCol = normHeader.findIndex(c => c.includes('SOZLESME'));
@@ -1520,146 +1564,183 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
               let spainGelenCol = normHeader.findIndex(c => c.includes('SPAIN GELEN'));
               let genelToplamCol = normHeader.findIndex(c => c.includes('GENEL TOPLAM'));
               let toplamStokCol = normHeader.findIndex(c => c.includes('TOPLAM STOK'));
-              let ankaraCikanCol = normHeader.findIndex(c => c.includes('ANKARA CIKAN'));
+              let ankaraCikanCol = normHeader.findIndex(c => c.includes('ANKARA CIKAN') || c.includes('ANKARA ÇIKAN'));
               let ankaraMevcutCol = normHeader.findIndex(c => c.includes('ANKARA MEVCUT'));
-              let karainTransferCol = normHeader.findIndex(c => c.includes('KARAIN TRANSFER'));
-              let karainCikanCol = normHeader.findIndex(c => c.includes('KARAIN CIKAN'));
-              let karainMevcutCol = normHeader.findIndex(c => c.includes('KARAIN MEVCUT'));
-              let canakkaleTransferCol = normHeader.findIndex(c => c.includes('CANAKKALE TRANSFER'));
-              let canakkaleCikanCol = normHeader.findIndex(c => c.includes('CANAKKALE CIKAN'));
-              let canakkaleMevcutCol = normHeader.findIndex(c => c.includes('CANAKKALE MEVCUT'));
-              let milasTransferCol = normHeader.findIndex(c => c.includes('MILAS TRANSFER'));
-              let milasCikanCol = normHeader.findIndex(c => c.includes('MILAS CIKAN'));
-              let milasMevcutCol = normHeader.findIndex(c => c.includes('MILAS MEVCUT'));
+              let karainTransferCol = normHeader.findIndex(c => c.includes('KARAIN TRANSFER') || c.includes('KARAİN TRANSFER'));
+              let karainCikanCol = normHeader.findIndex(c => c.includes('KARAIN CIKAN') || c.includes('KARAİN ÇIKAN'));
+              let karainMevcutCol = normHeader.findIndex(c => c.includes('KARAIN MEVCUT') || c.includes('KARAİN MEVCUT'));
+              let canakkaleTransferCol = normHeader.findIndex(c => c.includes('CANAKKALE TRANSFER') || c.includes('ÇANAKKALE TRANSFER'));
+              let canakkaleCikanCol = normHeader.findIndex(c => c.includes('CANAKKALE CIKAN') || c.includes('ÇANAKKALE ÇIKAN'));
+              let canakkaleMevcutCol = normHeader.findIndex(c => c.includes('CANAKKALE MEVCUT') || c.includes('ÇANAKKALE MEVCUT'));
+              let milasTransferCol = normHeader.findIndex(c => c.includes('MILAS TRANSFER') || c.includes('MİLAS TRANSFER'));
+              let milasCikanCol = normHeader.findIndex(c => c.includes('MILAS CIKAN') || c.includes('MİLAS ÇIKAN'));
+              let milasMevcutCol = normHeader.findIndex(c => c.includes('MILAS MEVCUT') || c.includes('MİLAS MEVCUT'));
               let bursaTransferCol = normHeader.findIndex(c => c.includes('BURSA TRANSFER'));
-              let bursaCikanCol = normHeader.findIndex(c => c.includes('BURSA CIKAN'));
-              let bursaMevcutCol = normHeader.findIndex(c => c.includes('BURSA MEVCUT'));
-              let aciklamaCol = normHeader.findIndex(c => c === 'ACIKLAMA' || c.includes('ACIKLAMA'));
-              let locCol = normHeader.findIndex(c => c.includes('LOKASYON') || c.includes('RAF') || c.includes('KONUM'));
-              let shelfLifeCol = normHeader.findIndex(c => c.includes('RAF OMRU VAR') || c.includes('OMRUNE TABI'));
-              let shelfLifeDateCol = normHeader.findIndex(c => c.includes('RAF OMRU BITIS') || c.includes('SKT'));
-
-              if (isKimyasalLoad) {
-                if (descCol < 0) descCol = 1;
-                if (pnCol < 0) pnCol = 2;
-                if (spainDescCol < 0) spainDescCol = 2;
-                if (miktarCol < 0) miktarCol = 3;
-                if (sozlesmeCol < 0) sozlesmeCol = 4;
-                if (piyasaCol < 0) piyasaCol = 5;
-                if (spainGelenCol < 0) spainGelenCol = 6;
-                if (genelToplamCol < 0) genelToplamCol = 7;
-                if (toplamStokCol < 0) toplamStokCol = 8;
-                if (ankaraCikanCol < 0) ankaraCikanCol = 9;
-                if (ankaraMevcutCol < 0) ankaraMevcutCol = 10;
-                if (karainTransferCol < 0) karainTransferCol = 11;
-                if (karainCikanCol < 0) karainCikanCol = 12;
-                if (karainMevcutCol < 0) karainMevcutCol = 13;
-                if (canakkaleTransferCol < 0) canakkaleTransferCol = 14;
-                if (canakkaleCikanCol < 0) canakkaleCikanCol = 15;
-                if (canakkaleMevcutCol < 0) canakkaleMevcutCol = 16;
-                if (milasTransferCol < 0) milasTransferCol = 17;
-                if (milasCikanCol < 0) milasCikanCol = 18;
-                if (milasMevcutCol < 0) milasMevcutCol = 19;
-                if (bursaTransferCol < 0) bursaTransferCol = 20;
-                if (bursaCikanCol < 0) bursaCikanCol = 21;
-                if (bursaMevcutCol < 0) bursaMevcutCol = 22;
-                if (aciklamaCol < 0) aciklamaCol = 23;
-              }
+              let bursaCikanCol = normHeader.findIndex(c => c.includes('BURSA CIKAN') || c.includes('BURSA ÇIKAN'));
+              let bursaMevcutCol = normHeader.findIndex(c => c.includes('BURSA MEVCUT') || (c.includes('BURSA') && c.includes('MEVCUT')));
+              let muayeneGidenCol = normHeader.findIndex(c => c.includes('MUAYENE') && c.includes('GIDEN'));
+              let muayeneGelenCol = normHeader.findIndex(c => c.includes('MUAYENE') && c.includes('GELEN'));
+              let muayeneToplamCol = normHeader.findIndex(c => c.includes('MUAYENE') && c.includes('TOPLAM'));
+              let aciklamaCol = normHeader.findIndex(c => c === 'ACIKLAMA' || c.includes('ACIKLAMA') || c.includes('AÇIKLAMA'));
+              let shelfLifeCol = normHeader.findIndex(c => c.includes('RAF OMRU VAR') || c.includes('RAF ÖMRÜ VAR') || c.includes('OMRUNE TABI'));
+              let shelfLifeDateCol = normHeader.findIndex(c => c.includes('RAF OMRU BITIS') || c.includes('RAF ÖMRÜ BİTİŞ') || c.includes('SKT'));
+              let durumuCol = normHeader.findIndex(c => c === 'DURUMU' || c.includes('DURUM'));
+              let tedarikciCol = normHeader.findIndex(c => c === 'TEDARİKÇİ' || c === 'TEDARIKCI' || c.includes('TEDARİK') || c.includes('TEDARIK'));
+              let kritikStokCol = normHeader.findIndex(c => c.includes('KRITIK') || c.includes('KRİTİK') || c.includes('MIN STOK') || c.includes('MINIMUM'));
 
               const parsedItems: DepoItem[] = [];
               const unitKey = currentUnit === 'all' ? 'at802' : currentUnit;
+
               for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
                 const row = rawRows[r];
                 if (!row || row.length === 0) continue;
-                const desc = String(row[descCol >= 0 ? descCol : 1] || row[0] || '').trim();
-                if (!desc || isHeaderLikeRow(row) || desc.toUpperCase() === 'DESCRIPTION' || desc.toUpperCase() === 'MALZEME ADI') continue;
 
-                const pn = String(row[pnCol >= 0 ? pnCol : 2] !== undefined && row[pnCol >= 0 ? pnCol : 2] !== null ? row[pnCol >= 0 ? pnCol : 2] : '-').trim() || '-';
-                const spainDesc = spainDescCol >= 0 ? String(row[spainDescCol] !== undefined ? row[spainDescCol] : pn).trim() : pn;
+                if (isKimyasalLoad) {
+                  const desc = String(row[descCol >= 0 ? descCol : 1] || row[0] || '').trim();
+                  if (!desc || isHeaderLikeRow(row) || desc.toUpperCase() === 'DESCRIPTION' || desc.toUpperCase() === 'MALZEME ADI') continue;
 
-                const rawMiktarVal = String(row[miktarCol >= 0 ? miktarCol : 3] !== undefined ? row[miktarCol >= 0 ? miktarCol : 3] : 'Adet').trim();
-                const miktarBirim = rawMiktarVal || 'Adet';
+                  const pn = String(row[pnCol >= 0 ? pnCol : 2] !== undefined && row[pnCol >= 0 ? pnCol : 2] !== null ? row[pnCol >= 0 ? pnCol : 2] : '-').trim() || '-';
+                  const spainDesc = spainDescCol >= 0 ? String(row[spainDescCol] !== undefined ? row[spainDescCol] : pn).trim() : pn;
+                  const miktarBirim = String(row[miktarCol >= 0 ? miktarCol : 3] || 'Adet').trim();
+                  const sozlesmeToplami = String(row[sozlesmeCol >= 0 ? sozlesmeCol : 4] || '0').trim();
+                  const piyasaGelen = Number(row[piyasaCol >= 0 ? piyasaCol : 5]) || 0;
+                  const spainGelen = Number(row[spainGelenCol >= 0 ? spainGelenCol : 6]) || 0;
+                  const genelToplamVal = Number(row[genelToplamCol >= 0 ? genelToplamCol : 7]);
+                  const genelToplam = !isNaN(genelToplamVal) && genelToplamVal > 0 ? genelToplamVal : (piyasaGelen + spainGelen);
+                  const ankaraCikan = Number(row[ankaraCikanCol >= 0 ? ankaraCikanCol : 9]) || 0;
+                  const ankaraMevcut = Number(row[ankaraMevcutCol >= 0 ? ankaraMevcutCol : 10]) || 0;
+                  const karainTransfer = Number(row[karainTransferCol >= 0 ? karainTransferCol : 11]) || 0;
+                  const karainCikan = Number(row[karainCikanCol >= 0 ? karainCikanCol : 12]) || 0;
+                  const karainMevcut = Number(row[karainMevcutCol >= 0 ? karainMevcutCol : 13]) || 0;
+                  const canakkaleTransfer = Number(row[canakkaleTransferCol >= 0 ? canakkaleTransferCol : 14]) || 0;
+                  const canakkaleCikan = Number(row[canakkaleCikanCol >= 0 ? canakkaleCikanCol : 15]) || 0;
+                  const canakkaleMevcut = Number(row[canakkaleMevcutCol >= 0 ? canakkaleMevcutCol : 16]) || 0;
+                  const milasTransfer = Number(row[milasTransferCol >= 0 ? milasTransferCol : 17]) || 0;
+                  const milasCikan = Number(row[milasCikanCol >= 0 ? milasCikanCol : 18]) || 0;
+                  const milasMevcut = Number(row[milasMevcutCol >= 0 ? milasMevcutCol : 19]) || 0;
+                  const bursaTransfer = Number(row[bursaTransferCol >= 0 ? bursaTransferCol : 20]) || 0;
+                  const bursaCikan = Number(row[bursaCikanCol >= 0 ? bursaCikanCol : 21]) || 0;
+                  const bursaMevcut = Number(row[bursaMevcutCol >= 0 ? bursaMevcutCol : 22]) || 0;
+                  const aciklama = String(row[aciklamaCol >= 0 ? aciklamaCol : 23] || '-').trim() || '-';
+                  const loc = String(row[locCol >= 0 ? locCol : 3] || 'KİMYASAL DEPO').trim() || 'KİMYASAL DEPO';
+                  const computedToplam = (toplamStokCol >= 0 && Number(row[toplamStokCol]) > 0)
+                    ? Number(row[toplamStokCol])
+                    : ((ankaraMevcut + karainMevcut + canakkaleMevcut + milasMevcut + bursaMevcut) || genelToplam);
+                  const durumu = durumuCol >= 0 ? String(row[durumuCol] || 'FAAL').trim() : 'FAAL';
+                  const tedarikci = tedarikciCol >= 0 ? String(row[tedarikciCol] || '-').trim() : '-';
+                  const hasShelfLife = shelfLifeCol >= 0 ? (String(row[shelfLifeCol] || '').toUpperCase().includes('EVET') ? 'EVET' : 'HAYIR') : 'HAYIR';
+                  const shelfLifeDate = shelfLifeDateCol >= 0 ? String(row[shelfLifeDateCol] || '-').trim() : '-';
 
-                const sozlesmeToplamiVal = row[sozlesmeCol >= 0 ? sozlesmeCol : 4] !== undefined ? row[sozlesmeCol >= 0 ? sozlesmeCol : 4] : '0';
-                const sozlesmeToplami = String(sozlesmeToplamiVal !== undefined ? sozlesmeToplamiVal : '0').trim();
+                  parsedItems.push({
+                    unit: unitKey,
+                    category: 'kimyasal',
+                    description: desc,
+                    name: desc,
+                    partNumber: pn,
+                    pn: pn,
+                    spainDescription: spainDesc,
+                    miktarQty: miktarBirim,
+                    sozlesmeToplami: sozlesmeToplami,
+                    piyasa: piyasaGelen,
+                    spainGelen: spainGelen,
+                    genelToplam: genelToplam,
+                    toplamStok: computedToplam,
+                    ankaraCikan: ankaraCikan,
+                    ankaraMevcut: ankaraMevcut,
+                    karainTransfer: karainTransfer,
+                    karainCikan: karainCikan,
+                    karainMevcut: karainMevcut,
+                    canakkaleTransfer: canakkaleTransfer,
+                    canakkaleCikan: canakkaleCikan,
+                    canakkaleMevcut: canakkaleMevcut,
+                    milasTransfer: milasTransfer,
+                    milasCikan: milasCikan,
+                    milasMevcut: milasMevcut,
+                    bursaTransfer: bursaTransfer,
+                    bursaCikan: bursaCikan,
+                    bursaMevcut: bursaMevcut,
+                    serialAndNotes: aciklama,
+                    sn: aciklama,
+                    lokasyonNo: loc,
+                    location: loc,
+                    baseGelen: genelToplam,
+                    gelen: genelToplam,
+                    hasShelfLife: hasShelfLife,
+                    shelfLifeDate: shelfLifeDate,
+                    durumu: durumu,
+                    tedarikci: tedarikci,
+                    kritikStok: kritikStokCol >= 0 ? (Number(row[kritikStokCol]) || 0) : 0
+                  });
+                } else {
+                  // SARF & PARÇA DEPOSU PARSING
+                  const desc = String(row[descCol >= 0 ? descCol : 1] || row[0] || '').trim();
+                  if (!desc || isHeaderLikeRow(row) || desc.toUpperCase() === 'DESCRIPTION' || desc.toUpperCase() === 'MALZEME ADI') continue;
 
-                const piyasaGelen = Number(row[piyasaCol >= 0 ? piyasaCol : 5]) || 0;
-                const spainGelen = Number(row[spainGelenCol >= 0 ? spainGelenCol : 6]) || 0;
-                const genelToplamVal = Number(row[genelToplamCol >= 0 ? genelToplamCol : 7]);
-                const genelToplam = !isNaN(genelToplamVal) && genelToplamVal > 0 ? genelToplamVal : (piyasaGelen + spainGelen);
+                  const pn = String(row[pnCol >= 0 ? pnCol : 2] !== undefined && row[pnCol >= 0 ? pnCol : 2] !== null ? row[pnCol >= 0 ? pnCol : 2] : '-').trim() || '-';
+                  const sn = String(row[snCol >= 0 ? snCol : 3] !== undefined && row[snCol >= 0 ? snCol : 3] !== null ? row[snCol >= 0 ? snCol : 3] : '-').trim() || '-';
+                  const loc = String(row[locCol >= 0 ? locCol : 4] || '-').trim() || '-';
+                  const gelen = Number(row[gelenCol >= 0 ? gelenCol : 5]) || 0;
+                  const toplamStok = toplamStokCol >= 0 ? Number(row[toplamStokCol]) || 0 : 0;
+                  const ankaraCikan = Number(row[ankaraCikanCol >= 0 ? ankaraCikanCol : 7]) || 0;
+                  const ankaraMevcut = Number(row[ankaraMevcutCol >= 0 ? ankaraMevcutCol : 8]) || 0;
+                  const karainTransfer = Number(row[karainTransferCol >= 0 ? karainTransferCol : 9]) || 0;
+                  const karainCikan = Number(row[karainCikanCol >= 0 ? karainCikanCol : 10]) || 0;
+                  const karainMevcut = Number(row[karainMevcutCol >= 0 ? karainMevcutCol : 11]) || 0;
+                  const canakkaleTransfer = Number(row[canakkaleTransferCol >= 0 ? canakkaleTransferCol : 12]) || 0;
+                  const canakkaleCikan = Number(row[canakkaleCikanCol >= 0 ? canakkaleCikanCol : 13]) || 0;
+                  const canakkaleMevcut = Number(row[canakkaleMevcutCol >= 0 ? canakkaleMevcutCol : 14]) || 0;
+                  const milasTransfer = Number(row[milasTransferCol >= 0 ? milasTransferCol : 15]) || 0;
+                  const milasCikan = Number(row[milasCikanCol >= 0 ? milasCikanCol : 16]) || 0;
+                  const milasMevcut = Number(row[milasMevcutCol >= 0 ? milasMevcutCol : 17]) || 0;
+                  const bursaTransfer = Number(row[bursaTransferCol >= 0 ? bursaTransferCol : 18]) || 0;
+                  const bursaCikan = Number(row[bursaCikanCol >= 0 ? bursaCikanCol : 19]) || 0;
+                  const bursaMevcut = Number(row[bursaMevcutCol >= 0 ? bursaMevcutCol : 20]) || 0;
+                  const muayeneGiden = Number(row[muayeneGidenCol >= 0 ? muayeneGidenCol : 21]) || 0;
+                  const muayeneGelen = Number(row[muayeneGelenCol >= 0 ? muayeneGelenCol : 22]) || 0;
+                  const muayeneToplam = Number(row[muayeneToplamCol >= 0 ? muayeneToplamCol : 23]) || 0;
+                  const durumu = durumuCol >= 0 ? String(row[durumuCol] || 'FAAL').trim() : 'FAAL';
+                  const tedarikci = tedarikciCol >= 0 ? String(row[tedarikciCol] || '-').trim() : '-';
+                  const hasShelfLife = shelfLifeCol >= 0 ? (String(row[shelfLifeCol] || '').toUpperCase().includes('EVET') ? 'EVET' : 'HAYIR') : 'HAYIR';
+                  const shelfLifeDate = shelfLifeDateCol >= 0 ? String(row[shelfLifeDateCol] || '-').trim() : '-';
 
-                const ankaraCikan = Number(row[ankaraCikanCol >= 0 ? ankaraCikanCol : 9]) || 0;
-                const ankaraMevcut = Number(row[ankaraMevcutCol >= 0 ? ankaraMevcutCol : 10]) || 0;
-
-                const karainTransfer = Number(row[karainTransferCol >= 0 ? karainTransferCol : 11]) || 0;
-                const karainCikan = Number(row[karainCikanCol >= 0 ? karainCikanCol : 12]) || 0;
-                const karainMevcut = Number(row[karainMevcutCol >= 0 ? karainMevcutCol : 13]) || 0;
-
-                const canakkaleTransfer = Number(row[canakkaleTransferCol >= 0 ? canakkaleTransferCol : 14]) || 0;
-                const canakkaleCikan = Number(row[canakkaleCikanCol >= 0 ? canakkaleCikanCol : 15]) || 0;
-                const canakkaleMevcut = Number(row[canakkaleMevcutCol >= 0 ? canakkaleMevcutCol : 16]) || 0;
-
-                const milasTransfer = Number(row[milasTransferCol >= 0 ? milasTransferCol : 17]) || 0;
-                const milasCikan = Number(row[milasCikanCol >= 0 ? milasCikanCol : 18]) || 0;
-                const milasMevcut = Number(row[milasMevcutCol >= 0 ? milasMevcutCol : 19]) || 0;
-
-                const bursaTransfer = Number(row[bursaTransferCol >= 0 ? bursaTransferCol : 20]) || 0;
-                const bursaCikan = Number(row[bursaCikanCol >= 0 ? bursaCikanCol : 21]) || 0;
-                const bursaMevcut = Number(row[bursaMevcutCol >= 0 ? bursaMevcutCol : 22]) || 0;
-
-                const aciklama = String(row[aciklamaCol >= 0 ? aciklamaCol : 23] !== undefined ? row[aciklamaCol >= 0 ? aciklamaCol : 23] : '-').trim() || '-';
-                const loc = String(row[locCol >= 0 ? locCol : 3] !== undefined ? row[locCol >= 0 ? locCol : 3] : 'KİMYASAL DEPO').trim() || 'KİMYASAL DEPO';
-
-                const computedToplam = (toplamStokCol >= 0 && Number(row[toplamStokCol]) > 0)
-                  ? Number(row[toplamStokCol])
-                  : ((ankaraMevcut + karainMevcut + canakkaleMevcut + milasMevcut + bursaMevcut) || genelToplam);
-
-                const durumuCol = headerRow.findIndex(c => c === 'DURUMU' || c.includes('DURUM'));
-                const tedarikciCol = headerRow.findIndex(c => c === 'TEDARİKÇİ' || c === 'TEDARIKCI' || c.includes('TEDARİK') || c.includes('TEDARIK'));
-                const durumu = durumuCol >= 0 ? String(row[durumuCol] || 'FAAL').trim() : 'FAAL';
-                const tedarikci = tedarikciCol >= 0 ? String(row[tedarikciCol] || '-').trim() : '-';
-                const hasShelfLife = shelfLifeCol >= 0 ? (String(row[shelfLifeCol] || '').toUpperCase().includes('EVET') ? 'EVET' : 'HAYIR') : 'HAYIR';
-                const shelfLifeDate = shelfLifeDateCol >= 0 ? String(row[shelfLifeDateCol] || '-').trim() : '-';
-
-                parsedItems.push({
-                  unit: unitKey,
-                  category: targetCat,
-                  description: desc,
-                  name: desc,
-                  partNumber: pn,
-                  pn: pn,
-                  spainDescription: spainDesc,
-                  miktarQty: miktarBirim,
-                  sozlesmeToplami: sozlesmeToplami,
-                  piyasa: piyasaGelen,
-                  spainGelen: spainGelen,
-                  genelToplam: genelToplam,
-                  toplamStok: computedToplam,
-                  ankaraCikan: ankaraCikan,
-                  ankaraMevcut: ankaraMevcut,
-                  karainTransfer: karainTransfer,
-                  karainCikan: karainCikan,
-                  karainMevcut: karainMevcut,
-                  canakkaleTransfer: canakkaleTransfer,
-                  canakkaleCikan: canakkaleCikan,
-                  canakkaleMevcut: canakkaleMevcut,
-                  milasTransfer: milasTransfer,
-                  milasCikan: milasCikan,
-                  milasMevcut: milasMevcut,
-                  bursaTransfer: bursaTransfer,
-                  bursaCikan: bursaCikan,
-                  bursaMevcut: bursaMevcut,
-                  serialAndNotes: aciklama,
-                  sn: aciklama,
-                  lokasyonNo: loc,
-                  location: loc,
-                  baseGelen: genelToplam,
-                  gelen: genelToplam,
-                  hasShelfLife: hasShelfLife,
-                  shelfLifeDate: shelfLifeDate,
-                  durumu: durumu,
-                  tedarikci: tedarikci
-                });
+                  parsedItems.push({
+                    unit: unitKey,
+                    category: 'sarf',
+                    description: desc,
+                    name: desc,
+                    partNumber: pn,
+                    pn: pn,
+                    serialAndNotes: sn,
+                    sn: sn,
+                    lokasyonNo: loc,
+                    location: loc,
+                    gelen: gelen,
+                    baseGelen: gelen,
+                    toplamStok: toplamStok || ((ankaraMevcut + karainMevcut + canakkaleMevcut + milasMevcut + bursaMevcut) || gelen),
+                    ankaraCikan: ankaraCikan,
+                    ankaraMevcut: ankaraMevcut,
+                    karainTransfer: karainTransfer,
+                    karainCikan: karainCikan,
+                    karainMevcut: karainMevcut,
+                    canakkaleTransfer: canakkaleTransfer,
+                    canakkaleCikan: canakkaleCikan,
+                    canakkaleMevcut: canakkaleMevcut,
+                    milasTransfer: milasTransfer,
+                    milasCikan: milasCikan,
+                    milasMevcut: milasMevcut,
+                    bursaTransfer: bursaTransfer,
+                    bursaCikan: bursaCikan,
+                    bursaMevcut: bursaMevcut,
+                    muayeneGiden: muayeneGiden,
+                    muayeneGelen: muayeneGelen,
+                    muayeneToplam: muayeneToplam,
+                    hasShelfLife: hasShelfLife,
+                    shelfLifeDate: shelfLifeDate,
+                    durumu: durumu,
+                    tedarikci: tedarikci,
+                    kritikStok: kritikStokCol >= 0 ? (Number(row[kritikStokCol]) || 0) : 0
+                  });
+                }
               }
 
                             if (parsedItems.length > 0) {
@@ -1692,12 +1773,17 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
                       ? newItem.tedarikci
                       : (prevItem.tedarikci || '-');
 
+                    const kritikStok = (newItem.kritikStok !== undefined && newItem.kritikStok > 0)
+                      ? newItem.kritikStok
+                      : (prevItem.kritikStok || 0);
+
                     return {
                       ...newItem,
                       hasShelfLife,
                       shelfLifeDate,
                       durumu,
-                      tedarikci
+                      tedarikci,
+                      kritikStok
                     };
                   });
 
@@ -1734,29 +1820,89 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
     if (!isOpen) return;
 
     // Her zaman transferleri çek (Detay modalı için gerekli) - Mevcut kayıtları ASLA silme
-    fetch('/api/depo-transactions')
-      .then(res => res.json())
-      .then(result => {
-        if (result && result.status === 'success' && Array.isArray(result.transfers)) {
-          setTransactions(prev => {
-            const getTxId = (t: any) => t.id || `${t.timestamp || t.date}_${t.itemName || t.name}_${t.type || t.islemTuru}_${t.sn || '-'}`;
-            const map = new Map<string, any>();
-            // Fresh server transfers first
-            result.transfers.forEach((t: any) => {
-              map.set(getTxId(t), t);
-            });
-            // Keep unsynced new session items
-            prev.filter(t => (t as any).isNewSessionTx).forEach(t => {
-              const k = getTxId(t);
-              if (!map.has(k)) {
-                map.set(k, t);
-              }
-            });
-            return Array.from(map.values());
-          });
+    const fetchTransactions = async () => {
+      let transfers: any[] = [];
+      try {
+        const res = await fetch('/api/depo-transactions');
+        if (res.ok) {
+          const result = await res.json();
+          if (result && result.status === 'success' && Array.isArray(result.transfers)) {
+            transfers = result.transfers;
+          }
         }
-      })
-      .catch(() => {});
+      } catch (e) {}
+
+      // Netlify / Static fallback - Google E-Tablo'dan DEPO HAREKETLERİ sayfasını oku
+      if (transfers.length === 0) {
+        try {
+          const gasRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=DEPO HAREKETLERİ&t=${Date.now()}`);
+          if (gasRes.ok) {
+            const sheetData = await gasRes.json();
+            if (sheetData && Array.isArray(sheetData.data) && sheetData.data.length > 1) {
+              const rows = sheetData.data;
+              const header = (rows[0] || []).map((c: any) => String(c || '').toUpperCase().trim());
+              const dateCol = header.findIndex((c: string) => c.includes('TARİH') || c.includes('TARIH'));
+              const typeCol = header.findIndex((c: string) => c.includes('TÜR') || c.includes('TUR') || c.includes('İŞLEM'));
+              const nameCol = header.findIndex((c: string) => c.includes('MALZEME') || c.includes('NAME') || c.includes('DESCRIPTION'));
+              const pnCol = header.findIndex((c: string) => c.includes('P/N') || c.includes('PARÇA'));
+              const snCol = header.findIndex((c: string) => c.includes('S/N') || c.includes('SERİ'));
+              const qtyCol = header.findIndex((c: string) => c.includes('MİKTAR') || c.includes('QTY'));
+              const destCol = header.findIndex((c: string) => c.includes('HEDEF') || c.includes('BÖLGE') || c.includes('YER'));
+              const userCol = header.findIndex((c: string) => c.includes('PERSONEL') || c.includes('TESLİM') || c.includes('YAPAN'));
+
+              const unitCol = header.findIndex((c: string) => c.includes('BİRİM') || c.includes('BIRIM') || c.includes('HAVA ARACI') || c.includes('UÇAK') || c.includes('UCAK'));
+
+              for (let r = 1; r < rows.length; r++) {
+                const row = rows[r];
+                if (!row || row.length === 0) continue;
+                const desc = String(row[nameCol >= 0 ? nameCol : 3] || '').trim();
+                if (!desc) continue;
+                const rawUnit = String(row[unitCol >= 0 ? unitCol : 10] || '').toLowerCase();
+                let assignedUnit = 'at802';
+                if (rawUnit.includes('bell') || rawUnit.includes('429')) assignedUnit = 'bell429';
+                else if (rawUnit.includes('t70') || rawUnit.includes('t-70')) assignedUnit = 't70';
+                else if (rawUnit.includes('b360') || rawUnit.includes('360')) assignedUnit = 'b360';
+                else if (rawUnit.includes('c650') || rawUnit.includes('650')) assignedUnit = 'c650';
+                else if (rawUnit.includes('hangar')) assignedUnit = 'hangar';
+
+                transfers.push({
+                  id: `tx_${r}`,
+                  date: String(row[dateCol >= 0 ? dateCol : 1] || ''),
+                  timestamp: String(row[dateCol >= 0 ? dateCol : 1] || ''),
+                  type: String(row[typeCol >= 0 ? typeCol : 2] || 'Çıkış'),
+                  itemName: desc,
+                  description: desc,
+                  partNumber: String(row[pnCol >= 0 ? pnCol : 4] || '-'),
+                  pn: String(row[pnCol >= 0 ? pnCol : 4] || '-'),
+                  serialNumber: String(row[snCol >= 0 ? snCol : 5] || '-'),
+                  sn: String(row[snCol >= 0 ? snCol : 5] || '-'),
+                  quantity: Number(row[qtyCol >= 0 ? qtyCol : 6]) || 1,
+                  qty: Number(row[qtyCol >= 0 ? qtyCol : 6]) || 1,
+                  targetRegion: String(row[destCol >= 0 ? destCol : 8] || 'ANKARA'),
+                  operator: String(row[userCol >= 0 ? userCol : 9] || '-'),
+                  unit: assignedUnit
+                });
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (transfers.length > 0) {
+        setTransactions(prev => {
+          const getTxId = (t: any) => t.id || `${t.timestamp || t.date}_${t.itemName || t.name}_${t.type || t.islemTuru}_${t.sn || '-'}`;
+          const map = new Map<string, any>();
+          transfers.forEach((t: any) => map.set(getTxId(t), t));
+          prev.filter(t => (t as any).isNewSessionTx).forEach(t => {
+            const k = getTxId(t);
+            if (!map.has(k)) map.set(k, t);
+          });
+          return Array.from(map.values());
+        });
+      }
+    };
+
+    fetchTransactions();
 
     // Yaşam Destek kayıtlarını canlı çek
     fetchYasamDestekData();
@@ -1950,25 +2096,27 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const filteredTransactions = useMemo(() => {
     let list = transactions;
 
+    // Filter out non-warehouse document planning titles (e.g. GÖREVLENDİRME ÇİZELGELERİ, YAZ DÖNEMİ PLANLAMASI)
+    list = list.filter(t => {
+      const name = String(t.itemName || t.name || t.itemDesc || '').toUpperCase();
+      return !name.includes("GÖREVLENDİRME") && !name.includes("PLANLAMASI") && !name.includes("ÇİZELGE");
+    });
+
     if (currentUnit && currentUnit !== 'all') {
       const u = currentUnit.toLowerCase().replace(/[^a-z0-9]/g, '');
       const isAt802 = u.startsWith('at802');
       list = list.filter(t => {
         const txUnit = (t.unit || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const txSheet = (t.sheetName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const txTail = (t.tailNo || t.kuyrukKodu || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        
+        const txSheet = (t.sheetName || '').toLowerCase();
         if (isAt802) {
-          if (txUnit.startsWith('at802') || txSheet.includes('at802') || txSheet.includes('at-802') || txTail.includes('at802') || txTail.includes('or20') || (!txUnit && !txSheet.includes('bell') && !txSheet.includes('t70') && !txSheet.includes('360') && !txSheet.includes('650') && !txSheet.includes('hangar'))) {
-            return true;
-          }
-          return false;
+          return txUnit === 'at802' || (!txUnit && !txSheet.includes('bell') && !txSheet.includes('t-70') && !txSheet.includes('c-650') && !txSheet.includes('b-360') && !txSheet.includes('hangar'));
         }
-
-        if (txUnit && txUnit === u) return true;
-        if (txSheet && txSheet.includes(u)) return true;
-        if (txTail && txTail.includes(u)) return true;
-        return false;
+        if (u.includes('bell')) return txUnit === 'bell429' || txSheet.includes('bell');
+        if (u.includes('t70')) return txUnit === 't70' || txSheet.includes('t-70') || txSheet.includes('t70');
+        if (u.includes('c650') || u.includes('650')) return txUnit === 'c650' || txSheet.includes('c-650') || txSheet.includes('c650');
+        if (u.includes('b360') || u.includes('360')) return txUnit === 'b360' || txSheet.includes('b-360') || txSheet.includes('b360');
+        if (u.includes('hangar')) return txUnit === 'hangar' || txSheet.includes('hangar');
+        return txUnit === u;
       });
     }
 
@@ -3116,6 +3264,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
     const authorized = ['802', '1839', '1234', '8902', '1923', '2024'];
     if (authorized.includes(onayPasswordInput.trim())) {
       setIsOnayPasswordModalOpen(false);
+      setOnaySelectedUnit(currentUnit || 'all');
       setIsOnayBekleyenlerModalOpen(true);
       fetchOnayBekleyenler();
     } else {
@@ -3304,7 +3453,7 @@ headerRow.push("MİLAS TRANSFER", "MİLAS ÇIKAN", "MİLAS MEVCUT");
 if (reg === 'ALL' || reg === 'BURSA') {
 headerRow.push("BURSA TRANSFER", "BURSA ÇIKAN", "BURSA MEVCUT");
 }
-headerRow.push("AÇIKLAMA", "RAF ÖMRÜ VAR MI?", "RAF ÖMRÜ BİTİŞ TARİHİ");
+headerRow.push("AÇIKLAMA", "RAF ÖMRÜ VAR MI?", "RAF ÖMRÜ BİTİŞ TARİHİ", "KRİTİK STOK SEVİYESİ");
 aoaData.push(headerRow);
 // Veri Satırları
 rowsToExport.forEach((item, idx) => {
@@ -3338,7 +3487,8 @@ const hasLife = item.hasShelfLife === 'EVET' || item.hasShelfLife === true || St
 row.push(
 item.serialAndNotes || item.sn || '-',
 hasLife ? 'EVET' : 'HAYIR',
-hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate : '-'
+hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate : '-',
+item.kritikStok !== undefined ? item.kritikStok : 0
 );
 aoaData.push(row);
 });
@@ -3371,7 +3521,7 @@ headerRow.push("BURSA TRANSFER", "BURSA ÇIKAN", "BURSA MEVCUT");
 if (reg === 'ALL') {
 headerRow.push("MUAYENE GİDEN", "MUAYENE GELEN", "MUAYENE TOPLAM");
 }
-headerRow.push("RAF ÖMRÜ VAR MI?", "RAF ÖMRÜ BİTİŞ TARİHİ");
+headerRow.push("RAF ÖMRÜ VAR MI?", "RAF ÖMRÜ BİTİŞ TARİHİ", "KRİTİK STOK SEVİYESİ");
 aoaData.push(headerRow);
 // Veri Satırları
 rowsToExport.forEach((item, idx) => {
@@ -3405,7 +3555,8 @@ row.push(item.muayeneGiden || 0, item.muayeneGelen || 0, item.muayeneToplam || 0
 const hasLife = item.hasShelfLife === 'EVET' || item.hasShelfLife === true || String(item.hasShelfLife).toUpperCase().includes('EVET');
 row.push(
 hasLife ? 'EVET' : 'HAYIR',
-hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate : '-'
+hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate : '-',
+item.kritikStok !== undefined ? item.kritikStok : 0
 );
 
         aoaData.push(row);
@@ -3711,6 +3862,7 @@ hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate
       let locCol = normHeader.findIndex(c => c.includes('LOKASYON') || c.includes('RAF') || c.includes('KONUM'));
       let shelfLifeCol = normHeader.findIndex(c => c.includes('RAF OMRU VAR') || c.includes('OMRUNE TABI'));
       let shelfLifeDateCol = normHeader.findIndex(c => c.includes('RAF OMRU BITIS') || c.includes('SKT'));
+      let kritikStokCol = normHeader.findIndex(c => c.includes('KRITIK') || c.includes('KRİTİK') || c.includes('MIN STOK') || c.includes('MINIMUM'));
 
       // If Kimyasal Upload, apply exact 24-column Kimyasal positional fallbacks if header index missing:
       if (isKimyasalUpload) {
@@ -3828,7 +3980,8 @@ hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate
           baseGelen: genelToplam,
           gelen: genelToplam,
           hasShelfLife: shelfLifeCol >= 0 ? (String(row[shelfLifeCol] || '').toUpperCase().includes('EVET') ? 'EVET' : 'HAYIR') : 'HAYIR',
-          shelfLifeDate: shelfLifeDateCol >= 0 ? String(row[shelfLifeDateCol] || '-').trim() : '-'
+          shelfLifeDate: shelfLifeDateCol >= 0 ? String(row[shelfLifeDateCol] || '-').trim() : '-',
+          kritikStok: kritikStokCol >= 0 ? (Number(row[kritikStokCol]) || 0) : 0
         });
       }
 
@@ -4457,7 +4610,8 @@ hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate
       baseGelen: newItemGelen,
       gelen: newItemGelen,
       hasShelfLife: newItemHasShelfLife,
-      shelfLifeDate: newItemHasShelfLife === 'EVET' ? (newItemShelfLifeDate.trim() || '-') : '-'
+      shelfLifeDate: newItemHasShelfLife === 'EVET' ? (newItemShelfLifeDate.trim() || '-') : '-',
+      kritikStok: Number(newItemKritikStok) || 0
     };
 
     const oldItem = editingItemIdx >= 0 ? inventory[editingItemIdx] : null;
@@ -4564,6 +4718,7 @@ hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate
     const hasLife = item.hasShelfLife === 'EVET' || item.hasShelfLife === true || String(item.hasShelfLife).toUpperCase().includes('EVET');
     setRowEditHasShelfLife(hasLife ? 'EVET' : 'HAYIR');
     setRowEditShelfLifeDate(item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate : '');
+    setRowEditKritikStok(item.kritikStok !== undefined ? Number(item.kritikStok) : 0);
     setRowEditPassword('');
     setRowEditPasswordError('');
     setIsRowEditModalOpen(true);
@@ -4601,7 +4756,8 @@ hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate
       location: rowEditLocation.trim() || '-',
       notes: rowEditNotes.trim() || '-',
       hasShelfLife: rowEditHasShelfLife,
-      shelfLifeDate: rowEditHasShelfLife === 'EVET' ? (rowEditShelfLifeDate.trim() || '-') : '-'
+      shelfLifeDate: rowEditHasShelfLife === 'EVET' ? (rowEditShelfLifeDate.trim() || '-') : '-',
+      kritikStok: Number(rowEditKritikStok) || 0
     };
 
     const oldTarget = rowEditItem;
@@ -5053,21 +5209,21 @@ hasLife && item.shelfLifeDate && item.shelfLifeDate !== '-' ? item.shelfLifeDate
           <>
             <div className="overflow-x-auto max-h-[72vh] overflow-y-auto">
               <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-800 font-black text-[11px] uppercase tracking-wider text-center select-none font-sans">
+                <thead className="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-800 font-black text-[10px] uppercase tracking-wider text-center select-none font-sans h-7">
                   <tr>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[50px]">SIRA</th>
-                    <th className="py-2.5 px-4 border-r border-slate-300 text-left w-[260px] max-w-[280px]">MALZEME ADI</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[90px]">KATEGORİ</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[65px]">ADET</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[95px]">TARİH</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[130px]">İŞLEM TÜRÜ</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 font-mono min-w-[120px]">SERİAL NUMBER</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[130px]">KUYRUK KODU</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[110px]">TESLİM ALAN</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[110px]">KABUL YAPAN</th>
-                    <th className="py-2.5 px-3 border-r border-slate-300 min-w-[130px]">DEPO YERİ</th>
-                    <th className="py-2.5 px-4 border-r border-slate-300 min-w-[160px]">SAYFA / BİRİM</th>
-                    <th className="py-2.5 px-3 min-w-[130px] bg-slate-700 text-white font-black">İŞLEMLER</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[50px] leading-tight">SIRA</th>
+                    <th className="py-1 px-3 border-r border-slate-300 text-left w-[260px] max-w-[280px] leading-tight">MALZEME ADI</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[90px] leading-tight">KATEGORİ</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[65px] leading-tight">ADET</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[95px] leading-tight">TARİH</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[130px] leading-tight">İŞLEM TÜRÜ</th>
+                    <th className="py-1 px-2 border-r border-slate-300 font-mono min-w-[120px] leading-tight">SERİAL NUMBER</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[130px] leading-tight">KUYRUK KODU</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[110px] leading-tight">TESLİM ALAN</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[110px] leading-tight">KABUL YAPAN</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[130px] leading-tight">DEPO YERİ</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[160px] leading-tight">SAYFA / BİRİM</th>
+                    <th className="py-1 px-2 min-w-[130px] bg-slate-700 text-white font-black leading-tight">İŞLEMLER</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
@@ -5802,6 +5958,7 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                       {/* RAF ÖMRÜ SÜTUNLARI */}
                       <th className="py-2.5 px-2 bg-emerald-100 text-emerald-950 border-r border-slate-300 min-w-[95px] font-black">RAF ÖMRÜ VAR MI?</th>
                       <th className="py-2.5 px-2 bg-emerald-50 text-emerald-950 border-r border-slate-300 min-w-[110px] font-black">RAF ÖMRÜ BİTİŞ TARİHİ</th>
+                      <th className="py-2.5 px-2 bg-amber-500 text-slate-950 border-r border-slate-300 min-w-[110px] font-black">KRİTİK STOK SEVİYESİ</th>
 
                       {/* İŞLEM */}
                       <th className="py-2.5 px-2 bg-slate-200 text-slate-800 min-w-[80px]">İŞLEM</th>
@@ -5950,6 +6107,18 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                             {(item.hasShelfLife === 'EVET' || item.hasShelfLife === true || String(item.hasShelfLife).toUpperCase().includes('EVET')) && item.shelfLifeDate && item.shelfLifeDate !== '-'
                               ? item.shelfLifeDate
                               : '-'}
+                          </td>
+
+                          {/* KRİTİK STOK SEVİYESİ */}
+                          <td className="py-2 px-2 text-center border-r border-slate-200 font-mono font-bold">
+                            {(item.kritikStok !== undefined && Number(item.kritikStok) > 0 && (item.toplamStok || 0) <= Number(item.kritikStok)) ? (
+                              <span className="inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-md bg-rose-600 text-white font-black text-[11px] animate-pulse shadow-xs" title="Stok kritik seviyenin altında veya eşit!">
+                                <span>⚠️</span>
+                                <span>{item.kritikStok}</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">{item.kritikStok || 0}</span>
+                            )}
                           </td>
 
                           <td className="py-2 px-2 text-center bg-slate-50">
@@ -6102,6 +6271,7 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                       {/* RAF ÖMRÜ SÜTUNLARI */}
                       <th className="py-2.5 px-2 bg-emerald-100 text-emerald-950 border-r border-slate-300 min-w-[95px] font-black">RAF ÖMRÜ VAR MI?</th>
                       <th className="py-2.5 px-2 bg-emerald-50 text-emerald-950 border-r border-slate-300 min-w-[110px] font-black">RAF ÖMRÜ BİTİŞ TARİHİ</th>
+                      <th className="py-2.5 px-2 bg-amber-500 text-slate-950 border-r border-slate-300 min-w-[110px] font-black">KRİTİK STOK SEVİYESİ</th>
 
                       {/* İŞLEM */}
                       <th className="py-2.5 px-2 bg-slate-200 text-slate-800 min-w-[80px]">İŞLEM</th>
@@ -6252,6 +6422,18 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                             {(item.hasShelfLife === 'EVET' || item.hasShelfLife === true || String(item.hasShelfLife).toUpperCase().includes('EVET')) && item.shelfLifeDate && item.shelfLifeDate !== '-'
                               ? item.shelfLifeDate
                               : '-'}
+                          </td>
+
+                          {/* KRİTİK STOK SEVİYESİ */}
+                          <td className="py-2 px-2 text-center border-r border-slate-200 font-mono font-bold">
+                            {(item.kritikStok !== undefined && Number(item.kritikStok) > 0 && (item.toplamStok || 0) <= Number(item.kritikStok)) ? (
+                              <span className="inline-flex items-center justify-center gap-1 px-2 py-0.5 rounded-md bg-rose-600 text-white font-black text-[11px] animate-pulse shadow-xs" title="Stok kritik seviyenin altında veya eşit!">
+                                <span>⚠️</span>
+                                <span>{item.kritikStok}</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">{item.kritikStok || 0}</span>
+                            )}
                           </td>
 
                           <td className="py-2 px-2 text-center bg-slate-50">
@@ -7234,6 +7416,21 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                     </div>
                   )}
                 </div>
+              </div>
+
+              <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200">
+                <label className="block text-[10px] font-black text-amber-950 uppercase font-mono mb-1 flex items-center justify-between">
+                  <span>KRİTİK STOK SEVİYESİ (Adet)</span>
+                  <span className="text-[9px] text-slate-500 font-sans font-normal">Kritik seviyeye indiğinde Gün Takip uyarısı oluşturur (0 = Takip Yok)</span>
+                </label>
+                <input 
+                  type="number" 
+                  min="0"
+                  value={newItemKritikStok}
+                  onChange={(e) => setNewItemKritikStok(Math.max(0, parseInt(e.target.value) || 0))}
+                  placeholder="0"
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-mono font-bold text-slate-800 focus:outline-none focus:border-amber-500"
+                />
               </div>
 
               <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
@@ -8633,6 +8830,21 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                 </div>
               </div>
 
+              <div>
+                <label className="block text-[9.5px] font-black text-amber-400 uppercase font-mono mb-1 flex items-center justify-between">
+                  <span>KRİTİK STOK SEVİYESİ (Adet)</span>
+                  <span className="text-[9px] text-slate-400 font-sans font-normal">Stok bu adede veya altına indiğinde Gün Takip uyarısı tetiklenir (0 = Takip Dışı)</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={rowEditKritikStok}
+                  onChange={(e) => setRowEditKritikStok(Number(e.target.value) || 0)}
+                  placeholder="0"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono font-bold focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
               <div className="pt-2">
                 <label className="block text-[10px] font-black text-emerald-400 uppercase font-mono mb-1">
                   YETKİLİ ŞİFRESİ (1839 veya Birim Şifresi) *
@@ -8982,53 +9194,93 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
       {isOnayBekleyenlerModalOpen && (
         <div className="fixed inset-0 z-[10550] bg-black/85 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-slate-900 border border-amber-500/40 text-white rounded-3xl shadow-2xl max-w-4xl w-full overflow-hidden flex flex-col max-h-[92vh]">
-            <div className="bg-slate-950 px-5 py-4 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
-                  <Clock className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-200">
-                      ONAY BEKLEYEN ÇIKIŞ TALEPLERİ — {currentUnit === 'all' ? 'TÜM BİRİMLER' : currentUnit.toUpperCase()}
-                    </h3>
-                    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 rounded-full shrink-0">
-                      <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                      <span className="text-[9px] font-black text-emerald-400 uppercase tracking-tighter">CANLI</span>
-                    </div>
+            <div className="bg-slate-950 px-5 py-4 border-b border-slate-800 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
+                    <Clock className="w-5 h-5" />
                   </div>
-                  <p className="text-[10px] text-slate-400">
-                    Drive Excel 'ONAY BEKLEYENLER' sayfası ile senkronize canlı talep listesi
-                  </p>
+                  <div>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-200">
+                        ONAY BEKLEYEN ÇIKIŞ TALEPLERİ — {onaySelectedUnit === 'all' ? 'TÜM BİRİMLER' : onaySelectedUnit.toUpperCase()}
+                      </h3>
+                      <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 rounded-full shrink-0">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                        <span className="text-[9px] font-black text-emerald-400 uppercase tracking-tighter">CANLI</span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-400">
+                      Drive Excel 'ONAY BEKLEYENLER' sayfaları ile senkronize canlı talep listesi
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fetchOnayBekleyenler(false)}
+                    className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs flex items-center gap-1 cursor-pointer"
+                    title="Yenile"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Yenile</span>
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => setIsOnayBekleyenlerModalOpen(false)} 
+                    className="text-slate-400 hover:text-white font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => fetchOnayBekleyenler(false)}
-                  className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs flex items-center gap-1 cursor-pointer"
-                  title="Yenile"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Yenile</span>
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => setIsOnayBekleyenlerModalOpen(false)} 
-                  className="text-slate-400 hover:text-white font-bold cursor-pointer"
-                >
-                  ✕
-                </button>
+
+              {/* Hava Aracı / Birim Seçim Butonları */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-800/80">
+                {UNITS.map(u => {
+                  const isSelected = onaySelectedUnit === u.id;
+                  const countForU = onayBekleyenlerList.filter(reqItem => {
+                    if (reqItem.status !== 'ONAY BEKLİYOR') return false;
+                    if (u.id === 'all') return true;
+                    const itemUnit = (reqItem.unit || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
+                    const targetNorm = u.id.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (targetNorm.startsWith('at802')) return itemUnit === 'at802' || !itemUnit;
+                    return itemUnit === targetNorm;
+                  }).length;
+
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setOnaySelectedUnit(u.id)}
+                      className={`px-2.5 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition cursor-pointer flex items-center gap-1.5 ${
+                        isSelected
+                          ? 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-400/50'
+                          : 'bg-slate-800/90 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700'
+                      }`}
+                    >
+                      <span>{u.name}</span>
+                      {countForU > 0 && (
+                        <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-extrabold ${
+                          isSelected ? 'bg-slate-950 text-amber-400' : 'bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                        }`}>
+                          {countForU}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
             <div className="p-5 overflow-y-auto flex-1 space-y-3 font-sans text-xs">
               {(() => {
                 const filteredOnayList = onayBekleyenlerList.filter(reqItem => {
-                  if (!currentUnit || currentUnit === 'all') return true;
-                  const itemUnit = (reqItem.unit || 'at802').toLowerCase();
-                  const cUnit = currentUnit.toLowerCase();
-                  return itemUnit === cUnit || (cUnit === 'at802' && (!reqItem.unit || itemUnit === 'at802'));
+                  if (onaySelectedUnit === 'all') return true;
+                  const itemUnit = (reqItem.unit || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
+                  const targetNorm = onaySelectedUnit.toLowerCase().replace(/[^a-z0-9]/g, '');
+                  if (targetNorm.startsWith('at802')) return itemUnit === 'at802' || !itemUnit;
+                  return itemUnit === targetNorm;
                 });
 
                 if (isLoadingOnayList) {
@@ -9046,7 +9298,7 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                       <div className="text-3xl mb-2">✅</div>
                       <h4 className="font-bold text-white text-sm">Onay Bekleyen Talep Yok</h4>
                       <p className="text-xs text-slate-500 mt-1">
-                        {currentUnit === 'all' ? 'Tüm birimler' : currentUnit.toUpperCase()} için henüz onay bekleyen talep bulunmuyor.
+                        {onaySelectedUnit === 'all' ? 'Tüm birimler' : onaySelectedUnit.toUpperCase()} için henüz onay bekleyen talep bulunmuyor.
                       </p>
                     </div>
                   );

@@ -529,97 +529,54 @@ function doPost(e) {
       try {
         var folderId = (postData && postData.folderId) || "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
         var fileName = postData && postData.fileName;
-        var targetKey = postData && postData.targetKey;
+        var fileId = postData && postData.fileId;
         var base64Data = postData && postData.base64Data;
         var folder = DriveApp.getFolderById(folderId);
 
         // Normalize filename
         if (!fileName) {
-          fileName = (targetKey ? targetKey : "techizat_guncel") + ".xlsx";
+          fileName = "techizat_guncel.xlsx";
         }
         if (!fileName.toLowerCase().endsWith(".xlsx") && !fileName.toLowerCase().endsWith(".xls")) {
           fileName += ".xlsx";
         }
 
-        // 1. Delete exact match existing files
-        var existingFiles = folder.getFilesByName(fileName);
-        while (existingFiles.hasNext()) {
-          var oldF = existingFiles.next();
-          try { oldF.setTrashed(true); } catch (e) {}
-        }
-
-        // 2. Identify target key / category to purge any previous old-named versions
-        var normalizedTarget = (targetKey || fileName).toLowerCase()
-          .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ü/g, 'u')
-          .replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c')
-          .replace(/[\-_]/g, ' ')
-          .replace('.xlsx', '').replace('.xls', '');
-
-        var allFilesInFolder = folder.getFiles();
-        while (allFilesInFolder.hasNext()) {
-          var fileInDrive = allFilesInFolder.next();
-          var driveNameNorm = fileInDrive.getName().toLowerCase()
-            .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ü/g, 'u')
-            .replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c')
-            .replace(/[\-_]/g, ' ')
-            .replace('.xlsx', '').replace('.xls', '');
-
-          // Check if it belongs to the exact same aircraft unit & sub-section
-          var isSameTarget = false;
-          var unitTokens = ["at 802", "at802", "bell 429", "bell429", "t 70", "t70", "b 360", "b360", "c 650", "c650", "hangar", "kara arac"];
-          var sectionTokens = ["ozel", "sarf", "kimyasal", "yer destek", "bumbi", "helitak"];
-
-          var currentUnit = "";
-          for (var u = 0; u < unitTokens.length; u++) {
-            if (normalizedTarget.indexOf(unitTokens[u]) !== -1) {
-              currentUnit = unitTokens[u].replace(/\s+/g, '');
-              break;
-            }
-          }
-
-          var driveUnit = "";
-          for (var du = 0; du < unitTokens.length; du++) {
-            if (driveNameNorm.indexOf(unitTokens[du]) !== -1) {
-              driveUnit = unitTokens[du].replace(/\s+/g, '');
-              break;
-            }
-          }
-
-          if (currentUnit && driveUnit && currentUnit === driveUnit) {
-            var currentSec = "";
-            for (var s = 0; s < sectionTokens.length; s++) {
-              if (normalizedTarget.indexOf(sectionTokens[s]) !== -1) {
-                currentSec = sectionTokens[s];
-                break;
-              }
-            }
-
-            var driveSec = "";
-            for (var ds = 0; ds < sectionTokens.length; ds++) {
-              if (driveNameNorm.indexOf(sectionTokens[ds]) !== -1) {
-                driveSec = sectionTokens[ds];
-                break;
-              }
-            }
-
-            if (currentSec === driveSec && currentSec !== "") {
-              isSameTarget = true;
-            }
-          }
-
-          if (isSameTarget) {
-            try { fileInDrive.setTrashed(true); } catch (e) {}
-          }
-        }
-
         var decoded = Utilities.base64Decode(base64Data);
         var blob = Utilities.newBlob(decoded, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
-        var newFile = folder.createFile(blob);
 
-        response.fileId = newFile.getId();
-        response.fileName = newFile.getName();
-        response.downloadUrl = "https://drive.google.com/uc?export=download&id=" + newFile.getId();
-        response.message = "Excel dosyası '" + fileName + "' adıyla Google Drive klasörüne başarıyla kaydedildi. Varsa önceki eski sürüm silindi.";
+        var targetFile = null;
+        if (fileId) {
+          try {
+            targetFile = DriveApp.getFileById(fileId);
+          } catch (e) {
+            targetFile = null;
+          }
+        }
+
+        if (!targetFile) {
+          var existingFiles = folder.getFilesByName(fileName);
+          if (existingFiles.hasNext()) {
+            targetFile = existingFiles.next();
+          }
+        }
+
+        if (targetFile) {
+          // Update in-place to keep exact same File ID and update online Excel permanently!
+          targetFile.setContent(blob);
+          targetFile.setName(fileName);
+          response.fileId = targetFile.getId();
+          response.fileName = targetFile.getName();
+          response.downloadUrl = "https://drive.google.com/uc?export=download&id=" + targetFile.getId();
+          response.message = "Excel dosyası '" + fileName + "' Google Drive üzerinde güncellendi (File ID korundu).";
+          response.status = "success";
+        } else {
+          var newFile = folder.createFile(blob);
+          response.fileId = newFile.getId();
+          response.fileName = newFile.getName();
+          response.downloadUrl = "https://drive.google.com/uc?export=download&id=" + newFile.getId();
+          response.message = "Excel dosyası '" + fileName + "' adıyla Google Drive klasörüne yeni kaydedildi.";
+          response.status = "success";
+        }
       } catch (err) {
         response.status = "error";
         response.message = "Drive Excel yükleme hatası: " + err.toString();
@@ -757,59 +714,15 @@ function doPost(e) {
           targetSs = ss;
         }
 
-        // 1. Ana Transfer Geçmişi Tablosunu Yaz (Kullanıcının belirlediği DEPO HAREKET GEÇMİŞİ-AT-802 sayfasına yaz)
-        var targetSheetName = (postData && postData.sheetName) || "DEPO HAREKET GEÇMİŞİ-AT-802";
-        writeTransfersToSpecificSheet(targetSs, targetSheetName, transfers, "#0b3d1d");
-        if (targetSheetName !== "DEPO HAREKET GEÇMİŞİ-AT-802") {
-          writeTransfersToSpecificSheet(targetSs, "DEPO HAREKET GEÇMİŞİ-AT-802", transfers, "#0b3d1d");
-        }
-        writeTransfersToSpecificSheet(targetSs, "TRANSFER GEÇMİŞİ", transfers, "#0b3d1d");
-
-        // 2. Depo / Birim Bazlı Ayrı Sayfalar Oluştur ve Yaz
-        var unitCategories = {
-          "TRANSFER GEÇMİŞİ - AT802": [],
-          "TRANSFER GEÇMİŞİ - BELL429": [],
-          "TRANSFER GEÇMİŞİ - T70": [],
-          "TRANSFER GEÇMİŞİ - B360": [],
-          "TRANSFER GEÇMİŞİ - C650": [],
-          "TRANSFER GEÇMİŞİ - HANGAR": [],
-          "TRANSFER GEÇMİŞİ - KARA ARAÇLARI": []
-        };
-
-        for (var trIdx = 0; trIdx < transfers.length; trIdx++) {
-          var tItem = transfers[trIdx];
-          var unitKey = getDepoTransferUnitKey(tItem);
-          if (unitKey === "at802") unitCategories["TRANSFER GEÇMİŞİ - AT802"].push(tItem);
-          else if (unitKey === "bell429") unitCategories["TRANSFER GEÇMİŞİ - BELL429"].push(tItem);
-          else if (unitKey === "t70") unitCategories["TRANSFER GEÇMİŞİ - T70"].push(tItem);
-          else if (unitKey === "b360") unitCategories["TRANSFER GEÇMİŞİ - B360"].push(tItem);
-          else if (unitKey === "c650") unitCategories["TRANSFER GEÇMİŞİ - C650"].push(tItem);
-          else if (unitKey === "hangar") unitCategories["TRANSFER GEÇMİŞİ - HANGAR"].push(tItem);
-          else if (unitKey === "kara_araclari") unitCategories["TRANSFER GEÇMİŞİ - KARA ARAÇLARI"].push(tItem);
-          else unitCategories["TRANSFER GEÇMİŞİ - AT802"].push(tItem);
-        }
-
-        var headerColors = {
-          "TRANSFER GEÇMİŞİ - AT802": "#1e3a8a",
-          "TRANSFER GEÇMİŞİ - BELL429": "#065f46",
-          "TRANSFER GEÇMİŞİ - T70": "#831843",
-          "TRANSFER GEÇMİŞİ - B360": "#78350f",
-          "TRANSFER GEÇMİŞİ - C650": "#4c1d95",
-          "TRANSFER GEÇMİŞİ - HANGAR": "#334155",
-          "TRANSFER GEÇMİŞİ - KARA ARAÇLARI": "#7c2d12"
-        };
-
-        for (var catSheetName in unitCategories) {
-          if (unitCategories[catSheetName].length > 0) {
-            writeTransfersToSpecificSheet(targetSs, catSheetName, unitCategories[catSheetName], headerColors[catSheetName] || "#0b3d1d");
-          }
-        }
+        // 1. Ana Transfer Geçmişi Tablosunu Yaz (AT-802 Depo Sistemi standardına göre)
+        var targetSheetName = "DEPO HAREKET GEÇMİŞİ-AT-802";
+        writeTransfersToSpecificSheet(targetSs, targetSheetName, transfers, "#1e3a8a");
 
         // 3. AT-802 Transfer Geçmişini Google Drive Klasörüne (1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP) Excel (.xlsx) olarak yükle
         try {
           var targetFolderId = (postData && postData.folderId) || "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
           var targetFolder = DriveApp.getFolderById(targetFolderId);
-          var at802Transfers = unitCategories["TRANSFER GEÇMİŞİ - AT802"] || [];
+          var at802Transfers = unitCategories["DEPO HAREKET GEÇMİŞİ-AT-802"] || [];
           if (at802Transfers.length === 0 && transfers.length > 0) {
             at802Transfers = transfers;
           }
@@ -948,26 +861,71 @@ function doPost(e) {
         var targetSpreadsheetId = (postData && postData.spreadsheetId) || "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
         var targetSs = SpreadsheetApp.openById(targetSpreadsheetId);
         var reqSheet = (postData && postData.sheetName) || "DEPO HAREKET GEÇMİŞİ-AT-802";
-        var sheet = targetSs.getSheetByName(reqSheet) || targetSs.getSheetByName("DEPO HAREKET GEÇMİŞİ-AT-802") || targetSs.getSheetByName("TRANSFER GEÇMİŞİ - AT802") || targetSs.getSheetByName("TRANSFER GEÇMİŞİ");
+        
+        // Sadece istenen birimin sayfasına bak, başka birime asla fallback yapma!
+        var sheet = targetSs.getSheetByName(reqSheet);
+        if (!sheet) {
+          var reqLower = reqSheet.toLowerCase();
+          var allSheets = targetSs.getSheets();
+          for (var sIdx = 0; sIdx < allSheets.length; sIdx++) {
+            var sName = allSheets[sIdx].getName();
+            var sNameLower = sName.toLowerCase();
+            if (reqLower.includes("bell") && sNameLower.includes("bell")) { sheet = allSheets[sIdx]; break; }
+            else if (reqLower.includes("at-802") && (sNameLower.includes("at-802") || sNameLower.includes("at802"))) { sheet = allSheets[sIdx]; break; }
+            else if (reqLower.includes("t-70") && (sNameLower.includes("t-70") || sNameLower.includes("t70"))) { sheet = allSheets[sIdx]; break; }
+            else if (reqLower.includes("b-360") && (sNameLower.includes("b-360") || sNameLower.includes("b360"))) { sheet = allSheets[sIdx]; break; }
+            else if (reqLower.includes("c-650") && (sNameLower.includes("c-650") || sNameLower.includes("c650"))) { sheet = allSheets[sIdx]; break; }
+            else if (reqLower.includes("hangar") && sNameLower.includes("hangar")) { sheet = allSheets[sIdx]; break; }
+            else if (reqLower.includes("kara") && sNameLower.includes("kara")) { sheet = allSheets[sIdx]; break; }
+          }
+        }
+
         if (sheet && sheet.getLastRow() > 1) {
-          var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-          response.transfers = rows.map(function(r) {
+          var rows = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
+          var headerRow = rows[0].map(function(h) { return String(h || "").trim().toUpperCase(); });
+          
+          var nameCol = headerRow.indexOf("MALZEME ADI");
+          var qtyCol = headerRow.indexOf("ADET");
+          var dateCol = headerRow.indexOf("TARİH");
+          var typeCol = headerRow.indexOf("İŞLEM TÜRÜ");
+          var snCol = headerRow.indexOf("SERİAL NUMBER");
+          if (snCol === -1) snCol = headerRow.indexOf("SERİ NO");
+          var tailCol = headerRow.indexOf("KUYRUK KODU");
+          var opCol = headerRow.indexOf("TESLİM ALAN");
+          var recCol = headerRow.indexOf("KABUL YAPAN");
+          var locCol = headerRow.indexOf("DEPO YERİ");
+
+          var dataRows = rows.slice(1);
+          response.transfers = dataRows.filter(function(r) {
+            return r && r.some(function(c) { return String(c || "").trim() !== ""; });
+          }).map(function(r, idx) {
+            var itemName = nameCol >= 0 ? String(r[nameCol] || "") : String(r[0] || "");
+            var qty = qtyCol >= 0 ? Number(r[qtyCol]) || 1 : (Number(r[1]) || 1);
+            var dateVal = dateCol >= 0 ? String(r[dateCol] || "") : String(r[2] || "");
+            var typeVal = typeCol >= 0 ? String(r[typeCol] || "TRANSFER") : String(r[3] || "TRANSFER");
+            var snVal = snCol >= 0 ? String(r[snCol] || "-") : String(r[4] || "-");
+            var tailVal = tailCol >= 0 ? String(r[tailCol] || "-") : String(r[5] || "-");
+            var opVal = opCol >= 0 ? String(r[opCol] || "-") : String(r[6] || "-");
+            var recVal = recCol >= 0 ? String(r[recCol] || "-") : String(r[7] || "-");
+            var locVal = locCol >= 0 ? String(r[locCol] || "DEPO") : String(r[8] || "DEPO");
+
             return {
-              id: "tx_" + String(r[0] || Math.random()),
-              date: String(r[1] || ""),
-              timestamp: String(r[1] || ""),
-              type: String(r[2] || "TRANSFER"),
-              itemName: String(r[3] || ""),
-              pn: String(r[4] || ""),
-              sn: String(r[5] || ""),
-              quantity: Number(r[6]) || 1,
-              tailNo: String(r[7] || ""),
-              sourceLocation: String(r[8] || "DEPO"),
-              targetLocation: String(r[9] || ""),
-              location: String(r[9] || r[8] || "DEPO"),
-              operator: String(r[10] || ""),
-              receivedBy: String(r[11] || ""),
-              notes: String(r[12] || "")
+              id: "tx_" + Date.now() + "_" + idx + "_" + Math.floor(Math.random()*1000),
+              date: dateVal,
+              timestamp: dateVal,
+              type: typeVal,
+              itemName: itemName,
+              pn: "-",
+              sn: snVal,
+              quantity: qty,
+              tailNo: tailVal,
+              sourceLocation: "DEPO",
+              targetLocation: locVal,
+              location: locVal,
+              operator: opVal,
+              receivedBy: recVal,
+              sheetName: reqSheet,
+              notes: ""
             };
           });
           response.status = "success";

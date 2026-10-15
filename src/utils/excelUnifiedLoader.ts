@@ -166,24 +166,61 @@ export const parseUploadedExcelFile = async (
             ];
           } else if (isKara) {
             // KARA ARAÇLARI FORMATI:
-            // 0: SIRA NO, 1: PLAKA, 2: MARKA, 3: MODEL, 4: BULUNDUĞU YER, 5: SON KM, 6: DURUMU,
-            // 7: BAKIMA TABİ, 8: SON KONTROL, 9: GELECEK KONTROL, 10: FİRMA, 11: AÇIKLAMA, 12: MAİL, 13: BÖLÜM
+            // 0: Sıra No, 1: Araç Plaka, 2: Marka, 3: Model, 4: Yakıt Türü, 5: Son Bakım Km, 6: DURUMU, 7: Bakım Tarihi, 8: Sonraki Bakım Tarihi yada KM'si, 9: SON KONTROLÜ YAPAN FİRMA, 10: AÇIKLAMA
+            const karaSiraIdx = findColIdx(["SIRA NO", "SIRA", "S.N.", "NO."]);
+            const karaPlakaIdx = findColIdx(["ARAÇ PLAKA", "ARAC PLAKA", "PLAKA", "ARAÇ PLAKASI"]);
+            const karaMarkaIdx = findColIdx(["MARKA"]);
+            const karaModelIdx = findColIdx(["MODEL", "TİP", "TIP"]);
+            const karaYakitIdx = findColIdx(["YAKIT TÜRÜ", "YAKIT TURU", "YAKIT", "BENZİN", "BENZIN", "MAZOT", "DİZEL", "DIZEL"]);
+            const karaKmIdx = findColIdx(["SON BAKIM KM", "SON BAKIM", "KM Sİ", "KM SI", "SON KM", "KM"]);
+            const karaDurumIdx = findColIdx(["DURUM", "DURUMU"]);
+            const karaBakimTarihiIdx = findColIdx(["BAKIM TARİHİ", "BAKIM TARIHI"], ["SONRAKİ", "SONRAKI", "GELECEK"]);
+            const karaSonrakiBakimIdx = findColIdx(["SONRAKİ BAKIM TARİHİ", "SONRAKI BAKIM TARIHI", "SONRAKİ BAKIM", "SONRAKI BAKIM", "GELECEK BAKIM", "SONRAKİ", "SONRAKI", "GELECEK"]);
+            const karaFirmaIdx = findColIdx(["SON KONTROLÜ YAPAN", "SON KONTROLU YAPAN", "YAPAN FİRMA", "YAPAN FIRMA", "FİRMA", "FIRMA", "SERVİS", "MÜDÜRLÜĞÜ"]);
+            const karaAciklamaIdx = findColIdx(["AÇIKLAMA", "ACIKLAMA", "NOT"]);
+
+            const hasSiraInExcel = karaSiraIdx >= 0 && (karaPlakaIdx > karaSiraIdx || karaPlakaIdx < 0);
+            const pIdx = karaPlakaIdx >= 0 ? karaPlakaIdx : (hasSiraInExcel ? 1 : 0);
+            const mIdx = karaMarkaIdx >= 0 ? karaMarkaIdx : (hasSiraInExcel ? 2 : 1);
+            const moIdx = karaModelIdx >= 0 ? karaModelIdx : (hasSiraInExcel ? 3 : 2);
+            const yIdx = karaYakitIdx >= 0 ? karaYakitIdx : (hasSiraInExcel ? 4 : 3);
+            const kIdx = karaKmIdx >= 0 ? karaKmIdx : (hasSiraInExcel ? 5 : 4);
+            const dIdx = karaDurumIdx >= 0 ? karaDurumIdx : (hasSiraInExcel ? 6 : 5);
+            const btIdx = karaBakimTarihiIdx >= 0 ? karaBakimTarihiIdx : (hasSiraInExcel ? 7 : 6);
+            const sbtIdx = karaSonrakiBakimIdx >= 0 ? karaSonrakiBakimIdx : (hasSiraInExcel ? 8 : 7);
+            const fIdx = karaFirmaIdx >= 0 ? karaFirmaIdx : (hasSiraInExcel ? 9 : 8);
+            const aIdx = karaAciklamaIdx >= 0 ? karaAciklamaIdx : (hasSiraInExcel ? 10 : 9);
+
+            let rawSiraVal = getVal(karaSiraIdx, "");
+            let rawPlakaVal = getVal(pIdx, "");
+            let rawMarkaVal = getVal(mIdx, "-");
+            let rawModelVal = getVal(moIdx, "");
+            let rawYakitVal = getVal(yIdx, "");
+            let rawKmVal = getVal(kIdx, "-");
+            let rawDurumVal = getVal(dIdx, "FAAL") || "FAAL";
+            let rawBakimTarihiVal = getVal(btIdx, "");
+            let rawSonrakiBakimVal = getVal(sbtIdx, "");
+            let rawFirmaVal = getVal(fIdx, "");
+            let rawAciklamaVal = getVal(aIdx, "");
+
             targetRow = [
-              rawSira,
-              rawName,
-              "-",
-              rawPn || "-",
-              rawLoc || "ANKARA",
-              rawMiktar || rawSonBakim || "",
-              rawDurum || "FAAL",
-              rawKalib || "EVET",
-              rawSonBakim,
-              rawGelecekBakim,
-              rawFirma,
-              rawAciklama,
-              rawMail,
-              "kara_araclari"
+              rawSiraVal,
+              rawPlakaVal,
+              rawMarkaVal,
+              rawModelVal,
+              rawYakitVal,
+              rawKmVal,
+              rawDurumVal,
+              rawBakimTarihiVal,
+              rawSonrakiBakimVal,
+              rawFirmaVal,
+              rawAciklamaVal
             ];
+
+            if (rawPlakaVal || (rawMarkaVal && rawMarkaVal !== "-") || rawModelVal || rawAciklamaVal || (rawKmVal && rawKmVal !== "-")) {
+              rawParsedRows.push(targetRow);
+            }
+            continue;
           } else {
             // YER DESTEK & ÖZEL ALETLER FORMATI:
             // 0: SIRA NO, 1: TEÇHİZAT ADI, 2: P/N, 3: S/N, 4: MİKTAR, 5: BULUNDUĞU YER,

@@ -115,28 +115,72 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
   const fetchAllStocks = async () => {
     try {
       setIsStockLoading(true);
-      let json: any = null;
+      // 1. Önce doğrudan Google E-Tablo içindeki sayfalardan GET ile canlı oku (Netlify ile tam uyumlu)
       try {
-        const res = await fetch('/api/yasam-destek/all-stocks');
-        if (res.ok) {
-          json = await res.json();
-        }
-      } catch (e) {}
+        const [cyRes, saRes, hkRes] = await Promise.all([
+          fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("CAN YELEĞİ")}&t=${Date.now()}`),
+          fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("SPARE AIR")}&t=${Date.now()}`),
+          fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("HELMET KIT")}&t=${Date.now()}`)
+        ]);
 
-      // Netlify / Static fallback: Google Drive Excel'inden doğrudan oku
-      if (!json || json.status !== 'success') {
-        try {
-          const directRes = await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'readExcelFromDrive',
-              fileName: 'hava_araçları_yer_destek_at-802.xlsx',
-              folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
-            })
-          });
-          if (directRes.ok) {
-            const driveResult = await directRes.json();
+        let hasLiveGasData = false;
+
+        if (cyRes.ok) {
+          const cyData = await cyRes.json();
+          if (cyData && Array.isArray(cyData.data) && cyData.data.length > 0) {
+            hasLiveGasData = true;
+            setCanYelegiList(cyData.data.map((r: any, i: number) => ({
+              sNo: r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
+              malzemeAdi: r['MALZEME ADI'] || 'CAN YELEĞİ',
+              parcaNo: r['PARÇA NO'] || r['PARÇA NO (P/N)'] || r['P/N'] || '-',
+              seriNo: r['SERİ NO'] || r['SERİ NO (S/N)'] || r['S/N'] || '-',
+              disNo: r['DIŞ NO'] || '-',
+              durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
+              aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
+              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+            })));
+          }
+        }
+
+        if (saRes.ok) {
+          const saData = await saRes.json();
+          if (saData && Array.isArray(saData.data) && saData.data.length > 0) {
+            hasLiveGasData = true;
+            setSpareAirList(saData.data.map((r: any, i: number) => ({
+              sNo: r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
+              malzemeAdi: r['MALZEME ADI'] || 'SPARE AIR',
+              parcaNo: r['PARÇA NO'] || r['PARÇA NO (P/N)'] || r['P/N'] || '-',
+              seriNo: r['SERİ NO'] || r['SERİ NO (S/N)'] || r['S/N'] || '-',
+              durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
+              aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
+              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+            })));
+          }
+        }
+
+        if (hkRes.ok) {
+          const hkData = await hkRes.json();
+          if (hkData && Array.isArray(hkData.data) && hkData.data.length > 0) {
+            hasLiveGasData = true;
+            setHelmetKitList(hkData.data.map((r: any, i: number) => ({
+              sNo: r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
+              malzemeAdi1: r['MALZEME ADI 1'] || r['MALZEME ADI'] || 'KASK',
+              parcaNo1: r['PARÇA NO 1'] || r['PARÇA NO'] || '-',
+              seriNo1: r['SERİ NO 1'] || r['SERİ NO'] || '-',
+              malzemeAdi2: r['MALZEME ADI 2'] || 'KULAKLIK',
+              parcaNo2: r['PARÇA NO 2'] || '-',
+              seriNo2: r['SERİ NO 2'] || '-',
+              durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
+              aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
+              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+            })));
+          }
+        }
+
+        if (!hasLiveGasData) {
+          const driveRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileName=${encodeURIComponent('hava_araçları_yer_destek_at-802.xlsx')}&folderId=1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP&t=${Date.now()}`);
+          if (driveRes.ok) {
+            const driveResult = await driveRes.json();
             if (driveResult && driveResult.status === 'success' && driveResult.base64) {
               const binaryString = atob(driveResult.base64);
               const len = binaryString.length;
@@ -188,17 +232,25 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
                   notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
                 })));
               }
-              return;
             }
           }
-        } catch (e) {}
+        }
+      } catch (gasErr) {
+        console.warn("GAS direct sheet read error:", gasErr);
       }
 
-      if (json && json.status === 'success') {
-        setCanYelegiList(json.canYelegi || []);
-        setSpareAirList(json.spareAir || []);
-        setHelmetKitList(json.helmetKit || []);
-      }
+      // 2. Local proxy'yi dene (yalnızca yerel geliştirme ortamında)
+      try {
+        const res = await fetch('/api/yasam-destek/all-stocks');
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.status === 'success') {
+            setCanYelegiList(json.canYelegi || []);
+            setSpareAirList(json.spareAir || []);
+            setHelmetKitList(json.helmetKit || []);
+          }
+        }
+      } catch (e) {}
     } catch (e) {
       console.warn('Stock fetch error:', e);
     } finally {

@@ -1,0 +1,135 @@
+948:      const s = localStorage.getItem('hangar_techizat_pdf_docs') || localStorage.getItem('hangar_pdf_docs');
+1032:    const saved = localStorage.getItem('techizat_images');
+1267:    const saved = localStorage.getItem('kara_araclari_gorev_emirleri');
+1500:        localStorage.setItem('submitted_ebys_requests', JSON.stringify(data.data));
+1503:        localStorage.setItem('submitted_ebys_requests', JSON.stringify(data));
+1507:      const saved = localStorage.getItem('submitted_ebys_requests');
+1587:          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(newArray));
+1590:          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(newArray));
+1593:          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(newArray));
+1596:          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(newArray));
+1599:          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(newArray));
+1602:          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(newArray));
+1605:          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(newArray));
+1608:          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(newArray));
+1758:          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(newArray));
+1761:          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(newArray));
+1764:          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(newArray));
+1767:          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(newArray));
+1770:          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(newArray));
+1773:          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(newArray));
+1776:          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(newArray));
+1779:          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(newArray));
+1831:    localStorage.setItem('submitted_ebys_requests', JSON.stringify(updatedList));
+1901:          localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(mapped));
+1953:    localStorage.setItem('techizat_images', JSON.stringify(techizatImages));
+1957:    localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(karaAraclariGorevEmirleri));
+2056:    const stored = localStorage.getItem('excel_form_5_data');
+2442:    const saved = localStorage.getItem('excel_techizat_bell429_cols');
+2514:      const stored = localStorage.getItem('excel_techizat_kara_araclari_data') || localStorage.getItem('techizat_kara_araclari_data');
+2643:      const saved = localStorage.getItem('kara_araclari_vehicle_documents');
+2651:      const saved = localStorage.getItem('ogm_depo_transfers_v5');
+2663:        localStorage.setItem('ogm_depo_transfers_v5', JSON.stringify(depoTransactions));
+2690:      const saved = localStorage.getItem('equipment_audit_logs');
+2697:    return localStorage.getItem('depo_certificate_pdf_url') || null;
+2708:      try { localStorage.setItem('equipment_audit_logs', JSON.stringify(updated.slice(0, 500))); } catch (e) {}
+2750:        try { localStorage.setItem(targetKey, JSON.stringify(updated)); } catch (e) {}
+4333:            localStorage.setItem('techizat_images', JSON.stringify(merged));
+4451:            localStorage.setItem("form_update_dates", JSON.stringify(dates));
+4463:    const saved = localStorage.getItem("form_update_dates");
+4481:      localStorage.setItem("form_update_dates", JSON.stringify(updated));
+4662:      const saved = localStorage.getItem('gun_takip_sorumlulari');
+4926:  // Core sheets data hooks (initialized from localStorage with dynamic header mapping)
+4931:      const saved = localStorage.getItem(config.storageKey);
+4975:        localStorage.setItem(config.storageKey, JSON.stringify(initialRows));
+5612:      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updated));
+5616:      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updated));
+5620:      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updated));
+5624:      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updated));
+5628:      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updated));
+5632:      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updated));
+5636:      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updated));
+5640:      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updated));
+5644:      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updated));
+5683:      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updatedList));
+5687:      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updatedList));
+5691:      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updatedList));
+5695:      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updatedList));
+5699:      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updatedList));
+5703:      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updatedList));
+5707:      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updatedList));
+5711:      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updatedList));
+5715:      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedList));
+5829:      // Her iki localStorage anahtarını da güncelle
+5831:        localStorage.setItem(`excel_techizat_${techType}_data`, JSON.stringify(updatedList));
+5832:        localStorage.setItem(`techizat_${techType}_data`, JSON.stringify(updatedList));
+5930:    if (targetUnit === 'bell429') { setTechizatBell429Data(updated); localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updated)); }
+5931:    else if (targetUnit === 'at802') { setTechizatAt802Data(updated); localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updated)); }
+5932:    else if (targetUnit === 't70') { setTechizatT70Data(updated); localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updated)); }
+5933:    else if (targetUnit === 't70_bumbi_backet') { setTechizatT70BumbiBacketData(updated); localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updated)); }
+5934:    else if (targetUnit === 't70_helitak') { setTechizatT70HelitakData(updated); localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updated)); }
+5935:    else if (targetUnit === 'b360') { setTechizatB360Data(updated); localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updated)); }
+5936:    else if (targetUnit === 'c650') { setTechizatC650Data(updated); localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updated)); }
+5937:    else if (targetUnit === 'hangar') { setTechizatHangarData(updated); localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updated)); }
+5938:    else if (targetUnit === 'kara_araclari') { setTechizatKaraAraclariData(updated); localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updated)); }
+6012:        // Set state and local localStorage
+6024:          localStorage.setItem('excel_form_5_data', JSON.stringify(gridData));
+6028:          localStorage.setItem(config.storageKey, JSON.stringify(parsedRows));
+6734:                localStorage.setItem("form_update_dates", JSON.stringify(up));
+6810:            try { localStorage.setItem('gun_takip_sorumlulari', JSON.stringify(mapped)); } catch(e){}
+6842:        try { localStorage.setItem('gun_takip_sorumlulari', JSON.stringify(updatedData)); } catch(e){}
+7034:    localStorage.setItem(TABLE_CONFIGS[formId].storageKey, JSON.stringify(updatedRows));
+7055:    localStorage.setItem(TABLE_CONFIGS[formId].storageKey, JSON.stringify(updatedRows));
+7070:    localStorage.setItem(TABLE_CONFIGS[formId].storageKey, JSON.stringify(updatedRows));
+7652:          // Save columns and rows to states and localStorage
+7656:            localStorage.setItem('excel_techizat_bell429_cols', JSON.stringify(finalHeaders));
+7657:            localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(finalDataToSave));
+7661:            localStorage.setItem('excel_techizat_at802_cols', JSON.stringify(finalHeaders));
+7662:            localStorage.setItem('excel_techizat_at802_data', JSON.stringify(finalDataToSave));
+7666:            localStorage.setItem('excel_techizat_t70_cols', JSON.stringify(finalHeaders));
+7667:            localStorage.setItem('excel_techizat_t70_data', JSON.stringify(finalDataToSave));
+7671:            localStorage.setItem('excel_techizat_t70_bumbi_backet_cols', JSON.stringify(finalHeaders));
+7672:            localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(finalDataToSave));
+7676:            localStorage.setItem('excel_techizat_t70_helitak_cols', JSON.stringify(finalHeaders));
+7677:            localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(finalDataToSave));
+7681:            localStorage.setItem('excel_techizat_b360_cols', JSON.stringify(finalHeaders));
+7682:            localStorage.setItem('excel_techizat_b360_data', JSON.stringify(finalDataToSave));
+7686:            localStorage.setItem('excel_techizat_c650_cols', JSON.stringify(finalHeaders));
+7687:            localStorage.setItem('excel_techizat_c650_data', JSON.stringify(finalDataToSave));
+7691:            localStorage.setItem('excel_techizat_hangar_cols', JSON.stringify(finalHeaders));
+7692:            localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(finalDataToSave));
+7698:            localStorage.setItem('excel_techizat_kara_araclari_cols', JSON.stringify(newCols));
+7699:            localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(convertedRows));
+7996:              localStorage.setItem('excel_form_5_data', JSON.stringify(gridData));
+8001:              localStorage.setItem('form_update_dates', JSON.stringify({ ...formUpdateDates, 5: dateStr }));
+12141:                                  localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updatedOrders));
+12154:                                    localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedKara));
+12155:                                    localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(updatedKara));
+12156:                                    localStorage.setItem('excel_kara_araclari_data', JSON.stringify(updatedKara));
+13362:                              localStorage.setItem('techizat_images', JSON.stringify(updated));
+13370:                              localStorage.setItem('techizat_images', JSON.stringify(updated));
+13380:                            localStorage.setItem('techizat_images', JSON.stringify(updated));
+13392:                          localStorage.setItem('techizat_images', JSON.stringify(copy));
+13570:                        localStorage.setItem('hangar_pdf_docs', JSON.stringify(updated));
+13571:                        localStorage.setItem('hangar_techizat_pdf_docs', JSON.stringify(updated));
+13609:                        localStorage.setItem('hangar_pdf_docs', JSON.stringify(updated));
+13610:                        localStorage.setItem('hangar_techizat_pdf_docs', JSON.stringify(updated));
+13725:              const stored = localStorage.getItem('form_7_sayimlar');
+13742:                localStorage.setItem('form_7_sayimlar', JSON.stringify([...newRows, ...currentLogs]));
+13778:                const stored = localStorage.getItem('form_7_sayimlar');
+13791:                localStorage.setItem('form_7_sayimlar', JSON.stringify([newRow, ...currentLogs]));
+13818:              localStorage.setItem('ogm_depo_inventory_v5', JSON.stringify(updated));
+13958:                      localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
+14260:              try { localStorage.setItem('techizat_bell429_data', JSON.stringify(newRows)); } catch(e){}
+14263:              try { localStorage.setItem('techizat_at802_ozel_alet_data', JSON.stringify(newRows)); } catch(e){}
+14266:              try { localStorage.setItem('techizat_at802_data', JSON.stringify(newRows)); } catch(e){}
+14269:              try { localStorage.setItem('techizat_t70_bumbi_backet_data', JSON.stringify(newRows)); } catch(e){}
+14272:              try { localStorage.setItem('techizat_t70_helitak_data', JSON.stringify(newRows)); } catch(e){}
+14275:              try { localStorage.setItem('techizat_t70_data', JSON.stringify(newRows)); } catch(e){}
+14278:              try { localStorage.setItem('techizat_b360_data', JSON.stringify(newRows)); } catch(e){}
+14281:              try { localStorage.setItem('techizat_c650_data', JSON.stringify(newRows)); } catch(e){}
+14284:              try { localStorage.setItem('techizat_hangar_data', JSON.stringify(newRows)); } catch(e){}
+14287:              try { localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(newRows)); } catch(e){}
+14343:            localStorage.removeItem('equipment_audit_logs');
+14360:              try { localStorage.setItem('kara_araclari_vehicle_documents', JSON.stringify(updated)); } catch (e) {}
+14377:              try { localStorage.setItem('kara_araclari_vehicle_documents', JSON.stringify(updated)); } catch (e) {}

@@ -256,7 +256,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
           tailNo: finalTailNo,
           requestedBy: talepRequestedBy.trim(),
           notes: talepNotes.trim(),
-          unit: 'at802'
+          unit: initialUnit || 'at802'
         }))
       };
 

@@ -25,7 +25,9 @@ import {
   Image as ImageIcon,
   Archive,
   Link as LinkIcon,
-  ExternalLink
+  ExternalLink,
+  Flame,
+  Gauge
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { unmergeAndFillWorksheet, cleanAndFormatDateString } from '../utils/driveExcelSync';
@@ -42,6 +44,7 @@ import {
   getDocMimeType
 } from '../utils/hangarPdfStorage';
 import { PdfPreviewModal } from './PdfPreviewModal';
+import { MvpFlightDataAnalysisModal } from './MvpFlightDataAnalysisModal';
 
 export const GOOGLE_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
@@ -420,12 +423,6 @@ export const getNgLimitBadgeStyle = (cellValue: string): { bgClass: string; isNg
       bgClass: 'bg-rose-600 text-white border border-rose-700 font-bold shadow-xs',
       isNg: true
     };
-  } else if (ngVal > 105.0) {
-    // 105.1 - 105.4% -> Az geçen kırmızı (ama net kırmızı, fark edilebilir)
-    return {
-      bgClass: 'bg-rose-500 text-white border border-rose-600 font-semibold shadow-xs',
-      isNg: true
-    };
   }
 
   // 105 ve altı: Normal / Güvenli
@@ -510,13 +507,17 @@ interface OlayTakipCizelgesiModalProps {
   onClose: () => void;
   showNotification: (msg: string, type?: 'success' | 'error' | 'info') => void;
   initialUnit?: string;
+  initialSheetName?: string;
+  autoOpenMvpModal?: boolean;
 }
 
 export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = ({
   isOpen,
   onClose,
   showNotification,
-  initialUnit = 'at802'
+  initialUnit = 'at802',
+  initialSheetName,
+  autoOpenMvpModal = false
 }) => {
   const [selectedUnit, setSelectedUnit] = useState<string>(initialUnit);
   const [activeSheetIndex, setActiveSheetIndex] = useState<number>(0);
@@ -524,6 +525,9 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>('-');
+
+  // MVP Uçuş Veri Analiz Modalı
+  const [isMvpAnalysisOpen, setIsMvpAnalysisOpen] = useState<boolean>(autoOpenMvpModal);
 
   // Sorting
   const [sortConfig, setSortConfig] = useState<{ colIndex: number; direction: 'asc' | 'desc' } | null>(null);
@@ -655,12 +659,27 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
     fetchExcelFromDrive(selectedUnit, false);
   }, [isOpen]);
 
-  // When selected unit changes, reset sheet index and fetch latest from Drive
+  // When selected unit changes, activate correct sheet (defaults to "Ng Limit Aşımları Detayı" for AT-802)
   useEffect(() => {
-    setActiveSheetIndex(0);
     setSortConfig(null);
+    const unitSheets = allUnitsData[selectedUnit] || [];
+    let targetIdx = 0;
+    if (initialSheetName) {
+      const foundIdx = unitSheets.findIndex(s => s.sheetName.toLowerCase().includes(initialSheetName.toLowerCase()));
+      if (foundIdx >= 0) targetIdx = foundIdx;
+    } else if (selectedUnit === 'at802') {
+      const ngIdx = unitSheets.findIndex(s => s.sheetName.toLowerCase().includes('ng limit') || s.id.includes('ng_limit'));
+      if (ngIdx >= 0) targetIdx = ngIdx;
+    }
+    setActiveSheetIndex(targetIdx);
     fetchExcelFromDrive(selectedUnit, false);
-  }, [selectedUnit]);
+  }, [selectedUnit, initialSheetName]);
+
+  useEffect(() => {
+    if (autoOpenMvpModal) {
+      setIsMvpAnalysisOpen(true);
+    }
+  }, [autoOpenMvpModal, isOpen]);
 
   /**
    * Reads the Excel file for unitKey directly from Google Drive.
@@ -1130,6 +1149,56 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
     persistAndSyncToDrive(updatedAll);
     setIsAddingRow(false);
     showNotification('Yeni satır başarıyla eklendi ve Drive ile senkronize edildi.', 'success');
+  };
+
+  /**
+   * MVP / Uçuş Kaydı Analizinden Otomatik Limit Aşımı Satırı Ekleme (Requirement 4)
+   */
+  const handleAddMvpViolationToSheet = (data: {
+    kuyrukNo: string;
+    tarih: string;
+    motorSeriNo: string;
+    olayTuru: string;
+    tepeNg: string;
+    daaRefNo: string;
+    verilenSart: string;
+    pilot: string;
+    teknikDegerlendirme: string;
+    parcaDurumu: string;
+  }) => {
+    const sheets = allUnitsData[selectedUnit] || currentUnitSheets || [];
+    let targetIdx = sheets.findIndex(s => s.sheetName.toLowerCase().includes('ng limit') || s.id.includes('ng_limit'));
+    if (targetIdx === -1) targetIdx = 0;
+    const targetSheet = sheets[targetIdx];
+    if (!targetSheet) return;
+
+    const newRow: string[] = targetSheet.columns.map(col => {
+      const c = col.toLowerCase();
+      if (/s[ıi]ra/i.test(c)) return String(targetSheet.rows.length + 1);
+      if (/tar[ıi]h|d[oö]nem/i.test(c)) return data.tarih;
+      if (/kuyruk/i.test(c)) return data.kuyrukNo;
+      if (/motor/i.test(c)) return data.motorSeriNo;
+      if (/t[uü]r[uü]|i[sş]lem|olay/i.test(c)) return 'Lütfen açıklamayı doldurunuz.';
+      if (/tepe|ng/i.test(c)) return data.tepeNg;
+      if (/daa|ref/i.test(c)) return data.daaRefNo;
+      if (/sart|[sş]art|kalan/i.test(c)) return data.verilenSart;
+      if (/pilot|sorumlu/i.test(c)) return data.pilot;
+      if (/teknik|de[gğ]erlendirme|sonu[cç]/i.test(c)) return 'Lütfen değerlendirmeyi doldurunuz.';
+      if (/durum/i.test(c)) return data.parcaDurumu;
+      if (/belge|d[oö]k[uü]man/i.test(c)) return '-';
+      if (isLinkColumnName(col)) return '';
+      return '';
+    });
+
+    const updatedSheets = sheets.map((sheet, idx) => {
+      if (idx !== targetIdx) return sheet;
+      return { ...sheet, rows: [...sheet.rows, newRow] };
+    });
+
+    const updatedAll = { ...allUnitsData, [selectedUnit]: updatedSheets };
+    persistAndSyncToDrive(updatedAll);
+    setActiveSheetIndex(targetIdx);
+    showNotification('Limit aşımı kaydı "Ng Limit Aşımları Detayı" sayfasına başarıyla eklendi ve Drive ile senkronize edildi.', 'success');
   };
 
   // Create New Sheet (Excel mantığı ile yeni sayfa oluşturma)
@@ -1935,8 +2004,22 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
             })}
           </div>
 
-          {/* Action Buttons: Yeni Sayfa Ekle & Yeni Satır Ekle */}
+          {/* Action Buttons: MVP Analiz Et, Yeni Sayfa Ekle & Yeni Satır Ekle */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* TURUNCU MVP KAYDI ANALİZ ET BUTONU (Requirement 1 & 2) */}
+            {(selectedUnit === 'at802' || currentSheet?.sheetName?.toLowerCase().includes('ng limit')) && (
+              <button
+                type="button"
+                id="btn-mvp-kaydi-analiz-et"
+                onClick={() => setIsMvpAnalysisOpen(true)}
+                className="px-3.5 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-black text-xs transition-all flex items-center gap-1.5 shrink-0 shadow-sm cursor-pointer active:scale-95"
+                title="AT-802 MVP / CSV Uçuş Kaydı ve Sınır Aşımı Analiz Motoru"
+              >
+                <Flame className="w-3.5 h-3.5 text-white" />
+                <span>Mvp Kaydı Analiz Et</span>
+              </button>
+            )}
+
             {/* Yeni Sayfa Ekle Button */}
             <button
               type="button"
@@ -2377,7 +2460,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                                   className="p-1.5 rounded-lg bg-slate-100 hover:bg-amber-100 text-slate-600 hover:text-amber-800 transition-all cursor-pointer"
                                   title="Düzenle"
                                 >
-                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <Edit3 className="w-3.5 h-3.5 pointer-events-none" />
                                 </button>
                                 <button
                                   type="button"
@@ -2385,7 +2468,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                                   className="p-1.5 rounded-lg bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-700 transition-all cursor-pointer"
                                   title="Sil"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <Trash2 className="w-3.5 h-3.5 pointer-events-none" />
                                 </button>
                               </div>
                             </td>
@@ -3406,6 +3489,17 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
         <div className="fixed inset-0 z-[10010]">
           <PdfPreviewModal preview={previewDoc} onClose={() => setPreviewDoc(null)} />
         </div>
+      )}
+
+      {/* MVP FLIGHT DATA ANALYSIS MODAL (Requirement 1, 2, 3, 4) */}
+      {isMvpAnalysisOpen && (
+        <MvpFlightDataAnalysisModal
+          isOpen={isMvpAnalysisOpen}
+          onClose={() => setIsMvpAnalysisOpen(false)}
+          onAddToOlayTakip={handleAddMvpViolationToSheet}
+          showNotification={showNotification}
+          defaultTailNo="TC-ZAB"
+        />
       )}
     </div>
   );

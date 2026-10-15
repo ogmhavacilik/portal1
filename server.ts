@@ -564,7 +564,7 @@ async function startServer() {
 
       // Always try fetching live from Google Drive first (Zero Cache)
       try {
-        const driveUrl = "https://drive.google.com/uc?export=download&id=11d1HAocT6gCmHaLEhFrP1oXj7U7bZMS7";
+        const driveUrl = "https://drive.google.com/uc?export=download&id=1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7";
         const driveResp = await fetch(driveUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
         if (driveResp.ok) {
           const ab = await driveResp.arrayBuffer();
@@ -1015,12 +1015,19 @@ async function startServer() {
     }
   };
 
+  const isInvalidPortalItem = (name: string) => {
+    const u = String(name || '').toUpperCase();
+    return !u.trim() || u.includes("GÖREVLENDİRME") || u.includes("PLANLAMASI") || u.includes("ÇİZELGE") || u.includes("BIRIM ADI") || u.includes("GÜNCELLEME TARİH");
+  };
+
   const readOnayBekleyenler = (): any[] => {
     try {
       if (fs.existsSync(ONAY_BEKLEYENLER_FILE)) {
         const raw = fs.readFileSync(ONAY_BEKLEYENLER_FILE, "utf-8");
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter(it => !isInvalidPortalItem(it.itemName || it.name || it.itemDesc));
+        }
       }
     } catch {}
     return [];
@@ -1039,50 +1046,76 @@ async function startServer() {
     }
   };
 
-  // Google Sheets sync for "ONAY BEKLEYENLER -AT802"
+  // Helper to determine approval sheet name for unit
+  function getOnaySheetNameForUnit(unitStr: string): string {
+    const u = String(unitStr || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (u.includes('bell')) return "ONAY BEKLEYENLER -BELL 429";
+    if (u.includes('t70')) return "ONAY BEKLEYENLER -T-70";
+    if (u.includes('c650') || u.includes('650')) return "ONAY BEKLEYENLER -C-650";
+    if (u.includes('b360') || u.includes('360')) return "ONAY BEKLEYENLER -B-360";
+    if (u.includes('hangar')) return "ONAY BEKLEYENLER -HANGAR";
+    return "ONAY BEKLEYENLER -AT802";
+  }
+
+  // Google Sheets multi-unit sync for "ONAY BEKLEYENLER"
   async function syncOnayBekleyenlerToDrive(items: any[]) {
     try {
       const spreadsheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
-      const sheetName = "ONAY BEKLEYENLER -AT802";
       const headers = ["TALEP NO", "TARİH", "MALZEME TÜRÜ", "MALZEME ADI", "PART NUMBER (P/N)", "SERIAL NUMBER (S/N)", "TALEP EDİLEN DEPO", "ADET", "KUYRUK NO", "TESLİM ALACAK", "AÇIKLAMA", "DURUM"];
-      const rows = [
-        headers,
-        ...items.map(t => [
-          t.id || "",
-          t.date || t.timestamp || "",
-          t.category === 'kimyasal' ? "KİMYASAL" : "SARF/PARÇA",
-          t.itemName || t.description || "",
-          t.pn || t.partNumber || "-",
-          t.sn || t.serialNumber || "-",
-          t.depot || t.depo || "ANKARA",
-          String(t.quantity || t.adet || 1),
-          t.tailNo || t.kuyrukNo || "-",
-          t.requestedBy || t.teslimAlan || "-",
-          t.notes || t.aciklama || "-",
-          t.status || "ONAY BEKLİYOR"
-        ])
-      ];
+
+      // Group items by target approval sheet name
+      const grouped = new Map<string, any[]>();
+      items.forEach(item => {
+        const sheetName = getOnaySheetNameForUnit(item.unit);
+        if (!grouped.has(sheetName)) grouped.set(sheetName, []);
+        grouped.get(sheetName)!.push(item);
+      });
+
+      // Always ensure primary sheet is updated
+      if (!grouped.has("ONAY BEKLEYENLER -AT802")) {
+        grouped.set("ONAY BEKLEYENLER -AT802", items.filter(i => (!i.unit || i.unit === 'at802')));
+      }
 
       const scriptUrls = [
         "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
         "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
       ];
 
-      for (const sUrl of scriptUrls) {
-        try {
-          await fetch(sUrl, {
-            method: "POST",
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify({
-              action: "updateSheet",
-              sheetName: sheetName,
-              spreadsheetId: spreadsheetId,
-              data: rows
-            }),
-            signal: AbortSignal.timeout(10000)
-          });
-          break;
-        } catch {}
+      for (const [sheetName, sheetItems] of grouped.entries()) {
+        const rows = [
+          headers,
+          ...sheetItems.map(t => [
+            t.id || "",
+            t.date || t.timestamp || "",
+            t.category === 'kimyasal' ? "KİMYASAL" : "SARF/PARÇA",
+            t.itemName || t.description || "",
+            t.pn || t.partNumber || "-",
+            t.sn || t.serialNumber || "-",
+            t.depot || t.depo || "ANKARA",
+            String(t.quantity || t.adet || 1),
+            t.tailNo || t.kuyrukNo || "-",
+            t.requestedBy || t.teslimAlan || "-",
+            t.notes || t.aciklama || "-",
+            t.status || "ONAY BEKLİYOR"
+          ])
+        ];
+
+        for (const sUrl of scriptUrls) {
+          try {
+            await fetch(sUrl, {
+              method: "POST",
+              headers: { "Content-Type": "text/plain;charset=utf-8" },
+              body: JSON.stringify({
+                action: "updateSheet",
+                sheetName: sheetName,
+                spreadsheetId: spreadsheetId,
+                data: rows
+              }),
+              signal: AbortSignal.timeout(10000)
+            });
+            break;
+          } catch {}
+        }
       }
     } catch (syncErr) {
       console.warn("syncOnayBekleyenlerToDrive error:", syncErr);
@@ -1094,7 +1127,9 @@ async function startServer() {
       if (fs.existsSync(DEPO_TRANSACTIONS_FILE)) {
         const raw = fs.readFileSync(DEPO_TRANSACTIONS_FILE, "utf-8");
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.filter(it => !isInvalidPortalItem(it.itemName || it.name || it.itemDesc));
+        }
       }
     } catch (err) {
       console.warn("Error reading persisted depo transactions:", err);
@@ -1122,8 +1157,7 @@ async function startServer() {
       { name: "DEPO HAREKET GEÇMİŞİ-T-70", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-T-70")}` },
       { name: "DEPO HAREKET GEÇMİŞİ-C-650", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-C-650")}` },
       { name: "DEPO HAREKET GEÇMİŞİ-B-360", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-B-360")}` },
-      { name: "DEPO HAREKET GEÇMİŞİ-HANGAR", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-HANGAR")}` },
-      { name: "TRANSFER GEÇMİŞİ", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("TRANSFER GEÇMİŞİ")}` }
+      { name: "DEPO HAREKET GEÇMİŞİ-HANGAR", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-HANGAR")}` }
     ];
     
     const allTransfers: any[] = [];
@@ -1138,6 +1172,11 @@ async function startServer() {
             const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
             if (lines.length > 0) {
               const headerLine = (lines[0] || "").toUpperCase();
+              // Check if header is valid Depo Movement sheet (MUST contain MALZEME, ISLEM, or ADET)
+              if (headerLine.includes("BIRIM ADI") || headerLine.includes("GÖREVLENDİRME") || (!headerLine.includes("MALZEME") && !headerLine.includes("İŞLEM") && !headerLine.includes("ISLEM") && !headerLine.includes("ADET"))) {
+                // Google Sheets fallback portal page. Skip!
+                return [];
+              }
               let delimiter = ",";
               if (headerLine.includes(";")) {
                 delimiter = ";";
@@ -1155,19 +1194,28 @@ async function startServer() {
                 if (!line.trim()) continue;
                 const cols = line.split(regex).map(c => c.replace(/^"|"$/g, '').trim());
                 if (cols.length > 0 && cols[0]) {
-                  const effectiveSheet = cols[9] || sheetName;
+                  const itemNameUpper = String(cols[0] || '').toUpperCase();
+                  // Ignore non-inventory document planning titles (e.g. GÖREVLENDİRME ÇİZELGELERİ, PLANLAMASI)
+                  if (
+                    itemNameUpper.includes("GÖREVLENDİRME") ||
+                    itemNameUpper.includes("PLANLAMASI") ||
+                    itemNameUpper.includes("ÇİZELGE")
+                  ) {
+                    continue;
+                  }
+
                   let unit = "at802";
-                  if (effectiveSheet.includes("BELL") || sheetName.includes("BELL")) unit = "bell429";
-                  else if (effectiveSheet.includes("T-70") || sheetName.includes("T-70")) unit = "t70";
-                  else if (effectiveSheet.includes("C-650") || sheetName.includes("C-650")) unit = "c650";
-                  else if (effectiveSheet.includes("B-360") || sheetName.includes("B-360")) unit = "b360";
-                  else if (effectiveSheet.includes("HANGAR") || sheetName.includes("HANGAR")) unit = "hangar";
+                  if (sheetName.includes("BELL")) unit = "bell429";
+                  else if (sheetName.includes("T-70")) unit = "t70";
+                  else if (sheetName.includes("C-650")) unit = "c650";
+                  else if (sheetName.includes("B-360")) unit = "b360";
+                  else if (sheetName.includes("HANGAR")) unit = "hangar";
                   else unit = "at802";
 
                   const locNorm = String(cols[8] || '').toUpperCase().replace(/İ/g, 'I');
-                  const itemNorm = String(cols[0] || '').toUpperCase().replace(/İ/g, 'I');
+                  const itemNorm = itemNameUpper.replace(/İ/g, 'I');
                   const isKimya = locNorm.includes('KIMYA') || 
-                                  effectiveSheet.toUpperCase().replace(/İ/g, 'I').includes('KIMYA') ||
+                                  sheetName.toUpperCase().replace(/İ/g, 'I').includes('KIMYA') ||
                                   itemNorm.includes('OIL') || itemNorm.includes('GREASE') || 
                                   itemNorm.includes('AEROSHELL') || itemNorm.includes('FLUID') || 
                                   itemNorm.includes('HYDRAULIC') || itemNorm.includes('BOYA') || 
@@ -1187,7 +1235,7 @@ async function startServer() {
                     location: cols[8] || "",
                     unit: unit,
                     category: isKimya ? "kimyasal" : "sarf",
-                    sheetName: effectiveSheet
+                    sheetName: sheetName
                   });
                 }
               }
@@ -1360,75 +1408,87 @@ async function startServer() {
     try {
       let localItems = readOnayBekleyenler();
       
-      // Try to fetch LIVE data from Google Sheets (GViz CSV Export)
+      // Try to fetch LIVE data from Google Sheets for all aircraft units
       try {
         const spreadsheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
-        const sheetName = "ONAY BEKLEYENLER -AT802";
-        const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
-        
-        const sheetRes = await fetch(url, { signal: AbortSignal.timeout(4000) });
-        if (sheetRes.ok) {
-          const csvText = await sheetRes.text();
-          if (csvText && !csvText.includes("<!DOCTYPE")) {
-            const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
-            const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
-            
-            if (lines.length > 1) {
-              const remoteItems: any[] = [];
-              for (let i = 1; i < lines.length; i++) {
-                const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
-                if (cols.length >= 1) {
-                  const id = cols[0];
-                  if (!id) continue;
-                  
-                  remoteItems.push({
-                    id: id,
-                    date: cols[1] || "",
-                    category: cols[2] === "KİMYASAL" ? "kimyasal" : "sarf",
-                    itemName: cols[3] || "",
-                    pn: cols[4] || "",
-                    sn: cols[5] || "",
-                    depot: cols[6] || "",
-                    quantity: Number(cols[7]) || 1,
-                    tailNo: cols[8] || "",
-                    requestedBy: cols[9] || "",
-                    notes: cols[10] || "",
-                    status: cols[11] || "ONAY BEKLİYOR",
-                    unit: "at802", // Primary unit for this sheet
-                    fromRemote: true
-                  });
-                }
-              }
-              
-              // Merge Remote with Local (Prioritize Local status if it changed, but keep new items from remote)
-              const merged: any[] = [...localItems];
-              remoteItems.forEach(ri => {
-                const existingIdx = merged.findIndex(li => li.id === ri.id);
-                if (existingIdx === -1) {
-                  // New item from portal/excel
-                  merged.unshift(ri);
-                } else {
-                  // Existing item: Update fields if status is still pending, but keep local for others
-                  // This is a simple merge, we trust remote status if it's ONAYLANDI for example
-                  if (ri.status !== merged[existingIdx].status) {
-                    merged[existingIdx].status = ri.status;
+        const approvalSheets = [
+          { name: "ONAY BEKLEYENLER -AT802", unit: "at802" },
+          { name: "ONAY BEKLEYENLER -BELL 429", unit: "bell429" },
+          { name: "ONAY BEKLEYENLER -T-70", unit: "t70" },
+          { name: "ONAY BEKLEYENLER -C-650", unit: "c650" },
+          { name: "ONAY BEKLEYENLER -B-360", unit: "b360" },
+          { name: "ONAY BEKLEYENLER -HANGAR", unit: "hangar" },
+          { name: "ONAY BEKLEYENLER", unit: "at802" }
+        ];
+
+        const remoteItems: any[] = [];
+
+        await Promise.allSettled(
+          approvalSheets.map(async (target) => {
+            try {
+              const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(target.name)}`;
+              const sheetRes = await fetch(url, { signal: AbortSignal.timeout(4000) });
+              if (sheetRes.ok) {
+                const csvText = await sheetRes.text();
+                if (csvText && !csvText.includes("<!DOCTYPE") && !csvText.includes("<html")) {
+                  const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+                  const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+                  if (lines.length > 1) {
+                    const headerLine = (lines[0] || "").toUpperCase();
+                    if (headerLine.includes("BIRIM ADI") || headerLine.includes("GÖREVLENDİRME") || (!headerLine.includes("TALEP") && !headerLine.includes("MALZEME"))) {
+                      // Fallback portal page from Google Sheets. Skip!
+                      return;
+                    }
+                    for (let i = 1; i < lines.length; i++) {
+                      const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
+                      if (cols.length >= 1 && cols[0]) {
+                        remoteItems.push({
+                          id: cols[0],
+                          date: cols[1] || "",
+                          category: cols[2] === "KİMYASAL" ? "kimyasal" : "sarf",
+                          itemName: cols[3] || "",
+                          pn: cols[4] || "",
+                          sn: cols[5] || "",
+                          depot: cols[6] || "",
+                          quantity: Number(cols[7]) || 1,
+                          tailNo: cols[8] || "",
+                          requestedBy: cols[9] || "",
+                          notes: cols[10] || "",
+                          status: cols[11] || "ONAY BEKLİYOR",
+                          unit: target.unit,
+                          fromRemote: true
+                        });
+                      }
+                    }
                   }
                 }
-              });
-              
-              // Sort by date/timestamp descending
-              merged.sort((a, b) => {
-                const da = new Date(a.timestamp || a.date).getTime();
-                const db = new Date(b.timestamp || b.date).getTime();
-                return db - da;
-              });
+              }
+            } catch (err) {}
+          })
+        );
 
-              // Update local cache if changed
-              if (JSON.stringify(localItems) !== JSON.stringify(merged)) {
-                writeOnayBekleyenler(merged);
-                localItems = merged;
+        if (remoteItems.length > 0) {
+          const merged: any[] = [...localItems];
+          remoteItems.forEach(ri => {
+            const existingIdx = merged.findIndex(li => li.id === ri.id);
+            if (existingIdx === -1) {
+              merged.unshift(ri);
+            } else {
+              if (ri.status !== merged[existingIdx].status) {
+                merged[existingIdx].status = ri.status;
               }
             }
+          });
+
+          merged.sort((a, b) => {
+            const da = new Date(a.timestamp || a.date).getTime();
+            const db = new Date(b.timestamp || b.date).getTime();
+            return db - da;
+          });
+
+          if (JSON.stringify(localItems) !== JSON.stringify(merged)) {
+            writeOnayBekleyenler(merged);
+            localItems = merged;
           }
         }
       } catch (syncErr) {
@@ -3800,12 +3860,12 @@ async function startServer() {
   let excelDriveListCache: { timestamp: number; data: any[] } = { timestamp: 0, data: [] };
 
   const KNOWN_DRIVE_EXCEL_FILES: Record<string, string> = {
-    "hava_araçları_yer_destek_at-802.xlsx": "1AMSXLiHdGCcF76YgpBRhTE_86QaLOBGH",
-    "hava_araclari_yer_destek_at-802.xlsx": "1AMSXLiHdGCcF76YgpBRhTE_86QaLOBGH",
-    "at-802_sarf_ve_parca_deposu.xlsx": "11d1HAocT6gCmHaLEhFrP1oXj7U7bZMS7",
-    "at802_sarf_ve_parca_deposu.xlsx": "11d1HAocT6gCmHaLEhFrP1oXj7U7bZMS7",
-    "at-802_sarf_depo.xlsx": "11d1HAocT6gCmHaLEhFrP1oXj7U7bZMS7",
-    "at802_sarf_depo.xlsx": "11d1HAocT6gCmHaLEhFrP1oXj7U7bZMS7",
+    "hava_araçları_yer_destek_at-802.xlsx": "1PY6ZHqBS5iELDHBZX-wUdOeyUNkqbSf3",
+    "hava_araclari_yer_destek_at-802.xlsx": "1PY6ZHqBS5iELDHBZX-wUdOeyUNkqbSf3",
+    "at-802_sarf_ve_parca_deposu.xlsx": "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7",
+    "at802_sarf_ve_parca_deposu.xlsx": "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7",
+    "at-802_sarf_depo.xlsx": "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7",
+    "at802_sarf_depo.xlsx": "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7",
     "at-802_ozel_bakim_aletleri.xlsx": "1idYaGtP9-4zMnUP9R28yHZwd47gy_QL8",
     "at-802_kimyasal_depo.xlsx": "1JYPCRpMSaZ8AWt7qEWnXhb4DbUKguDRK",
     "at802_kimyasal_depo.xlsx": "1JYPCRpMSaZ8AWt7qEWnXhb4DbUKguDRK",
@@ -3832,7 +3892,7 @@ async function startServer() {
     "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
     "hava_araclari_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
     "hangar_depo_hareket_gecmisi.xlsx": "1RXIhJps-PxUQAkTlLDyvcDWnpUbg2KzG",
-    "olay_takip_cizelgesi_at-802.xlsx": "1XhWmwJyTmYkZ1jHBJFie3nRWVF6SC-GL"
+    "olay_takip_cizelgesi_at-802.xlsx": "1S-ktkzrs7p5CIcwUihuQsJDecmLpXmpp"
   };
 
   const normalizeExcelName = (name: string): string => {
@@ -3862,7 +3922,7 @@ async function startServer() {
   // Helper to dynamically get or list all Excel files in Google Drive folder
   async function getDriveExcelsList(force = false): Promise<any[]> {
     const now = Date.now();
-    if (!force && excelDriveListCache.data.length > 0 && (now - excelDriveListCache.timestamp < 120000)) {
+    if (!force && excelDriveListCache.data.length > 0 && (now - excelDriveListCache.timestamp < 60000)) {
       return excelDriveListCache.data;
     }
     const scriptUrls = [
@@ -3900,19 +3960,22 @@ async function startServer() {
       let { fileName = "at-802_sarf_ve_parca_deposu.xlsx", fileId = "", folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP" } = req.body;
       fileName = String(fileName || "").trim();
 
-      // 1. Resolve fileId from KNOWN map first with strict matching
-      if (!fileId) {
-        for (const [k, id] of Object.entries(KNOWN_DRIVE_EXCEL_FILES)) {
-          if (id && isExcelNameExactMatch(k, fileName)) {
-            fileId = id;
-            break;
-          }
-        }
+      // 0. CHECK LOCAL FILE FIRST (Persistent storage)
+      const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
+      if (fs.existsSync(localExcelPath)) {
+        console.log(`[read-excel-from-drive] Using local file for ${fileName}`);
+        const buf = fs.readFileSync(localExcelPath);
+        return res.json({
+          status: "success",
+          source: "local",
+          base64: buf.toString("base64"),
+          updated: new Date().toLocaleString("tr-TR")
+        });
       }
 
-      // Search in excelDriveListCache with strict full filename matching ONLY (no fuzzy substring collisions)
-      if (!fileId) {
-        const driveExcels = await getDriveExcelsList();
+      // 1. LIVE GOOGLE DRIVE CHECK FIRST: Query real current files in Google Drive folder
+      try {
+        const driveExcels = await getDriveExcelsList(false);
         if (driveExcels && driveExcels.length > 0) {
           const match = driveExcels.find((d: any) => {
             const dName = d.name || d.fileName || "";
@@ -3922,19 +3985,37 @@ async function startServer() {
             fileId = match.id;
           }
         }
+      } catch (e) {
+        console.warn("Live Drive list query error:", e);
+      }
+
+      // 2. If not found in live folder scan, check updated KNOWN map
+      if (!fileId) {
+        for (const [k, id] of Object.entries(KNOWN_DRIVE_EXCEL_FILES)) {
+          if (id && isExcelNameExactMatch(k, fileName)) {
+            fileId = id;
+            break;
+          }
+        }
       }
 
       // 2. Direct Google Drive Download (Fastest, zero cache, 100% live)
       if (fileId) {
+        const timestamp = Date.now();
         const directDriveUrls = [
-          `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`,
-          `https://drive.google.com/uc?export=download&id=${fileId}`
+          `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx&t=${timestamp}`,
+          `https://drive.google.com/uc?export=download&id=${fileId}&t=${timestamp}`,
+          `https://drive.google.com/uc?export=export&id=${fileId}&t=${timestamp}`
         ];
 
         for (const driveUrl of directDriveUrls) {
           try {
             const driveResp = await fetch(driveUrl, { 
-              headers: { "User-Agent": "Mozilla/5.0" },
+              headers: { 
+                "User-Agent": "Mozilla/5.0",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache"
+              },
               signal: AbortSignal.timeout(8000)
             });
             if (driveResp.ok) {
@@ -3971,55 +4052,6 @@ async function startServer() {
         }
       }
 
-      // 3. FALLBACK: Check in-memory cache if it has rich data
-      if (fileName && excelFileCache.has(fileName)) {
-        const cached = excelFileCache.get(fileName)!;
-        if (cached.base64 && cached.base64.length > 2000) {
-          return res.json({
-            status: "success",
-            base64: cached.base64,
-            fileName: fileName,
-            fileId: cached.fileId || fileId,
-            updated: cached.updated || new Date().toLocaleString("tr-TR"),
-            source: "cache",
-            message: "Önbellekten güncel dosya sağlandı."
-          });
-        }
-      }
-
-      // 4. FALLBACK: Check local disk mirror with resilient Turkish / ASCII matching
-      let resolvedLocalPath = path.resolve(process.cwd(), `public/${fileName}`);
-      if (!fs.existsSync(resolvedLocalPath)) {
-        try {
-          const pubFiles = fs.readdirSync(path.resolve(process.cwd(), "public"));
-          const match = pubFiles.find(f => isExcelNameExactMatch(f, fileName));
-          if (match) {
-            resolvedLocalPath = path.resolve(process.cwd(), `public/${match}`);
-          }
-        } catch {}
-      }
-
-      if (fs.existsSync(resolvedLocalPath)) {
-        try {
-          const fileBuf = fs.readFileSync(resolvedLocalPath);
-          if (fileBuf && fileBuf.byteLength > 2000 && ((fileBuf[0] === 0x50 && fileBuf[1] === 0x4B) || (fileBuf[0] === 0xD0 && fileBuf[1] === 0xCF))) {
-            const base64Str = fileBuf.toString("base64");
-            excelFileCache.set(fileName, {
-              base64: base64Str,
-              updated: new Date().toLocaleString("tr-TR"),
-              fileId: fileId
-            });
-            return res.json({
-              status: "success",
-              base64: base64Str,
-              fileName: fileName,
-              fileId: fileId,
-              updated: new Date().toLocaleString("tr-TR"),
-              message: "Yerel ayna dosyasından sağlandı."
-            });
-          }
-        } catch {}
-      }
 
       // 3. Try Google Apps Script Endpoints with fast timeout (max 4s)
       const scriptUrls = [
@@ -4064,103 +4096,10 @@ async function startServer() {
         }
       }
 
-      // 4. Resilient Dynamic Template Generator: If file not yet on Drive, auto-generate standard Excel
-      const localPath = path.resolve(process.cwd(), 'public', fileName);
-      const xlsx = await import("xlsx");
-      const wb = xlsx.utils.book_new();
-
-      const lowerName = fileName.toLowerCase();
-      let headerRow: string[] = [];
-      let sheetName = "LİSTE";
-
-      if (lowerName.includes("kara_araclari") || lowerName.includes("kara")) {
-        sheetName = "KARA_ARACLARI";
-        headerRow = [
-          "SIRA NO", "PLAKA / ŞASİ NO", "ARAÇ / EKİPMAN TANIMI", "MARKA / MODEL",
-          "MİKTAR / ADET", "DEPO YERİ / HANGAR BÖLGESİ", "DURUM", "PERİYODİK BAKIM / MUAYENE",
-          "SON BAKIM / MUAYENE TARİHİ", "GELECEK BAKIM / MUAYENE TARİHİ", "FİRMA / AİT OLDUĞU BİRİM", "AÇIKLAMA"
-        ];
-      } else if (lowerName.includes("sarf") || lowerName.includes("parca_deposu") || lowerName.includes("kimyasal")) {
-        sheetName = lowerName.includes("kimyasal") ? "KIMYASAL_DEPO" : "SARF_VE_PARCA_DEPO";
-        headerRow = [
-          "DESCRIPTION", "PART NUMBER", "SERİ NUMBER - MÜKERRER NO - AÇIKLAMA", "LOKASYON NO",
-          "GELEN", "TOPLAM STOK", "ANKARA ÇIKAN", "ANKARA MEVCUT",
-          "KARAİN TRANSFER", "KARAİN ÇIKAN", "KARAİN MEVCUT",
-          "ÇANAKKALE TRANSFER", "ÇANAKKALE ÇIKAN", "ÇANAKKALE MEVCUT",
-          "MİLAS TRANSFER", "MİLAS ÇIKAN", "MİLAS MEVCUT",
-          "BURSA TRANSFER", "BURSA ÇIKAN", "BURSA MEVCUT",
-          "MUAYENE GİDEN", "MUAYENE GELEN", "MUAYENE TOPLAM"
-        ];
-      } else {
-        // Standard Yer Destek & Özel Aletler
-        sheetName = "YER_DESTEK";
-        headerRow = [
-          "SIRA NO", "TEÇHİZAT ADI", "PARÇA NO (P/N) / MODEL", "SERİ NO (S/N)",
-          "MİKTAR", "DEPO YERİ / LOKASYON", "DURUM", "KALİBRASYONA TABİ Mİ?",
-          "SON KALİBRASYON TARİHİ", "GELECEK KALİBRASYON TARİHİ", "FİRMA / MÜLKİYET", "AÇIKLAMA"
-        ];
-      }
-
-      let dataRows: any[][] = [];
-      if (lowerName.includes("sarf") || lowerName.includes("parca_deposu")) {
-        const jsonPath = path.resolve(process.cwd(), 'public/at802_sarf_data.json');
-        if (fs.existsSync(jsonPath)) {
-          try {
-            const rawJson = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-            if (Array.isArray(rawJson) && rawJson.length > 0) {
-              dataRows = rawJson.map(item => [
-                item.description || item.name || '',
-                item.partNumber || item.pn || '-',
-                item.serialAndNotes || item.sn || '-',
-                item.lokasyonNo || item.location || 'ANKARA',
-                item.gelen || item.baseGelen || 1,
-                item.toplamStok || item.gelen || 1,
-                item.ankaraCikan || 0,
-                item.ankaraMevcut || item.gelen || 1,
-                item.karainTransfer || 0,
-                item.karainCikan || 0,
-                item.karainMevcut || 0,
-                item.canakkaleTransfer || 0,
-                item.canakkaleCikan || 0,
-                item.canakkaleMevcut || 0,
-                item.milasTransfer || 0,
-                item.milasCikan || 0,
-                item.milasMevcut || 0,
-                item.bursaTransfer || 0,
-                item.bursaCikan || 0,
-                item.bursaMevcut || 0,
-                item.muayeneGiden || 0,
-                item.muayeneGelen || 0,
-                item.muayeneToplam || 0
-              ]);
-            }
-          } catch {}
-        }
-      }
-
-      const ws = xlsx.utils.aoa_to_sheet([headerRow, ...dataRows]);
-      xlsx.utils.book_append_sheet(wb, ws, sheetName);
-
-      const generatedBuf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
-      const generatedBase64 = Buffer.from(generatedBuf).toString("base64");
-
-      try {
-        fs.writeFileSync(localPath, generatedBuf);
-      } catch {}
-
-      excelFileCache.set(fileName, {
-        base64: generatedBase64,
-        updated: new Date().toLocaleString("tr-TR"),
-        fileId: fileId
-      });
-
-      return res.json({
-        status: "success",
-        base64: generatedBase64,
-        fileName: fileName,
-        fileId: fileId,
-        updated: new Date().toLocaleString("tr-TR"),
-        message: "Standart şablon Excel oluşturuldu ve hazırlandı."
+      // NO CACHE ALLOWED: If live Drive fetch failed, return strict error
+      return res.status(502).json({
+        status: "error",
+        message: `Google Drive üzerinden [${fileName}] dosyası canlı olarak çekilemedi. Önbellek veya yapay veri kullanımı kesinlikle yasaklanmıştır.`
       });
     } catch (err: any) {
       return res.status(500).json({
@@ -4221,11 +4160,12 @@ async function startServer() {
     }
   }
 
-  // API Route: Upload Teçhizat Excel to Google Drive
+  // API Route: Upload Teçhizat Excel & Olay Takip Sheets to Google Drive (persisting new rows at bottom)
   app.post("/api/upload-techizat-excel", async (req, res) => {
     try {
       const { fileName = "at-802_sarf_ve_parca_deposu.xlsx", base64Data, targetKey, folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP", fileId = "" } = req.body;
       const cleanBase64 = String(base64Data || "").replace(/^data:[^;]+;base64,/, "").trim();
+      console.log(`[Server] Received Olay Takip / Techizat Excel upload request for file: ${fileName}`);
 
       // Find real fileId in Google Drive to strictly prevent duplicate uploads for each aircraft
       let effectiveFileId = (fileId && fileId !== "1tu8hDWSgIYkGn-7i_gDTC_UpUFUyaOzf") ? fileId : "";
@@ -4539,7 +4479,17 @@ async function startServer() {
         console.log(`[ExcelSync] Created missing column: RAF ÖMRÜ BİTİŞ TARİHİ at index ${shelfLifeDateCol}`);
       }
 
-      // Pre-populate empty cells for these columns in all existing rows with "HAYIR" and "-"
+      let kritikStokCol = headerRow.findIndex(c => c.includes("KRİTİK") || c.includes("KRITIK") || c.includes("MIN STOK"));
+      if (kritikStokCol === -1) {
+        headerRow.push("KRİTİK STOK SEVİYESİ");
+        if (!rawRows[headerRowIdx]) rawRows[headerRowIdx] = [];
+        rawRows[headerRowIdx].push("KRİTİK STOK SEVİYESİ");
+        kritikStokCol = headerRow.length - 1;
+        setCellVal(headerRowIdx, kritikStokCol, "KRİTİK STOK SEVİYESİ");
+        console.log(`[ExcelSync] Created missing column: KRİTİK STOK SEVİYESİ at index ${kritikStokCol}`);
+      }
+
+      // Pre-populate empty cells for these columns in all existing rows with "HAYIR" and "-" and 0
       for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
         if (!rawRows[r]) rawRows[r] = [];
         if (rawRows[r][shelfLifeCol] === undefined || rawRows[r][shelfLifeCol] === "") {
@@ -4547,6 +4497,9 @@ async function startServer() {
         }
         if (rawRows[r][shelfLifeDateCol] === undefined || rawRows[r][shelfLifeDateCol] === "") {
           setCellVal(r, shelfLifeDateCol, "-");
+        }
+        if (rawRows[r][kritikStokCol] === undefined || rawRows[r][kritikStokCol] === "") {
+          setCellVal(r, kritikStokCol, 0);
         }
       }
 
@@ -4596,6 +4549,9 @@ async function startServer() {
         if (shelfLifeDateCol >= 0 && newItem.shelfLifeDate !== undefined) {
           setCellVal(targetRowIdx, shelfLifeDateCol, newItem.shelfLifeDate || "-");
         }
+        if (kritikStokCol >= 0 && newItem.kritikStok !== undefined) {
+          setCellVal(targetRowIdx, kritikStokCol, Number(newItem.kritikStok) || 0);
+        }
 
         if (gelenCol >= 0 && newItem.gelen !== undefined) {
           const oldG = Number(rawRows[targetRowIdx][gelenCol]) || 0;
@@ -4632,13 +4588,16 @@ async function startServer() {
         if (shelfLifeDateCol >= 0) {
           newRow[shelfLifeDateCol] = newItem.shelfLifeDate || "-";
         }
+        if (kritikStokCol >= 0) {
+          newRow[kritikStokCol] = Number(newItem.kritikStok) || 0;
+        }
 
         const gVal = Number(newItem.gelen) || 0;
 
         // Set all numeric / warehouse / stock columns to 0 except the active destination column
         for (let c = 0; c < rowLen; c++) {
           const hName = headerRow[c] || "";
-          if (c === descCol || c === pnCol || c === snCol || c === locCol || c === shelfLifeCol || c === shelfLifeDateCol) continue;
+          if (c === descCol || c === pnCol || c === snCol || c === locCol || c === shelfLifeCol || c === shelfLifeDateCol || c === kritikStokCol) continue;
           if (hName.includes("GELEN") || hName.includes("MİKTAR") || hName.includes("MIKTAR") || hName.includes("STOK") || hName.includes("MEVCUT") || hName.includes("ÇIKAN") || hName.includes("TRANSFER") || hName.includes("ADET")) {
             // If this is the specific incoming location column or gelenCol, set gVal, otherwise 0
             const isTargetCol = (c === gelenCol) || (newItem.lokasyonNo && hName.includes(newItem.lokasyonNo.toUpperCase()));

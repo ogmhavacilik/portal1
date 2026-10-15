@@ -28,20 +28,116 @@ export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-
 export const DRIVE_FOLDER_ID = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
 
 export const KARA_ARACLARI_COLUMNS = [
-  "SIRA NO",
-  "ARAÇ PLAKASI & MARKA MODEL",
-  "ŞASİ NO / MOTOR NO",
-  "ARAÇ TİPİ / CİNSİ",
-  "MİKTAR",
-  "BAĞLI BULUNDUĞU BİRİM",
+  "Sıra No",
+  "Araç Plaka",
+  "Marka",
+  "Model",
+  "Yakıt Türü",
+  "Son Bakım Km",
   "DURUMU",
-  "PERİYODİK MUAYENE TABİ",
-  "SON MUAYENE / BAKIM TARİHİ",
-  "GELECEK MUAYENE / BAKIM TARİHİ",
-  "KASKO & SİGORTA BİTİŞ",
-  "GÜNCEL KİLOMETRE / SAAT",
+  "Bakım Tarihi",
+  "Sonraki Bakım Tarihi yada KM'si",
+  "SON KONTROLÜ YAPAN FİRMA",
   "AÇIKLAMA"
 ];
+
+export function normalizeKaraAraclariRow(r: string[], rowIdx: number): string[] {
+  const rowArr = r.map(c => String(c ?? '').trim());
+  if (rowArr.length === 0) return [];
+
+  const col0IsSira = /^\d+$/.test(rowArr[0]) && rowArr[0].length <= 4;
+
+  let siraNo = String(rowIdx + 1);
+  let plaka = "";
+  let marka = "-";
+  let model = "";
+  let yakit = "";
+  let km = "-";
+  let durum = "FAAL";
+  let bakimTarihi = "";
+  let sonrakiBakim = "";
+  let firma = "-";
+  let aciklama = "";
+
+  if (col0IsSira) {
+    siraNo = rowArr[0] || String(rowIdx + 1);
+    plaka = rowArr[1] || "";
+    marka = rowArr[2] || "-";
+    model = rowArr[3] || "";
+    yakit = rowArr[4] || "";
+    km = rowArr[5] || "-";
+    durum = rowArr[6] || "FAAL";
+    bakimTarihi = cleanAndFormatDateString(rowArr[7] || "");
+    sonrakiBakim = cleanAndFormatDateString(rowArr[8] || "");
+    firma = rowArr[9] || "-";
+    aciklama = rowArr[10] || "";
+  } else {
+    plaka = rowArr[0] || "";
+    marka = rowArr[1] || "-";
+    model = rowArr[2] || "";
+    yakit = rowArr[3] || "";
+    km = rowArr[4] || "-";
+    durum = rowArr[5] || "FAAL";
+    bakimTarihi = cleanAndFormatDateString(rowArr[6] || "");
+    sonrakiBakim = cleanAndFormatDateString(rowArr[7] || "");
+    firma = rowArr[8] || "-";
+    aciklama = rowArr[9] || "";
+  }
+
+  // --- SELF-HEALING / AUTO-CORRECTOR FOR SHIFTED OR CORRUPTED VEHICLE COLUMNS ---
+  if (marka === "Hilux 4x4") {
+    marka = "Toyota";
+    model = "Hilux 4x4";
+  } else if (marka === "Axor 3340") {
+    marka = "Mercedes";
+    model = "Axor 3340";
+  } else if (marka === "Forklift 3 Tonluk") {
+    marka = "Bobcat";
+    model = "Forklift 3 Tonluk";
+  } else if (marka === "Mazot Römork" || marka === "Benzin Römork" || marka === "Traktör" || marka === "Timsan çekici" || marka === "Eagle Çekici") {
+    model = marka;
+    marka = "-";
+  }
+
+  const isNumericModel = /^\d+$/.test(model);
+  if (isNumericModel) {
+    const numericVal = model;
+    if (km === "-" || km === "" || km === "Mazot" || km === "Benzin" || !/^\d+$/.test(km)) {
+      km = numericVal;
+    }
+    const pClean = plaka.replace(/\s+/g, "").toUpperCase();
+    if (pClean.includes("CUK695") || marka === "Toyota" || marka === "Hilux") {
+      marka = "Toyota";
+      model = "Hilux 4x4";
+    } else if (pClean.includes("FV2359") || marka === "Mercedes" || marka === "Axor") {
+      marka = "Mercedes";
+      model = "Axor 3340";
+    } else {
+      model = "-";
+    }
+  }
+
+  if (/^\d+$/.test(yakit)) {
+    yakit = "Mazot";
+  }
+  // ------------------------------------------------------------------------------
+
+  if (!durum || durum === "-" || durum === "--") durum = "FAAL";
+
+  return [
+    siraNo,
+    plaka,
+    marka,
+    model,
+    yakit,
+    km,
+    durum,
+    bakimTarihi,
+    sonrakiBakim,
+    firma,
+    aciklama
+  ];
+}
 
 export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
   const params = new URLSearchParams(window.location.search);
@@ -77,10 +173,14 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
       if (stored) return JSON.parse(stored);
     } catch {}
     return [
-      ['1', '06 OGM 101 - FORD TRANSIT ÇİFT KABİN', 'NM0XXXTT12345', 'HAFİF TİCARİ', '1', 'ANKARA HANGAR ŞUBE', 'FAAL', 'EVET', '15.01.2024', '15.01.2025', '01.06.2025', '84,500 KM', 'Hangar nöbetçi ve intikal aracı'],
-      ['2', '06 OGM 102 - ISUZU D-MAX 4X4 YANGIN', 'MPATFS85J9876', 'ARAZİ ARACI', '1', 'ESENBOĞA UÇAK HANGARI', 'FAAL', 'EVET', '20.03.2024', '20.03.2025', '12.08.2025', '62,100 KM', 'Pist ve arazi kontrol aracı'],
-      ['3', '06 OGM 103 - MERCEDES ATEGO YAKIT TANKERİ', 'WDB9702251K', 'JET-A1 TANKER', '1', 'YANGIN HAREKAT', 'FAAL', 'EVET', '10.02.2024', '10.02.2025', '15.09.2025', '41,200 KM', 'AT-802 mobil yakıt ikmal tankeri'],
-      ['4', '06 OGM 104 - TOYOTA HILUX HANGAR', 'AHTFR22G456', 'PİKAP', '1', 'TEKNİK BAKIM ŞUBE', 'FAAL', 'EVET', '05.04.2024', '05.04.2025', '22.10.2025', '110,400 KM', 'Alet ve malzeme nakil aracı']
+      ["1", "06 CUK 695", "Toyota", "Hilux 4x4", "Mazot", "91643", "FAAL", "22.07.2026", "22.07.2027", "Yedek Parça Depo MDR. - ALJ TOYOTA", "Genel periyodik ve sıvı bakımları yapıldı."],
+      ["2", "06 FV 2359", "Mercedes", "Axor 3340", "Mazot", "19062", "FAAL", "10.04.2026", "10.04.2027", "Yedek Parça Depo Müdürlüğü", "Alt takım kontrolleri ve yağ değişimi tamamlandı"],
+      ["3", "0", "Bobcat", "Forklift 3 Tonluk", "Mazot", "-", "FAAL", "31.10.2025", "-", "-", "-"],
+      ["4", "0", "-", "Mazot Römork", "-", "-", "FAAL", "-", "-", "-", "-"],
+      ["5", "0", "-", "Benzin Römork", "-", "-", "FAAL", "-", "-", "-", "-"],
+      ["6", "0", "Kubato", "Traktör", "Mazot", "-", "FAAL", "-", "-", "-", "-"],
+      ["7", "0", "Timsan", "Timsan çekici", "Mazot", "-", "FAAL", "-", "-", "-", "-"],
+      ["8", "0", "Eagle - Crysle", "Eagle Çekici", "Benzin", "-", "FAAL", "-", "-", "-", "-"]
     ];
   });
 
@@ -91,12 +191,20 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
       if (stored) return JSON.parse(stored);
     } catch {}
     return [
-      { id: 'GE-2026-001', plaka: '06 OGM 101', driver: 'Ahmet Yılmaz', destination: 'Esenboğa Hangar', date: '12.09.2026', status: 'Tamamlandı' },
-      { id: 'GE-2026-002', plaka: '06 OGM 103', driver: 'Mehmet Demir', destination: 'Antalya Orman Yangın Üssü', date: '14.09.2026', status: 'Görevde' }
+      { id: 'GE-2026-001', plaka: '06 CUK 695', driver: 'Ahmet Yılmaz', destination: 'Esenboğa Hangar', date: '12.09.2026', status: 'Tamamlandı' },
+      { id: 'GE-2026-002', plaka: '06 FV 2359', driver: 'Mehmet Demir', destination: 'Antalya Orman Yangın Üssü', date: '14.09.2026', status: 'Görevde' }
     ];
   });
 
-  const [newOrder, setNewOrder] = useState({ plaka: '06 OGM 101', driver: '', dest: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+  const [newOrder, setNewOrder] = useState({
+    plaka: '06 CUK 695',
+    driver: '',
+    dest: '',
+    date: new Date().toISOString().slice(0, 10),
+    notes: '',
+    departureKm: '',
+    returnKm: ''
+  });
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -110,6 +218,28 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
     } catch {}
     publishCrossSystemEvent('KARA_ARACI_UPDATED', 'kara-araclari', { count: rows.length });
   };
+
+  // Autopopulate departure KM when selected vehicle changes
+  useEffect(() => {
+    if (newOrder.plaka && vehicleRows.length > 0) {
+      const foundRow = vehicleRows.find(v => (v[1] || "").trim().toLowerCase() === newOrder.plaka.trim().toLowerCase());
+      if (foundRow && foundRow[5] && foundRow[5] !== "-") {
+        setNewOrder(prev => {
+          if (prev.departureKm !== foundRow[5]) {
+            return { ...prev, departureKm: foundRow[5] };
+          }
+          return prev;
+        });
+      } else {
+        setNewOrder(prev => {
+          if (prev.departureKm !== "") {
+            return { ...prev, departureKm: "" };
+          }
+          return prev;
+        });
+      }
+    }
+  }, [newOrder.plaka, vehicleRows]);
 
   useEffect(() => {
     const unsub = subscribeCrossSystemEvents((ev) => {
@@ -131,7 +261,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
   const uniqueFirmalar = useMemo(() => {
     const s = new Set<string>();
     for (const r of vehicleRows) {
-      const f = (r[5] || '').trim();
+      const f = (r[9] || '').trim();
       if (f && f !== '-' && f !== '--') s.add(f);
     }
     return Array.from(s).sort();
@@ -163,9 +293,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
   };
 
   const getRowColorStatus = (row: string[]): 'red' | 'orange' | 'green' | 'neutral' => {
-    const isMuayeneTabi = (row[7] || '').trim().toUpperCase();
-    if (isMuayeneTabi === 'HAYIR' || isMuayeneTabi === 'MUAFIYET') return 'neutral';
-    const days = getDaysUntil(row[9]);
+    const days = getDaysUntil(row[8]);
     if (days === null) return 'neutral';
     if (days < 0) return 'red';
     if (days <= 90) return 'orange';
@@ -183,7 +311,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
     }
 
     if (firmaFilter) {
-      result = result.filter(({ row }) => (row[5] || '').trim() === firmaFilter);
+      result = result.filter(({ row }) => (row[9] || '').trim() === firmaFilter);
     }
 
     if (durumFilter) {
@@ -214,8 +342,8 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
         const cA = getRowColorStatus(a.row);
         const cB = getRowColorStatus(b.row);
         if (rank[cA] !== rank[cB]) return rank[cA] - rank[cB];
-        const dA = getDaysUntil(a.row[9]) ?? 9999;
-        const dB = getDaysUntil(b.row[9]) ?? 9999;
+        const dA = getDaysUntil(a.row[8]) ?? 9999;
+        const dB = getDaysUntil(b.row[8]) ?? 9999;
         return dA - dB;
       });
     }
@@ -232,16 +360,16 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
       const json = await res.json();
       if (json && json.data && Array.isArray(json.data) && json.data.length > 0) {
         let rows: string[][] = json.data;
-        if (rows[0] && (String(rows[0][0]).includes('SIRA') || String(rows[0][1]).includes('PLAKA'))) {
+        if (rows[0] && rows[0].some(cell => {
+          const s = String(cell || '').toLowerCase();
+          return s.includes('plaka') || s.includes('sira') || s.includes('marka') || s.includes('model');
+        })) {
           rows = rows.slice(1);
         }
-        const cleanedRows = rows.map((r, i) => {
-          const rowArr = [...r];
-          rowArr[0] = String(i + 1);
-          if (rowArr[8]) rowArr[8] = cleanAndFormatDateString(rowArr[8]);
-          if (rowArr[9]) rowArr[9] = cleanAndFormatDateString(rowArr[9]);
-          return rowArr;
-        });
+        const cleanedRows = rows
+          .filter(r => r.some(cell => String(cell || '').trim() !== ''))
+          .map((r, i) => normalizeKaraAraclariRow(r, i));
+
         saveRows(cleanedRows);
         showNotification(`✅ Kara araçları güncellendi: ${cleanedRows.length} araç aktarıldı.`);
       } else {
@@ -306,16 +434,14 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
       String(vehicleRows.length + 1),
       newRowData['1'] || '',
       newRowData['2'] || '-',
-      newRowData['3'] || 'HAFİF TİCARİ',
-      newRowData['4'] || '1',
-      newRowData['5'] || 'HANGAR BAKIM',
+      newRowData['3'] || '',
+      newRowData['4'] || '',
+      newRowData['5'] || '-',
       newRowData['6'] || 'FAAL',
-      newRowData['7'] || 'EVET',
-      newRowData['8'] || cleanAndFormatDateString(new Date().toLocaleDateString('tr-TR')),
-      newRowData['9'] || '',
-      newRowData['10'] || '',
-      newRowData['11'] || '0 KM',
-      newRowData['12'] || ''
+      newRowData['7'] || '',
+      newRowData['8'] || '',
+      newRowData['9'] || '-',
+      newRowData['10'] || ''
     ];
     const updated = [...vehicleRows, newRow];
     saveRows(updated);
@@ -336,7 +462,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
   const handleCreateTaskOrder = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newOrder.driver || !newOrder.dest) {
-      showNotification('Lütfen sürücü ve varış yerini doldurunuz.');
+      showNotification('Lütfen Sürücü ve Varılan Hedef bilgilerini doldurunuz.');
       return;
     }
     const orderObj = {
@@ -345,16 +471,47 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
       driver: newOrder.driver,
       destination: newOrder.dest,
       date: newOrder.date,
-      status: 'Görevde'
+      departureKm: newOrder.departureKm || '-',
+      returnKm: newOrder.returnKm || '-',
+      notes: newOrder.notes || '',
+      status: 'Tamamlandı'
     };
     const updated = [orderObj, ...taskOrders];
     setTaskOrders(updated);
     try {
       localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
     } catch {}
-    setNewOrder({ plaka: '06 OGM 101', driver: '', dest: '', date: new Date().toISOString().slice(0, 10), notes: '' });
+
+    // Update vehicle row in vehicleRows list
+    if (newOrder.plaka && newOrder.returnKm) {
+      const updatedVehicles = vehicleRows.map(v => {
+        if ((v[1] || "").trim().toLowerCase() === newOrder.plaka.trim().toLowerCase()) {
+          const copy = [...v];
+          copy[5] = newOrder.returnKm; // Update index 5 (Son Bakım Km) with the return mileage
+          return copy;
+        }
+        return v;
+      });
+      saveRows(updatedVehicles);
+
+      // Keep cross-system localStorage keys fully synchronized
+      try {
+        localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
+        localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
+      } catch (err) {}
+    }
+
+    setNewOrder({
+      plaka: vehicleRows[0]?.[1] || '06 CUK 695',
+      driver: '',
+      dest: '',
+      date: new Date().toISOString().slice(0, 10),
+      notes: '',
+      departureKm: '',
+      returnKm: ''
+    });
     setActiveSubTab('past_records');
-    showNotification('✅ Görev emri başarıyla oluşturuldu.');
+    showNotification('✅ Görev emri başarıyla oluşturuldu ve araç kilometresine işlendi.');
   };
 
   return (
@@ -721,10 +878,10 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
                             <td className="px-4 py-3 font-semibold text-slate-700 border-r border-slate-100">
                               {row[3] || '-'}
                             </td>
-                            <td className="px-4 py-3 text-center font-bold text-slate-800 border-r border-slate-100">
-                              {row[4] || '1'}
-                            </td>
                             <td className="px-4 py-3 text-slate-700 border-r border-slate-100">
+                              {row[4] || '-'}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700 border-r border-slate-100 font-mono">
                               {row[5] || '-'}
                             </td>
                             <td className="px-4 py-3 text-center border-r border-slate-100">
@@ -736,23 +893,17 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
                                 {row[6] || 'FAAL'}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-center font-bold text-slate-700 border-r border-slate-100">
-                              {row[7] || 'EVET'}
-                            </td>
                             <td className="px-4 py-3 text-center font-mono text-slate-600 border-r border-slate-100">
-                              {row[8] || '-'}
+                              {row[7] || '-'}
                             </td>
                             <td className={`px-4 py-3 text-center font-mono border-r border-slate-100 ${dateColorClass}`}>
+                              {row[8] || '-'}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700 border-r border-slate-100">
                               {row[9] || '-'}
                             </td>
-                            <td className="px-4 py-3 text-center font-mono text-slate-600 border-r border-slate-100">
-                              {row[10] || '-'}
-                            </td>
-                            <td className="px-4 py-3 font-mono font-bold text-slate-800 border-r border-slate-100">
-                              {row[11] || '-'}
-                            </td>
                             <td className="px-4 py-3 text-slate-500 max-w-sm truncate">
-                              {row[12] || '-'}
+                              {row[10] || '-'}
                             </td>
                           </tr>
                         );
@@ -818,6 +969,30 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
                   className="w-full bg-slate-800 text-white text-xs p-3 rounded-xl border border-slate-700 mt-1"
                 />
               </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[11px] font-mono text-slate-400 uppercase font-bold">🚗 Çıkış Kilometresi (KM)</label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="Otomatik gelir veya yazınız..."
+                    value={newOrder.departureKm}
+                    onChange={(e) => setNewOrder(prev => ({ ...prev, departureKm: e.target.value }))}
+                    className="w-full bg-slate-800 text-white text-xs p-3 rounded-xl border border-slate-700 mt-1 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-mono text-emerald-400 uppercase font-bold">🏁 Dönüş Kilometresi (KM)</label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="Son KM olarak kaydedilir..."
+                    value={newOrder.returnKm}
+                    onChange={(e) => setNewOrder(prev => ({ ...prev, returnKm: e.target.value }))}
+                    className="w-full bg-slate-800 text-white text-xs p-3 rounded-xl border border-emerald-500/50 mt-1 font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
               <div>
                 <label className="text-[11px] font-mono text-slate-400 uppercase font-bold">Görev Amacı & Açıklama</label>
                 <textarea
@@ -855,6 +1030,8 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
                     <th className="py-3 px-4">ARAÇ</th>
                     <th className="py-3 px-4">SÜRÜCÜ</th>
                     <th className="py-3 px-4">GÜZERGAH</th>
+                    <th className="py-3 px-4 font-mono text-right">ÇIKIŞ KM</th>
+                    <th className="py-3 px-4 font-mono text-right">DÖNÜŞ KM</th>
                     <th className="py-3 px-4">TARİH</th>
                     <th className="py-3 px-4">DURUM</th>
                   </tr>
@@ -863,9 +1040,11 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
                   {taskOrders.map((ord, i) => (
                     <tr key={i} className="hover:bg-slate-800/40 transition-colors">
                       <td className="py-3 px-4 font-mono font-bold text-emerald-400">{ord.id}</td>
-                      <td className="py-3 px-4 font-bold text-white">{ord.plaka}</td>
-                      <td className="py-3 px-4 text-slate-300">{ord.driver}</td>
-                      <td className="py-3 px-4 text-slate-300">{ord.destination}</td>
+                      <td className="py-3 px-4 font-bold text-white">{ord.plaka || ord.plate}</td>
+                      <td className="py-3 px-4 text-slate-300">{ord.driver || ord.driverName}</td>
+                      <td className="py-3 px-4 text-slate-300">{ord.destination || ord.route}</td>
+                      <td className="py-3 px-4 font-mono text-right text-slate-400">{ord.departureKm || ord.departure_km || '-'}</td>
+                      <td className="py-3 px-4 font-mono text-right text-emerald-400 font-extrabold">{ord.returnKm || ord.return_km || '-'}</td>
                       <td className="py-3 px-4 font-mono text-slate-400">{ord.date}</td>
                       <td className="py-3 px-4">
                         <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black ${
