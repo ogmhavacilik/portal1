@@ -2420,15 +2420,6 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                       </button>
                       <button
                         type="button"
-                        onClick={() => fetchLiveYellowNg(true)}
-                        disabled={isLoadingYellowNg}
-                        className="p-1 rounded-lg text-amber-800 hover:text-amber-950 hover:bg-amber-200/70 transition-all cursor-pointer disabled:opacity-50"
-                        title="Google E-Tablodan ('Sarı İkaz Ng Takip Adedi') canlı yenile"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 ${isLoadingYellowNg ? 'animate-spin text-amber-600' : ''}`} />
-                      </button>
-                      <button
-                        type="button"
                         disabled={isSyncingYellowNg}
                         onClick={handleCountYellowNg}
                         className={`px-3.5 py-1.5 ${
@@ -2946,12 +2937,13 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           if (!analysisResult) return;
                           const rowsToExport = filteredRows;
                           const headers = activeHeaders;
+                          const indices = activeHeaderIndices;
 
                           let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">`;
                           html += `<head><meta http-equiv="content-type" content="text/html; charset=UTF-8"><style>`;
                           html += `table { border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; font-size: 10pt; }`;
-                          html += `th { background-color: #1e293b; color: #ffffff; font-weight: bold; padding: 6px 8px; border: 1px solid #94a3b8; text-align: left; }`;
-                          html += `td { padding: 5px 8px; border: 1px solid #cbd5e1; text-align: left; }`;
+                          html += `th { background-color: #cbd5e1; color: #000000; font-weight: bold; vertical-align: middle; padding: 8px 10px; border: 1px solid #94a3b8; text-align: center; }`;
+                          html += `td { padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; }`;
                           html += `.row-red { background-color: #fee2e2; color: #991b1b; font-weight: bold; }`;
                           html += `.row-yellow { background-color: #fef9c3; color: #713f12; font-weight: bold; }`;
                           html += `.row-normal { background-color: #ffffff; color: #0f172a; }`;
@@ -2966,15 +2958,22 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           rowsToExport.forEach(r => {
                             const isRed = r.severity === 'RED';
                             const isYellow = r.severity === 'YELLOW';
-                            const rowClass = isRed ? 'row-red' : isYellow ? 'row-yellow' : 'row-normal';
                             const statText = isRed ? 'KIRMIZI AŞIM' : isYellow ? 'SARI İKAZ' : 'Normal';
+                            const statStyle = isRed ? 'background-color: #dc2626; color: #ffffff; font-weight: bold; text-align: center;' : isYellow ? 'background-color: #fef08a; color: #000000; font-weight: bold; text-align: center;' : 'text-align: center;';
 
-                            html += `<tr class="${rowClass}">`;
-                            html += `<td>#${r.originalIndex}</td>`;
-                            html += `<td>${statText}</td>`;
-                            r.cells.forEach(c => {
-                              const safeVal = String(c || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                              html += `<td>${safeVal}</td>`;
+                            html += `<tr>`;
+                            html += `<td style="text-align: center; font-weight: bold;">#${r.originalIndex}</td>`;
+                            html += `<td style="${statStyle}">${statText}</td>`;
+                            indices.forEach(origColIdx => {
+                              const cellVal = r.cells[origColIdx] !== undefined ? r.cells[origColIdx] : '';
+                              const safeVal = String(cellVal || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                              const violation = r.violations.find(v => v.colIndex === origColIdx);
+                              const cellStyle = violation?.level === 'RED'
+                                ? 'background-color: #dc2626; color: #ffffff; font-weight: bold;'
+                                : violation?.level === 'YELLOW'
+                                ? 'background-color: #fef08a; color: #000000; font-weight: bold;'
+                                : '';
+                              html += `<td style="${cellStyle}">${safeVal}</td>`;
                             });
                             html += `</tr>`;
                           });
@@ -2985,17 +2984,17 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           const url = URL.createObjectURL(blob);
                           const link = document.createElement('a');
                           link.setAttribute('href', url);
-                          link.setAttribute('download', `${selectedTail.fullLabel}_${selectedColConfig?.key || 'analiz'}_renkli_excel.xls`);
+                          link.setAttribute('download', `${selectedTail.fullLabel}_${selectedColConfig?.key || 'analiz'}_filtrelenmis_excel.xls`);
                           document.body.appendChild(link);
                           link.click();
                           document.body.removeChild(link);
-                          showNotification('Renkli Excel Raporu (.xls) başarıyla indirildi!', 'success');
+                          showNotification('Seçilen filtrelenmiş sütunlara sahip Excel raporu (.xls) başarıyla indirildi!', 'success');
                         }}
-                        className="px-3 py-1 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black transition-all cursor-pointer shadow-xs flex items-center gap-1.5"
-                        title="Tabloyu ikaz renkleriyle boyanmış Excel (.xls) formatında indir"
+                        className="px-3.5 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black transition-all cursor-pointer shadow-xs flex items-center gap-1.5"
+                        title="Tabloyu yalnızca seçilen ve filtrelenmiş sütunlarla Excel (.xls) formatında indir"
                       >
                         <Download className="w-3.5 h-3.5 text-white" />
-                        <span>Excel İndir (.xls)</span>
+                        <span>Filtrelenmiş Excel İndir (.xls)</span>
                       </button>
 
                       <button
@@ -3017,7 +3016,9 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           <th className="px-2 py-1 text-center font-black text-slate-700 uppercase tracking-wider border-r border-b border-slate-300 bg-slate-200 sticky left-0 z-30 w-14">
                             #
                           </th>
-                          <th className="px-2 py-1 text-center font-black text-slate-700 uppercase tracking-wider border-r border-b border-slate-300 bg-slate-200 w-28">
+                          <th className={`px-2 py-1 text-center font-black uppercase tracking-wider border-r border-b border-slate-300 w-28 ${
+                            analysisResult?.redCount > 0 ? 'bg-red-600 text-white' : analysisResult?.yellowCount > 0 ? 'bg-amber-500 text-slate-950' : 'bg-slate-200 text-slate-700'
+                          }`}>
                             DURUM
                           </th>
                           {activeHeaders.map((hdr, hIdx) => {
@@ -3049,7 +3050,9 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           <th className="px-2 py-2 text-[10px] font-black text-slate-700 uppercase tracking-wider border-r border-b border-slate-300 text-center bg-slate-100 sticky left-0 z-30">
                             SIRA
                           </th>
-                          <th className="px-2 py-2 text-[10px] font-black text-slate-700 uppercase tracking-wider border-r border-b border-slate-300 text-center bg-slate-100">
+                          <th className={`px-2 py-2 text-[10px] font-black uppercase tracking-wider border-r border-b border-slate-300 text-center ${
+                            analysisResult?.redCount > 0 ? 'bg-red-700 text-white' : analysisResult?.yellowCount > 0 ? 'bg-amber-600 text-slate-950' : 'bg-slate-100 text-slate-700'
+                          }`}>
                             İKAZ
                           </th>
 
@@ -3063,17 +3066,17 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                               <th
                                 key={`header-${hIdx}`}
                                 style={{ minWidth: isSelectedParamCol ? '150px' : hdr.toUpperCase().includes('TIME') ? '230px' : '95px' }}
-                                className={`px-3 py-2 text-[10px] uppercase tracking-wider border-r border-b whitespace-nowrap text-center transition-all ${
+                                className={`px-3 py-3 text-[11px] uppercase tracking-wider border-r border-b whitespace-nowrap text-center align-middle transition-all ${
                                   isSelectedParamCol
-                                    ? 'bg-[#fef08a] text-slate-950 border-[#ca8a04] font-black shadow-md ring-2 ring-amber-400'
-                                    : 'bg-slate-100 text-slate-800 border-slate-300 font-bold'
+                                    ? 'bg-[#fef08a] text-black border-[#ca8a04] font-bold shadow-md ring-2 ring-amber-400'
+                                    : 'bg-slate-300 text-black border-slate-400 font-bold'
                                 }`}
                               >
                                 <div className="flex flex-col items-center justify-center py-0.5">
-                                  <span className="font-black text-[11px] tracking-tight">{hdr}</span>
+                                  <span className="font-bold text-[11px] text-black tracking-tight">{hdr}</span>
                                   {isSelectedParamCol && (
-                                    <span className="text-[8px] bg-amber-950 text-amber-200 px-2 py-0.5 rounded font-black mt-0.5 tracking-wider shadow-2xs">
-                                      ★ SEÇİLEN ODAK (SARI DOLGU)
+                                    <span className="text-[8px] bg-amber-950 text-amber-200 px-2 py-0.5 rounded font-bold mt-0.5 tracking-wider shadow-2xs">
+                                      ★ SEÇİLEN ODAK
                                     </span>
                                   )}
                                 </div>
@@ -3101,29 +3104,25 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                             return (
                               <tr
                                 key={rIdx}
-                                className={`transition-colors ${
-                                  isRed
-                                    ? 'bg-red-50/70 hover:bg-red-100/60 font-semibold border-b border-red-200'
-                                    : isYellow
-                                    ? 'bg-amber-50/70 hover:bg-amber-100/60 border-b border-amber-200'
-                                    : 'hover:bg-slate-50 border-b border-slate-100 text-slate-700'
-                                }`}
+                                className="hover:bg-slate-50 border-b border-slate-100 text-slate-700 transition-colors bg-white"
                               >
                                 {/* Satır sırası (Excel orijinal satır no birebir aynı!) */}
                                 <td className="px-3 py-2 text-center font-bold text-slate-700 border-r border-b border-slate-300 bg-slate-100 sticky left-0 z-10 font-mono text-xs">
                                   #{row.originalIndex}
                                 </td>
 
-                                {/* İkaz Durumu Rozeti */}
-                                <td className="px-3 py-2 text-center border-r border-b border-slate-200 whitespace-nowrap">
+                                {/* İkaz Durumu Rozeti ve Hücresi */}
+                                <td className={`px-3 py-2 text-center border-r border-b border-slate-200 whitespace-nowrap ${
+                                  isRed ? 'bg-red-600 text-white font-black' : isYellow ? 'bg-amber-400 text-slate-950 font-black' : 'bg-white text-slate-700'
+                                }`}>
                                   {isRed ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-600 text-white shadow-2xs">
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-700 text-white shadow-2xs">
                                       <Flame className="w-3 h-3 text-red-200 animate-pulse" />
                                       <span>KIRMIZI AŞIM</span>
                                     </span>
                                   ) : isYellow ? (
                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-slate-950 shadow-2xs">
-                                      <AlertTriangle className="w-3 h-3 text-amber-900" />
+                                      <AlertTriangle className="w-3 h-3 text-amber-950" />
                                       <span>SARI İKAZ</span>
                                     </span>
                                   ) : (
@@ -3234,12 +3233,14 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                                       key={hIdx}
                                       style={{ minWidth: isSelectedParamCol ? '150px' : '95px' }}
                                       className={`px-3 py-1.5 text-center border-r border-b border-slate-200 whitespace-nowrap transition-colors font-mono text-[11px] ${
-                                        isSelectedParamCol
+                                        violation || isSelectedParamCol
                                           ? violation?.level === 'RED'
                                             ? 'bg-red-600 text-white font-black shadow-inner ring-1 ring-red-400'
                                             : violation?.level === 'YELLOW'
-                                            ? 'bg-[#fef08a] text-slate-950 font-black border-2 border-amber-500 shadow-inner ring-1 ring-amber-400'
-                                            : 'bg-amber-100/80 text-slate-950 font-black border-x-2 border-amber-400 shadow-2xs'
+                                            ? 'bg-amber-300 text-slate-950 font-black border-2 border-amber-500 shadow-inner ring-1 ring-amber-400'
+                                            : isSelectedParamCol
+                                            ? 'bg-amber-100/80 text-slate-950 font-black border-x-2 border-amber-400 shadow-2xs'
+                                            : 'text-slate-800 bg-white hover:bg-slate-50'
                                           : 'text-slate-800 bg-white hover:bg-slate-50'
                                       }`}
                                       title={violation ? violation.rule : undefined}

@@ -870,17 +870,22 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
     setZoomRange([start, end]);
   };
 
-  // Aşım / İkaz Odağına Otomatik Yakınlaş
+  const zoomToCenter = (centerIdx: number) => {
+    const multiplier = 33.1;
+    const targetWindow = Math.max(10, Math.round(chartData.length / multiplier));
+    const start = Math.max(0, centerIdx - Math.floor(targetWindow / 2));
+    const end = Math.min(chartData.length - 1, start + targetWindow);
+    setZoomRange([start, end]);
+    setCurrentIndex(centerIdx);
+  };
+
+  // Aşım / İkaz Odağına Otomatik Yakınlaş (33.1x)
   const handleFocusOnExceedance = () => {
     if (activeEpisodes.length === 0) return;
-    const nextIndex = (currentEpisodeIndex + 1) % activeEpisodes.length;
-    setCurrentEpisodeIndex(nextIndex);
-    const ep = activeEpisodes[nextIndex];
-    const margin = Math.max(15, Math.round((ep.endRow - ep.startRow) * 1.5));
-    const start = Math.max(0, ep.startRow - margin);
-    const end = Math.min(chartData.length - 1, ep.endRow + margin);
-    setZoomRange([start, end]);
-    setCurrentIndex(ep.startRow);
+    const ep = activeEpisodes[currentEpisodeIndex];
+    const idx = chartData.findIndex(d => d.originalIndex >= ep.startRow);
+    zoomToCenter(idx >= 0 ? idx : ep.startRow);
+    setCurrentEpisodeIndex((currentEpisodeIndex + 1) % activeEpisodes.length);
   };
 
   // Tıklamayla Uçak İmlecini Taşıma (Seek)
@@ -897,23 +902,16 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
     }
   };
 
-  // Sonraki / Önceki İkaza Atlama
+  // Sonraki / Önceki İkaza Atlama (33.1x)
   const jumpToNextEpisode = () => {
     if (activeEpisodes.length === 0) return;
     const nextEp = activeEpisodes.find(ep => ep.startRow > (currentItem?.originalIndex || 0));
-    if (nextEp) {
-      const idx = chartData.findIndex(d => d.originalIndex >= nextEp.startRow);
-      if (idx >= 0) {
-        setCurrentIndex(idx);
-        // Eğer görünür alanda değilse kaydır
-        if (idx < viewStart || idx > viewEnd) {
-          const w = viewEnd - viewStart;
-          setZoomRange([Math.max(0, idx - Math.floor(w * 0.2)), Math.min(chartData.length - 1, idx + Math.floor(w * 0.8))]);
-        }
-      }
-    } else {
-      const idx = chartData.findIndex(d => d.originalIndex >= activeEpisodes[0].startRow);
-      if (idx >= 0) setCurrentIndex(idx);
+    const targetEp = nextEp || activeEpisodes[0];
+    const idx = chartData.findIndex(d => d.originalIndex >= targetEp.startRow);
+    if (idx >= 0) {
+      zoomToCenter(idx);
+      const epIdx = activeEpisodes.findIndex(e => e.startRow === targetEp.startRow);
+      if (epIdx >= 0) setCurrentEpisodeIndex((epIdx + 1) % activeEpisodes.length);
     }
   };
 
@@ -921,19 +919,12 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
     if (activeEpisodes.length === 0) return;
     const reversed = [...activeEpisodes].reverse();
     const prevEp = reversed.find(ep => ep.endRow < (currentItem?.originalIndex || 0));
-    if (prevEp) {
-      const idx = chartData.findIndex(d => d.originalIndex >= prevEp.startRow);
-      if (idx >= 0) {
-        setCurrentIndex(idx);
-        if (idx < viewStart || idx > viewEnd) {
-          const w = viewEnd - viewStart;
-          setZoomRange([Math.max(0, idx - Math.floor(w * 0.2)), Math.min(chartData.length - 1, idx + Math.floor(w * 0.8))]);
-        }
-      }
-    } else {
-      const last = activeEpisodes[activeEpisodes.length - 1];
-      const idx = chartData.findIndex(d => d.originalIndex >= last.startRow);
-      if (idx >= 0) setCurrentIndex(idx);
+    const targetEp = prevEp || activeEpisodes[activeEpisodes.length - 1];
+    const idx = chartData.findIndex(d => d.originalIndex >= targetEp.startRow);
+    if (idx >= 0) {
+      zoomToCenter(idx);
+      const epIdx = activeEpisodes.findIndex(e => e.startRow === targetEp.startRow);
+      if (epIdx >= 0) setCurrentEpisodeIndex(epIdx);
     }
   };
 
@@ -1390,33 +1381,11 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                           </text>
                         </g>
 
-                        {/* Sağ Eşik Açıklama Rozeti (Kırmızı ve Sarı Kademeli Olarak Asla Üst Üste Binmez) */}
-                        <g transform={`translate(${padding.left + plotWidth - (band.level === 'RED' ? 145 : 300)}, ${thresholdY - 10})`}>
-                          <rect
-                            width="145"
-                            height="20"
-                            rx="6"
-                            fill={band.color}
-                            opacity="0.95"
-                            filter="url(#softShadow)"
-                          />
-                          <text
-                            x="72"
-                            y="14"
-                            fill="#ffffff"
-                            fontSize="9"
-                            fontWeight="900"
-                            textAnchor="middle"
-                            fontFamily="monospace"
-                          >
-                            {band.level === 'RED' ? '🔴 KRİTİK LİMİT' : '🟡 SARI İKAZ'}: {band.min} {limitConfig.unit}
-                          </text>
-                        </g>
-                      </>
-                    )}
-                  </g>
-                );
-              })}
+                       </>
+                     )}
+                   </g>
+                 );
+               })}
 
               {/* 2. DİKEY IZGARA ÇİZGİLERİ (ZAMAN TIKLARI BOYUNCA) */}
               {xTicks.map((tick, tIdx) => (
@@ -1440,6 +1409,8 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
 
                   const epX1 = getX(startIdx);
                   const epX2 = getX(endIdx);
+                  const startItem = chartData[startIdx];
+                  const epY = startItem ? getY(startItem.val) : padding.top + plotHeight / 2;
                   const isRedEp = ep.level === 'RED';
                   const sameLevelEpisodes = activeEpisodes.filter(e => e.level === ep.level);
                   const epNumber = sameLevelEpisodes.indexOf(ep) + 1;
@@ -1452,17 +1423,30 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                           <line x1={epX2} y1={padding.top} x2={epX2} y2={padding.top + plotHeight} stroke={isRedEp ? '#dc2626' : '#ca8a04'} strokeWidth="1.5" strokeDasharray="3 3" />
                         </>
                       )}
-                      {/* Olay Başlığı */}
-                      <text
-                        x={epX1 + 4}
-                        y={padding.top + 14}
-                        fill={isRedEp ? '#991b1b' : '#854d0e'}
-                        fontSize="9"
-                        fontWeight="900"
-                        fontFamily="monospace"
-                      >
-                        {isRedEp ? '🔴 KIRMIZI' : '🟡 SARI'} #{epNumber}
-                      </text>
+                      {/* Olay Başlığı - Noktayı ve Eğriyi Takip Eder */}
+                      <g transform={`translate(${epX1 + 4}, ${Math.min(padding.top + plotHeight - 15, Math.max(padding.top + 10, epY - 14))})`}>
+                        <rect
+                          x="-2"
+                          y="-9"
+                          width={isRedEp ? 62 : 56}
+                          height="16"
+                          rx="4"
+                          fill={isRedEp ? '#fee2e2' : '#fef9c3'}
+                          stroke={isRedEp ? '#dc2626' : '#ca8a04'}
+                          strokeWidth="1"
+                          opacity="0.95"
+                        />
+                        <text
+                          x="2"
+                          y="2"
+                          fill={isRedEp ? '#991b1b' : '#854d0e'}
+                          fontSize="9"
+                          fontWeight="900"
+                          fontFamily="monospace"
+                        >
+                          {isRedEp ? '🔴 KIRMIZI' : '🟡 SARI'} #{epNumber}
+                        </text>
+                      </g>
                     </g>
                   );
                 })}
@@ -1613,12 +1597,25 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
             </svg>
           </div>
 
-          {/* MİNİ GENEL BAKIŞ HARİTASI (TIMELINE SCRUBBER & MINI-MAP) */}
+          {/* MİNİ GENEL BAKIŞ HARİTASI (TIMELINE SCRUBBER & MINI-MAP - TIKLANABİLİR) */}
           <div className="w-full max-w-5xl mt-2 flex items-center gap-2">
             <span className="text-[10px] font-mono font-bold text-slate-500 shrink-0">
               Uçuş Zaman Tüneli:
             </span>
-            <div className="flex-1 relative h-4 bg-slate-200 rounded-md overflow-hidden border border-slate-300">
+            <div 
+              className="flex-1 relative h-5 bg-slate-200 rounded-md overflow-hidden border border-slate-300 cursor-pointer group shadow-2xs"
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+                const targetIdx = Math.round(ratio * (chartData.length - 1));
+                setCurrentIndex(targetIdx);
+                // Aynı zamanda görüntülenen pencereyi o bölgeye ortala
+                const halfWin = Math.floor(visibleCount / 2);
+                setViewStart(Math.max(0, Math.min(chartData.length - visibleCount, targetIdx - halfWin)));
+              }}
+              title="Tıklanan zaman anına atlamak için tıklayın"
+            >
               {/* Olayların mini haritadaki yerleri */}
               {activeEpisodes.map((ep, idx) => {
                 const sRatio = Math.max(0, ep.startRow / (chartData.length || 1));
@@ -1627,7 +1624,7 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                   <div
                     key={`mini-ep-${idx}`}
                     style={{ left: `${sRatio * 100}%`, width: `${Math.max(1, (eRatio - sRatio) * 100)}%` }}
-                    className={`absolute top-0 bottom-0 ${ep.level === 'RED' ? 'bg-red-500' : 'bg-amber-400'} opacity-70`}
+                    className={`absolute top-0 bottom-0 ${ep.level === 'RED' ? 'bg-red-500' : 'bg-amber-400'} opacity-80 pointer-events-none`}
                   />
                 );
               })}
@@ -1638,14 +1635,14 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                   left: `${(viewStart / (chartData.length - 1 || 1)) * 100}%`,
                   width: `${(visibleCount / (chartData.length || 1)) * 100}%`
                 }}
-                className="absolute top-0 bottom-0 bg-sky-500/30 border-2 border-sky-600 rounded-xs"
+                className="absolute top-0 bottom-0 bg-sky-500/30 border-2 border-sky-600 rounded-xs pointer-events-none"
                 title="Şu anda ekranda görüntülenen zaman aralığı"
               />
 
               {/* Anlık Uçak Konumu İşareti */}
               <div
                 style={{ left: `${(currentIndex / (chartData.length - 1 || 1)) * 100}%` }}
-                className="absolute top-0 bottom-0 w-1 bg-amber-600 shadow-xs"
+                className="absolute top-0 bottom-0 w-1.5 bg-red-600 shadow-sm z-10 pointer-events-none"
               />
             </div>
             <span className="text-[10px] font-mono text-slate-500 font-bold shrink-0">
