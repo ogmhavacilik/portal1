@@ -871,8 +871,8 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
   };
 
   const zoomToCenter = (centerIdx: number) => {
-    const multiplier = 33.1;
-    const targetWindow = Math.max(10, Math.round(chartData.length / multiplier));
+    const multiplier = 3331.1;
+    const targetWindow = Math.max(2, Math.round(chartData.length / multiplier));
     const start = Math.max(0, centerIdx - Math.floor(targetWindow / 2));
     const end = Math.min(chartData.length - 1, start + targetWindow);
     setZoomRange([start, end]);
@@ -1423,8 +1423,8 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                           <line x1={epX2} y1={padding.top} x2={epX2} y2={padding.top + plotHeight} stroke={isRedEp ? '#dc2626' : '#ca8a04'} strokeWidth="1.5" strokeDasharray="3 3" />
                         </>
                       )}
-                      {/* Olay Başlığı - Noktayı ve Eğriyi Takip Eder */}
-                      <g transform={`translate(${epX1 + 4}, ${Math.min(padding.top + plotHeight - 15, Math.max(padding.top + 10, epY - 14))})`}>
+                      {/* Olay Başlığı - Noktayı ve Değerleri Örtmemek İçin Daha Yukarıda Konumlandırılır */}
+                      <g transform={`translate(${epX1 + 4}, ${Math.min(padding.top + plotHeight - 15, Math.max(padding.top + 10, epY - 36))})`}>
                         <rect
                           x="-2"
                           y="-9"
@@ -1478,19 +1478,19 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                       <circle
                         cx={x}
                         cy={y}
-                        r={isSelectedPlane ? 6 : isHovered ? 5 : visibleCount <= 30 ? 4.5 : 2.5}
+                        r={isSelectedPlane ? 6 : isHovered ? 5 : isRed || isYellow ? 4.5 : 2.5}
                         fill={isRed ? '#dc2626' : isYellow ? '#ca8a04' : '#0284c7'}
                         stroke="#ffffff"
-                        strokeWidth={isSelectedPlane || isHovered ? 2 : 1}
+                        strokeWidth={isSelectedPlane || isHovered || isRed || isYellow ? 2 : 1}
                       />
-                      {/* Derin yakınlaşmada her noktanın üzerine kesin değerini yaz */}
-                      {visibleCount <= 30 && (
+                      {/* Derin yakınlaşmada veya ikaz noktalarında kesin değerini net yaz */}
+                      {(visibleCount <= 50 || isRed || isYellow) && (
                         <text
                           x={x}
-                          y={y - 8}
-                          fill={isRed ? '#991b1b' : isYellow ? '#854d0e' : '#0369a1'}
+                          y={y - 10}
+                          fill={isRed ? '#991b1b' : isYellow ? '#78350f' : '#0369a1'}
                           fontSize="10"
-                          fontWeight="bold"
+                          fontWeight="900"
                           textAnchor="middle"
                           fontFamily="monospace"
                         >

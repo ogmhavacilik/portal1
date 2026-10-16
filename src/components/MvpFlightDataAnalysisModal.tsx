@@ -866,8 +866,15 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     }));
 
     setIsSyncingYellowNg(true);
+    let success = false;
+    const fallbackScriptUrls = [
+      'https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec',
+      'https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec'
+    ];
+    const spreadsheetId = '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0';
+    const sheetName = 'Sarı İkaz Ng Takip Adedi';
+
     try {
-      // Doğrudan Google E-Tabloya canlı aktar ve kontrol et
       const res = await fetch('/api/yellow-ng', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -877,50 +884,164 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
         })
       });
 
-      const data = await res.json();
-
-      if (res.status === 409 || data?.status === 'duplicate') {
-        if (data?.data?.counts) setYellowNgCounts(data.data.counts);
-        if (data?.data?.records) setYellowNgRecords(data.data.records);
-        showNotification(
-          data?.message || `${analysisResult.fileName} için sarı ikaz satırları daha önce Google E-Tabloya aktarılmıştır! Mükerrer kayıt yapılamaz.`,
-          'info'
-        );
-        return;
+      if (res.ok) {
+        const data = await res.json();
+        if (res.status === 409 || data?.status === 'duplicate') {
+          if (data?.data?.counts) setYellowNgCounts(data.data.counts);
+          if (data?.data?.records) setYellowNgRecords(data.data.records);
+          showNotification(data?.message || 'Bu uçuş kaydındaki sarı ikaz satırları daha önce Google E-Tabloya aktarılmıştır!', 'info');
+          success = true;
+          return;
+        }
+        if (data?.status === 'success') {
+          if (data.data?.counts) setYellowNgCounts(data.data.counts);
+          if (data.data?.records) setYellowNgRecords(data.data.records);
+          const updatedTotal = data.data?.counts?.[selectedTail.code] || 0;
+          showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya başarıyla aktarıldı! (Toplam: ${updatedTotal})`, 'success');
+          success = true;
+          return;
+        }
       }
-
-      if (res.ok && data?.status === 'success') {
-        if (data.data?.counts) setYellowNgCounts(data.data.counts);
-        if (data.data?.records) setYellowNgRecords(data.data.records);
-        const updatedTotal = data.data?.counts?.[selectedTail.code] || 0;
-        showNotification(
-          data?.message || `${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya başarıyla aktarıldı! (Toplam Adet: ${updatedTotal})`,
-          'success'
-        );
-      } else {
-        showNotification(data?.message || 'Google E-Tabloya veri aktarılırken hata oluştu.', 'error');
-      }
-    } catch (e: any) {
-      console.warn('Failed to sync yellow ng records to Google Sheet:', e);
-      showNotification('Google E-Tablo bağlantı hatası oluştu: ' + (e?.message || e), 'error');
-    } finally {
-      setIsSyncingYellowNg(false);
+    } catch (apiErr) {
+      console.warn('API proxy error, falling back to direct Google Apps Script:', apiErr);
     }
+
+    if (!success) {
+      for (const sUrl of fallbackScriptUrls) {
+        try {
+          const readUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent(sheetName)}&spreadsheetId=${spreadsheetId}&_t=${Date.now()}`;
+          const rRes = await fetch(readUrl);
+          if (rRes.ok) {
+            const rJson = await rRes.json();
+            const existing = Array.isArray(rJson.data) ? rJson.data : [];
+            const combined = [...existing, ...newRows];
+            const headers = ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı"];
+            const rows = [
+              headers,
+              ...combined.map((r: any, idx: number) => [
+                String(idx + 1),
+                String(r.tailCode || r["Kuyruk No"] || "").trim(),
+                String(r.motorSn || r["Motor S/N"] || "").trim(),
+                String(r.olayNo || r["Olay Numarası"] || "").trim(),
+                String(r.zamanAraligi || r["Zaman Aralığı (TIME)"] || "").trim(),
+                String(r.olayTepesi || r["Olay Tepesi"] || "").trim(),
+                String(r.satirAraligi || r["Satır Aralığı"] || "").trim(),
+                String(r.sure || r["Süre"] || "").trim(),
+                String(r.sistemKayitTarihi || r["Sisteme Kayıt Tarihi"] || "").trim(),
+                String(r.fileName || r["Dosya Adı"] || "").trim()
+              ])
+            ];
+
+            const pRes = await fetch(sUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({
+                action: 'updateSheet',
+                sheetName,
+                spreadsheetId,
+                data: rows
+              })
+            });
+            if (pRes.ok) {
+              const pJson = await pRes.json().catch(() => null);
+              if (pJson && pJson.status === 'success') {
+                await fetchLiveYellowNg(false);
+                showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya doğrudan aktarıldı!`, 'success');
+                success = true;
+                break;
+              }
+            }
+          }
+        } catch (scriptErr) {
+          console.warn('Direct GAS write error:', scriptErr);
+        }
+      }
+    }
+
+    if (!success) {
+      showNotification('Google E-Tabloya veri aktarılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
+    }
+    setIsSyncingYellowNg(false);
   };
 
   const handleDeleteYellowNgRecord = async (recordId: string | number) => {
+    let success = false;
+    const fallbackScriptUrls = [
+      'https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec',
+      'https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec'
+    ];
+    const spreadsheetId = '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0';
+    const sheetName = 'Sarı İkaz Ng Takip Adedi';
+
     try {
       const res = await fetch(`/api/yellow-ng/${recordId}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data && data.status === 'success') {
-        if (data.data?.counts) setYellowNgCounts(data.data.counts);
-        if (data.data?.records) setYellowNgRecords(data.data.records);
-        showNotification('Kayıtlı sarı ikaz satırı Google E-Tablodan silindi.', 'success');
-      } else {
-        showNotification(data?.message || 'Kayıt silinemedi.', 'error');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.status === 'success') {
+          if (data.data?.counts) setYellowNgCounts(data.data.counts);
+          if (data.data?.records) setYellowNgRecords(data.data.records);
+          showNotification('Kayıtlı sarı ikaz satırı Google E-Tablodan silindi.', 'success');
+          success = true;
+          return;
+        }
       }
     } catch (e) {
-      showNotification('Kayıt silinirken sunucu hatası oluştu.', 'error');
+      console.warn('API delete error, falling back to direct GAS:', e);
+    }
+
+    if (!success) {
+      for (const sUrl of fallbackScriptUrls) {
+        try {
+          const readUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent(sheetName)}&spreadsheetId=${spreadsheetId}&_t=${Date.now()}`;
+          const rRes = await fetch(readUrl);
+          if (rRes.ok) {
+            const rJson = await rRes.json();
+            const existing = Array.isArray(rJson.data) ? rJson.data : [];
+            const filtered = existing.filter((r: any, idx: number) => {
+              const rowId = String(r.id || r["#"] || (idx + 1)).trim();
+              return rowId !== String(recordId).trim();
+            });
+            const headers = ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı"];
+            const rows = [
+              headers,
+              ...filtered.map((r: any, idx: number) => [
+                String(idx + 1),
+                String(r.tailCode || r["Kuyruk No"] || "").trim(),
+                String(r.motorSn || r["Motor S/N"] || "").trim(),
+                String(r.olayNo || r["Olay Numarası"] || "").trim(),
+                String(r.zamanAraligi || r["Zaman Aralığı (TIME)"] || "").trim(),
+                String(r.olayTepesi || r["Olay Tepesi"] || "").trim(),
+                String(r.satirAraligi || r["Satır Aralığı"] || "").trim(),
+                String(r.sure || r["Süre"] || "").trim(),
+                String(r.sistemKayitTarihi || r["Sisteme Kayıt Tarihi"] || "").trim(),
+                String(r.fileName || r["Dosya Adı"] || "").trim()
+              ])
+            ];
+            const pRes = await fetch(sUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({
+                action: 'updateSheet',
+                sheetName,
+                spreadsheetId,
+                data: rows
+              })
+            });
+            if (pRes.ok) {
+              await fetchLiveYellowNg(false);
+              showNotification('Kayıtlı sarı ikaz satırı Google E-Tablodan silindi.', 'success');
+              success = true;
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn('Direct GAS delete error:', err);
+        }
+      }
+    }
+
+    if (!success) {
+      showNotification('Kayıt silinirken bağlantı hatası oluştu.', 'error');
     }
   };
 
