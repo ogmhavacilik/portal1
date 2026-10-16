@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import {
   X,
   UploadCloud,
@@ -32,8 +32,12 @@ import {
   FileCheck,
   Download,
   Trash2,
-  TrendingUp
+  TrendingUp,
+  ExternalLink,
+  Database,
+  Camera
 } from 'lucide-react';
+import html2canvas from 'html2canvas-pro';
 import { AIRCRAFT_TAILS } from './DepoManagementModal';
 import { FlightEngineChartModal } from './FlightEngineChartModal';
 
@@ -677,6 +681,36 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
   const [isFlightChartModalOpen, setIsFlightChartModalOpen] = useState(false);
   const [chartInitialParamKey, setChartInitialParamKey] = useState<string>('ng');
 
+  // Analiz Ekranı Görüntüsü İndirme State'leri
+  const analysisModalContentRef = useRef<HTMLDivElement>(null);
+  const [isCapturingAnalysis, setIsCapturingAnalysis] = useState(false);
+
+  const handleDownloadAnalysisScreenshot = async () => {
+    if (!analysisModalContentRef.current || isCapturingAnalysis) return;
+    setIsCapturingAnalysis(true);
+    try {
+      const canvas = await html2canvas(analysisModalContentRef.current, {
+        backgroundColor: '#ffffff',
+        scale: 1.5,
+        useCORS: true,
+        logging: false
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      const cleanTail = selectedTail.code || 'AT802';
+      link.download = `AT802_${cleanTail}_Analiz_Raporu_${new Date().toISOString().slice(0, 10)}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Screenshot error:', err);
+      alert('Ekran görüntüsü alınamadı: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsCapturingAnalysis(false);
+    }
+  };
+
   // Akordiyon UI toggle'ları
   const [isMetadataExpanded, setIsMetadataExpanded] = useState(false);
   const [isRefTableExpanded, setIsRefTableExpanded] = useState(false);
@@ -686,20 +720,110 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
   const [yellowNgRecords, setYellowNgRecords] = useState<any[]>([]);
   const [isYellowNgHistoryModalOpen, setIsYellowNgHistoryModalOpen] = useState(false);
   const [isSyncingYellowNg, setIsSyncingYellowNg] = useState(false);
+  const [isLoadingYellowNg, setIsLoadingYellowNg] = useState(false);
+  const [lastYellowNgFetchTime, setLastYellowNgFetchTime] = useState<string | null>(null);
 
+  // Google E-Tablodan canlı sarı ikaz satırlarını ve adetlerini çek (JSON dosyası değil, doğrudan e-tablo)
+  const fetchLiveYellowNg = useCallback(async (notify = false) => {
+    setIsLoadingYellowNg(true);
+    let success = false;
+    try {
+      // 1. Doğrudan API proxy üzerinden Google E-Tablodan canlı oku (cache-busting ile)
+      const res = await fetch(`/api/yellow-ng?_t=${Date.now()}`, {
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.status === 'success') {
+          if (data.data?.counts) setYellowNgCounts(data.data.counts);
+          if (data.data?.records) setYellowNgRecords(data.data.records);
+          const now = new Date();
+          const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+          setLastYellowNgFetchTime(timeStr);
+          success = true;
+          if (notify) {
+            showNotification(`Google E-Tablodan ("Sarı İkaz Ng Takip Adedi") ${data.data?.records?.length || 0} kayıt başarıyla güncellendi.`, 'success');
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('API /api/yellow-ng warn, falling back to direct Google Apps Script:', err);
+    }
+
+    // 2. Yedek: Sunucu proxy erişilemezse doğrudan Google Apps Script ile canlı E-Tablo oku
+    if (!success) {
+      const fallbackUrls = [
+        'https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec',
+        'https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec'
+      ];
+      for (const sUrl of fallbackUrls) {
+        try {
+          const directUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent('Sarı İkaz Ng Takip Adedi')}&spreadsheetId=17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0&_t=${Date.now()}`;
+          const gRes = await fetch(directUrl);
+          if (gRes.ok) {
+            const gData = await gRes.json();
+            if (gData && gData.status === 'success' && Array.isArray(gData.data)) {
+              const mapped = gData.data.map((r: any, idx: number) => ({
+                id: String(r['#'] || r.id || (idx + 1)).trim(),
+                '#': String(r['#'] || r.id || (idx + 1)).trim(),
+                tailCode: String(r['Kuyruk No'] || r.tailCode || '').trim(),
+                'Kuyruk No': String(r['Kuyruk No'] || r.tailCode || '').trim(),
+                motorSn: String(r['Motor S/N'] || r.motorSn || '').trim(),
+                'Motor S/N': String(r['Motor S/N'] || r.motorSn || '').trim(),
+                olayNo: String(r['Olay Numarası'] || r.olayNo || '').trim(),
+                'Olay Numarası': String(r['Olay Numarası'] || r.olayNo || '').trim(),
+                zamanAraligi: String(r['Zaman Aralığı (TIME)'] || r.zamanAraligi || '').trim(),
+                'Zaman Aralığı (TIME)': String(r['Zaman Aralığı (TIME)'] || r.zamanAraligi || '').trim(),
+                olayTepesi: String(r['Olay Tepesi'] || r.olayTepesi || '').trim(),
+                'Olay Tepesi': String(r['Olay Tepesi'] || r.olayTepesi || '').trim(),
+                satirAraligi: String(r['Satır Aralığı'] || r.satirAraligi || '').trim(),
+                'Satır Aralığı': String(r['Satır Aralığı'] || r.satirAraligi || '').trim(),
+                sure: String(r['Süre'] || r.sure || '').trim(),
+                'Süre': String(r['Süre'] || r.sure || '').trim(),
+                sistemKayitTarihi: String(r['Sisteme Kayıt Tarihi'] || r.sistemKayitTarihi || '').trim(),
+                'Sisteme Kayıt Tarihi': String(r['Sisteme Kayıt Tarihi'] || r.sistemKayitTarihi || '').trim(),
+                fileName: String(r['Dosya Adı'] || r.fileName || '').trim(),
+                'Dosya Adı': String(r['Dosya Adı'] || r.fileName || '').trim()
+              }));
+              const counts: Record<string, number> = {};
+              mapped.forEach((r: any) => {
+                if (r.tailCode) counts[r.tailCode] = (counts[r.tailCode] || 0) + 1;
+              });
+              setYellowNgRecords(mapped);
+              setYellowNgCounts(counts);
+              const now = new Date();
+              setLastYellowNgFetchTime(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`);
+              success = true;
+              if (notify) {
+                showNotification(`Doğrudan Google Apps Script ile E-Tablodan ${mapped.length} satır çekildi.`, 'success');
+              }
+              break;
+            }
+          }
+        } catch (e) {
+          console.warn('Direct GAS read error:', e);
+        }
+      }
+    }
+    setIsLoadingYellowNg(false);
+  }, [showNotification]);
+
+  // Modal açıldığında veya hava aracı değiştiğinde E-Tablodan canlı veri çek
   useEffect(() => {
     if (isOpen) {
-      fetch('/api/yellow-ng')
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.status === 'success') {
-            if (data.data?.counts) setYellowNgCounts(data.data.counts);
-            if (data.data?.records) setYellowNgRecords(data.data.records);
-          }
-        })
-        .catch(err => console.warn('Failed to fetch yellow-ng records:', err));
+      fetchLiveYellowNg();
     }
-  }, [isOpen]);
+  }, [isOpen, selectedTail.code, fetchLiveYellowNg]);
+
+  // Kayıtlı Ng Sarı İkaz Satırları geçmiş penceresi açıldığında daima en taze E-Tablo verisini çek
+  useEffect(() => {
+    if (isYellowNgHistoryModalOpen) {
+      fetchLiveYellowNg();
+    }
+  }, [isYellowNgHistoryModalOpen, fetchLiveYellowNg]);
 
   // Ng parametresindeki sarı ikaz epizotları (analiz edilmiş mevcut dosya için)
   const currentNgYellowEpisodes = useMemo(() => {
@@ -1859,7 +1983,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
-      <div className="bg-white text-slate-800 w-full max-w-7xl h-[94vh] rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
+      <div ref={analysisModalContentRef} className="bg-white text-slate-800 w-full max-w-7xl h-[94vh] rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
         
         {/* ÜST BAŞLIK ÇUBUĞU */}
         <div className="px-6 py-4 bg-gradient-to-r from-[#0b3d1d] via-[#14532d] to-[#0b3d1d] text-white flex items-center justify-between shrink-0 shadow-md">
@@ -2289,10 +2413,19 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                         type="button"
                         onClick={() => setIsYellowNgHistoryModalOpen(true)}
                         className="px-2.5 py-0.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-lg text-xs cursor-pointer shadow-xs transition-transform active:scale-95 flex items-center gap-1"
-                        title="Bu hava aracına ait kayıtlı sarı ikaz satırlarını incele"
+                        title="Bu hava aracına ait kayıtlı sarı ikaz satırlarını incele (Google E-Tablo)"
                       >
                         <span>{yellowNgCounts[selectedTail.code] || 0} Adet</span>
                         <Eye className="w-3.5 h-3.5 opacity-80" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fetchLiveYellowNg(true)}
+                        disabled={isLoadingYellowNg}
+                        className="p-1 rounded-lg text-amber-800 hover:text-amber-950 hover:bg-amber-200/70 transition-all cursor-pointer disabled:opacity-50"
+                        title="Google E-Tablodan ('Sarı İkaz Ng Takip Adedi') canlı yenile"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoadingYellowNg ? 'animate-spin text-amber-600' : ''}`} />
                       </button>
                       <button
                         type="button"
@@ -2337,6 +2470,27 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                     >
                       <TrendingUp className="w-3.5 h-3.5 text-amber-300" />
                       <span>📈 Motor Uçuş Grafiği Aç</span>
+                    </button>
+
+                    {/* Analiz Ekran Görüntüsü İndir Butonu */}
+                    <button
+                      type="button"
+                      onClick={handleDownloadAnalysisScreenshot}
+                      disabled={isCapturingAnalysis}
+                      className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-slate-900 hover:from-emerald-700 text-white font-black text-xs transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95 border border-emerald-500/40 disabled:opacity-50"
+                      title="Mevcut Uçuş Analiz Görünümünün Ekran Görüntüsünü (PNG) İndir"
+                    >
+                      {isCapturingAnalysis ? (
+                        <>
+                          <Activity className="w-3.5 h-3.5 animate-spin text-emerald-200" />
+                          <span>Görüntü Alınıyor...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Camera className="w-3.5 h-3.5 text-emerald-300" />
+                          <span>📸 Ekran Görüntüsü İndir</span>
+                        </>
+                      )}
                     </button>
 
                     {selectedParamKey && (
@@ -3517,21 +3671,56 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                       Motor S/N: {selectedTail.motorSn}
                     </span>
                   </h3>
-                  <p className="text-xs text-amber-100 font-mono">
-                    Kayıtlı Ng Sarı İkaz Satırları (Mevcut Adet: {(yellowNgRecords.filter(r => r.tailCode === selectedTail.code)).length} Adet)
-                  </p>
+                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                    <p className="text-xs text-amber-100 font-mono font-bold">
+                      Kayıtlı Ng Sarı İkaz Satırları (Mevcut Adet: {(yellowNgRecords.filter(r => r.tailCode === selectedTail.code)).length} Adet)
+                    </p>
+                    <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-950/60 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-400/40 font-mono font-semibold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Canlı Google E-Tablo ("Sarı İkaz Ng Takip Adedi")
+                    </span>
+                  </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsYellowNgHistoryModalOpen(false)}
-                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fetchLiveYellowNg(true)}
+                  disabled={isLoadingYellowNg}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs cursor-pointer transition-all active:scale-95 disabled:opacity-50 border border-white/20"
+                  title="Google E-Tablodan canlı verileri tekrar çek"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingYellowNg ? 'animate-spin' : ''}`} />
+                  <span>{isLoadingYellowNg ? 'E-Tablodan Çekiliyor...' : 'E-Tablodan Yenile'}</span>
+                </button>
+                <a
+                  href="https://docs.google.com/spreadsheets/d/17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0/edit"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white font-bold text-xs cursor-pointer transition-all active:scale-95 border border-emerald-400/50 shadow-xs"
+                  title="Google E-Tabloyu Yeni Sekmede Canlı Aç"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">E-Tabloyu Aç ↗</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setIsYellowNgHistoryModalOpen(false)}
+                  className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="p-4 overflow-y-auto flex-1 font-mono text-xs">
+              {isLoadingYellowNg && (
+                <div className="p-3 mb-3 bg-amber-50 text-amber-900 border border-amber-300 rounded-xl flex items-center gap-2 shadow-xs animate-pulse">
+                  <RefreshCw className="w-4 h-4 animate-spin text-amber-700 shrink-0" />
+                  <span className="font-bold">Google E-Tablodan canlı sarı ikaz satırları güncelleniyor, lütfen bekleyiniz...</span>
+                </div>
+              )}
+
               {(() => {
                 const tailRecords = yellowNgRecords.filter(r => r.tailCode === selectedTail.code);
                 if (tailRecords.length === 0) {
@@ -3542,18 +3731,40 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                       <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
                         Uçuş kaydı yüklendiğinde "Sarı İkazları Saydır" butonuna basarak dosyadaki sarı ikaz adedi kadar satır açabilir ve adedi otomatik işletebilirsiniz.
                       </p>
+                      <div className="mt-4 flex items-center justify-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => fetchLiveYellowNg(true)}
+                          className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs cursor-pointer shadow-xs transition-transform active:scale-95 flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Google E-Tabloyu Tekrar Kontrol Et</span>
+                        </button>
+                        <a
+                          href="https://docs.google.com/spreadsheets/d/17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0/edit"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer border border-slate-200 flex items-center gap-1.5"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>E-Tabloyu Aç ↗</span>
+                        </a>
+                      </div>
                     </div>
                   );
                 }
 
                 return (
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between text-xs text-slate-600 bg-amber-50/70 p-2.5 rounded-xl border border-amber-200">
-                      <span className="font-bold text-amber-950">
-                        {selectedTail.code} Kuyruk Nolu Uçağın Kayıtlı Satır Adedi: <strong>{tailRecords.length} Adet</strong>
+                    <div className="flex items-center justify-between text-xs text-slate-600 bg-amber-50/70 p-2.5 rounded-xl border border-amber-200 flex-wrap gap-2">
+                      <span className="font-bold text-amber-950 flex items-center gap-2">
+                        <span>{selectedTail.code} Kuyruk Nolu Uçağın Kayıtlı Satır Adedi: <strong>{tailRecords.length} Adet</strong></span>
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-mono font-bold border border-emerald-200">
+                          Google E-Tablo ile Canlı Eşit
+                        </span>
                       </span>
                       <span className="text-[11px] text-slate-500">
-                        Sistemde kaç satır açıldıysa o kadar adet sayılır.
+                        E-tabloda kaç satır varsa o kadar adet sayılır.
                       </span>
                     </div>
 
@@ -3608,7 +3819,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                                   type="button"
                                   onClick={() => handleDeleteYellowNgRecord(r.id)}
                                   className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer transition-colors"
-                                  title="Bu sarı ikaz satırını sil (adet otomatik 1 düşer)"
+                                  title="Bu sarı ikaz satırını sil (Google E-Tablodan silinir ve adet otomatik 1 düşer)"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -3623,10 +3834,14 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               })()}
             </div>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-              <span className="text-xs text-slate-500 font-mono">
-                Her bir sarı ikaz satırı sisteme kalıcı olarak işlenir ve kuyruk no bazında adedi otomatik sayılır.
-              </span>
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600 font-mono">
+                <Database className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  Veri Kaynağı: <strong>Google E-Tablo</strong> ("Sarı İkaz Ng Takip Adedi") • JSON veya statik depolama kullanılmaz.
+                  {lastYellowNgFetchTime && ` • Son E-Tablo Senkronizasyonu: ${lastYellowNgFetchTime}`}
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setIsYellowNgHistoryModalOpen(false)}

@@ -5784,8 +5784,11 @@ async function startServer() {
   async function fetchYellowNgFromGoogleSheet(): Promise<any[]> {
     for (const sUrl of SCRIPT_URLS) {
       try {
-        const getUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent(SHEET_NAME)}&spreadsheetId=${SPREADSHEET_ID}`;
-        const resp = await fetch(getUrl, { signal: AbortSignal.timeout(10000) });
+        const getUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent(SHEET_NAME)}&spreadsheetId=${SPREADSHEET_ID}&_t=${Date.now()}`;
+        const resp = await fetch(getUrl, { 
+          headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" },
+          signal: AbortSignal.timeout(12000) 
+        });
         if (resp.ok) {
           const json = await resp.json();
           if (json && json.status === "success" && Array.isArray(json.data)) {
@@ -5879,12 +5882,21 @@ async function startServer() {
 
   app.get("/api/yellow-ng", async (req, res) => {
     try {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       const records = await fetchYellowNgFromGoogleSheet();
       const counts: Record<string, number> = {};
       records.forEach((r: any) => {
         if (r.tailCode) counts[r.tailCode] = (counts[r.tailCode] || 0) + 1;
       });
-      return res.json({ status: "success", data: { records, counts } });
+      return res.json({ 
+        status: "success", 
+        source: "Google E-Tablo (Sarı İkaz Ng Takip Adedi)",
+        spreadsheetId: SPREADSHEET_ID,
+        sheetName: SHEET_NAME,
+        data: { records, counts } 
+      });
     } catch (err: any) {
       return res.status(500).json({ status: "error", message: err.message });
     }

@@ -169,6 +169,24 @@ const DEFAULT_AT802_SHEETS: OlayTakipSheet[] = [
     rows: []
   },
   {
+    id: 'sheet_at802_sari_ikaz',
+    sheetName: 'Sarı İkaz Ng Takip (E-Tablo)',
+    title: 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI GOOGLE E-TABLO)',
+    columns: [
+      '#',
+      'Kuyruk No',
+      'Motor S/N',
+      'Olay Numarası',
+      'Zaman Aralığı (TIME)',
+      'Olay Tepesi',
+      'Satır Aralığı',
+      'Süre',
+      'Sisteme Kayıt Tarihi',
+      'Dosya Adı'
+    ],
+    rows: []
+  },
+  {
     id: 'sheet_at802_kaza_kirim',
     sheetName: 'Kaza-Kırım Yapan Uçaklar',
     title: 'AT-802 HAVA ARAÇLARI KAZA / KIRIM ÖZET TABLOSU',
@@ -657,7 +675,72 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
     }
 
     fetchExcelFromDrive(selectedUnit, false);
+    syncYellowNgToOlayTakipSheet();
   }, [isOpen]);
+
+  // Google E-Tablodan Sarı İkaz Ng Takip satırlarını canlı çekip AT-802 sayfasına ekle/güncelle
+  const syncYellowNgToOlayTakipSheet = async (notify = false) => {
+    try {
+      const res = await fetch(`/api/yellow-ng?_t=${Date.now()}`, {
+        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.status === 'success' && Array.isArray(json.data?.records)) {
+          const records = json.data.records;
+          const rows: string[][] = records.map((r: any, idx: number) => [
+            String(r['#'] || r.id || (idx + 1)),
+            String(r.tailCode || r['Kuyruk No'] || ''),
+            String(r.motorSn || r['Motor S/N'] || ''),
+            String(r.olayNo || r['Olay Numarası'] || ''),
+            String(r.zamanAraligi || r['Zaman Aralığı (TIME)'] || ''),
+            String(r.olayTepesi || r['Olay Tepesi'] || ''),
+            String(r.satirAraligi || r['Satır Aralığı'] || ''),
+            String(r.sure || r['Süre'] || ''),
+            String(r.sistemKayitTarihi || r['Sisteme Kayıt Tarihi'] || ''),
+            String(r.fileName || r['Dosya Adı'] || '')
+          ]);
+          setAllUnitsData(prev => {
+            const at802Sheets = prev['at802'] ? [...prev['at802']] : [...DEFAULT_AT802_SHEETS];
+            let found = false;
+            const updated = at802Sheets.map(s => {
+              if (s.sheetName.toLowerCase().includes('sarı ikaz') || s.id.includes('sari_ikaz')) {
+                found = true;
+                return { ...s, rows };
+              }
+              return s;
+            });
+            if (!found) {
+              updated.splice(2, 0, {
+                id: 'sheet_at802_sari_ikaz',
+                sheetName: 'Sarı İkaz Ng Takip (E-Tablo)',
+                title: 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI GOOGLE E-TABLO)',
+                columns: [
+                  '#',
+                  'Kuyruk No',
+                  'Motor S/N',
+                  'Olay Numarası',
+                  'Zaman Aralığı (TIME)',
+                  'Olay Tepesi',
+                  'Satır Aralığı',
+                  'Süre',
+                  'Sisteme Kayıt Tarihi',
+                  'Dosya Adı'
+                ],
+                rows
+              });
+            }
+            return { ...prev, at802: updated };
+          });
+          if (notify) {
+            showNotification(`Google E-Tablodan ${records.length} adet Ng sarı ikaz satırı başarıyla güncellendi!`, 'success');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('syncYellowNgToOlayTakipSheet warn:', e);
+    }
+  };
 
   // When selected unit changes, activate correct sheet (defaults to "Ng Limit Aşımları Detayı" for AT-802)
   useEffect(() => {
@@ -670,6 +753,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
     } else if (selectedUnit === 'at802') {
       const ngIdx = unitSheets.findIndex(s => s.sheetName.toLowerCase().includes('ng limit') || s.id.includes('ng_limit'));
       if (ngIdx >= 0) targetIdx = ngIdx;
+      syncYellowNgToOlayTakipSheet();
     }
     setActiveSheetIndex(targetIdx);
     fetchExcelFromDrive(selectedUnit, false);
@@ -2095,11 +2179,40 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                     (Sayfa adı, başlık veya sütunları çift tıklayarak düzenleyebilirsiniz)
                   </span>
                 </div>
-                <div className="text-[11px] text-slate-500 font-mono">
-                  Toplam <strong className="text-slate-800 font-black">{currentSheet.rows.length}</strong> kayıt
-                  {searchQuery.trim() && (
-                    <span> (Filtrelenen: <strong className="text-emerald-700 font-black">{processedRows.length}</strong>)</span>
+                <div className="flex items-center gap-3">
+                  {currentSheet.sheetName.toLowerCase().includes('sarı ikaz') && (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-300 font-mono font-bold">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Canlı Google E-Tablo ("Sarı İkaz Ng Takip Adedi")
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => syncYellowNgToOlayTakipSheet(true)}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition-colors"
+                        title="Google E-Tablodan Canlı Yenile"
+                      >
+                        <RotateCw className="w-3 h-3 text-emerald-800" />
+                        <span>Canlı Yenile</span>
+                      </button>
+                      <a
+                        href="https://docs.google.com/spreadsheets/d/17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0/edit"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] shadow-xs cursor-pointer transition-colors"
+                        title="Google E-Tabloyu Yeni Sekmede Aç"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>E-Tabloyu Aç ↗</span>
+                      </a>
+                    </div>
                   )}
+                  <div className="text-[11px] text-slate-500 font-mono">
+                    Toplam <strong className="text-slate-800 font-black">{currentSheet.rows.length}</strong> kayıt
+                    {searchQuery.trim() && (
+                      <span> (Filtrelenen: <strong className="text-emerald-700 font-black">{processedRows.length}</strong>)</span>
+                    )}
+                  </div>
                 </div>
               </div>
 
