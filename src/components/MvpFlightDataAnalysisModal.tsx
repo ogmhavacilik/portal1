@@ -30,9 +30,12 @@ import {
   CheckCircle,
   RefreshCw,
   FileCheck,
-  Download
+  Download,
+  Trash2,
+  TrendingUp
 } from 'lucide-react';
 import { AIRCRAFT_TAILS } from './DepoManagementModal';
+import { FlightEngineChartModal } from './FlightEngineChartModal';
 
 /**
  * Resmi AT-802 Yangın Söndürme Filosu (Depo Envanteri Birebir Eşleşmesi)
@@ -667,21 +670,147 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
   const [showOnlyYellowColumns, setShowOnlyYellowColumns] = useState(false);
   const [sortMode, setSortMode] = useState<'CHRONO' | 'SEVERITY'>('CHRONO');
 
+  // 3. Kısım: Sütun Filtreleme Modu (SIRA, İKAZ, TIME ve Seçilen Parametre)
+  const [tableColumnFilterMode, setTableColumnFilterMode] = useState<'SELECTED_ONLY' | 'ALL_YELLOW' | 'ALL_COLUMNS'>('SELECTED_ONLY');
+
+  // AT-802F Motor Uçuş Grafiği & Oynatıcı Modal State'leri
+  const [isFlightChartModalOpen, setIsFlightChartModalOpen] = useState(false);
+  const [chartInitialParamKey, setChartInitialParamKey] = useState<string>('ng');
+
   // Akordiyon UI toggle'ları
   const [isMetadataExpanded, setIsMetadataExpanded] = useState(false);
   const [isRefTableExpanded, setIsRefTableExpanded] = useState(false);
 
+  // Sarı İkaz Takip Adedi & Kayıtları State'i (Her hava aracı için)
+  const [yellowNgCounts, setYellowNgCounts] = useState<Record<string, number>>({});
+  const [yellowNgRecords, setYellowNgRecords] = useState<any[]>([]);
+  const [isYellowNgHistoryModalOpen, setIsYellowNgHistoryModalOpen] = useState(false);
+  const [isSyncingYellowNg, setIsSyncingYellowNg] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetch('/api/yellow-ng')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.status === 'success') {
+            if (data.data?.counts) setYellowNgCounts(data.data.counts);
+            if (data.data?.records) setYellowNgRecords(data.data.records);
+          }
+        })
+        .catch(err => console.warn('Failed to fetch yellow-ng records:', err));
+    }
+  }, [isOpen]);
+
+  // Ng parametresindeki sarı ikaz epizotları (analiz edilmiş mevcut dosya için)
+  const currentNgYellowEpisodes = useMemo(() => {
+    if (!analysisResult) return [];
+    return analysisResult.episodes.filter(ep => {
+      const isNg = ep.colKey === 'ng' || ep.colName.toUpperCase().includes('NG');
+      return isNg && ep.level === 'YELLOW';
+    });
+  }, [analysisResult]);
+
+  // Sarı ikazları saydır (Mevcut uçuş dosyasındaki NG sarı ikaz adedi kadar kayıt/satır açar ve Google E-Tabloya yazar)
+  const handleCountYellowNg = async () => {
+    if (isSyncingYellowNg) return;
+
+    if (!analysisResult) {
+      showNotification('Lütfen önce bir MVP/CSV uçuş kayıt dosyası seçip yükleyiniz.', 'error');
+      return;
+    }
+
+    if (currentNgYellowEpisodes.length === 0) {
+      showNotification(`${selectedTail.code} için bu uçuş kaydında Ng (%) parametresinde sarı ikaz tespit edilmemiştir.`, 'info');
+      return;
+    }
+
+    const now = new Date();
+    const dateFormatted = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+    // Her bir sarı ikaz için bir satır (kuyruk no, motor seri no, zaman aralığı, olay tepesi, satır aralığı, olay numarası, sisteme kayıt tarihi)
+    const newRows = currentNgYellowEpisodes.map((ep, idx) => ({
+      olayNo: `Olay #${idx + 1} (${ep.id})`,
+      tailCode: selectedTail.code,
+      tailFull: selectedTail.fullLabel,
+      motorSn: selectedTail.motorSn,
+      zamanAraligi: `${ep.startTimeStr} ➔ ${ep.endTimeStr}`,
+      olayTepesi: ep.peakValueFormatted || `%${ep.peakValue.toFixed(1).replace('.', ',')} Ng`,
+      satirAraligi: `Satır #${ep.startRow} - #${ep.endRow} (${ep.rowCount} Satır)`,
+      sure: ep.durationFormatted || `${ep.durationSeconds.toFixed(1)} saniye`,
+      sistemKayitTarihi: dateFormatted,
+      fileName: analysisResult.fileName
+    }));
+
+    setIsSyncingYellowNg(true);
+    try {
+      // Doğrudan Google E-Tabloya canlı aktar ve kontrol et
+      const res = await fetch('/api/yellow-ng', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tailCode: selectedTail.code,
+          records: newRows
+        })
+      });
+
+      const data = await res.json();
+
+      if (res.status === 409 || data?.status === 'duplicate') {
+        if (data?.data?.counts) setYellowNgCounts(data.data.counts);
+        if (data?.data?.records) setYellowNgRecords(data.data.records);
+        showNotification(
+          data?.message || `${analysisResult.fileName} için sarı ikaz satırları daha önce Google E-Tabloya aktarılmıştır! Mükerrer kayıt yapılamaz.`,
+          'info'
+        );
+        return;
+      }
+
+      if (res.ok && data?.status === 'success') {
+        if (data.data?.counts) setYellowNgCounts(data.data.counts);
+        if (data.data?.records) setYellowNgRecords(data.data.records);
+        const updatedTotal = data.data?.counts?.[selectedTail.code] || 0;
+        showNotification(
+          data?.message || `${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya başarıyla aktarıldı! (Toplam Adet: ${updatedTotal})`,
+          'success'
+        );
+      } else {
+        showNotification(data?.message || 'Google E-Tabloya veri aktarılırken hata oluştu.', 'error');
+      }
+    } catch (e: any) {
+      console.warn('Failed to sync yellow ng records to Google Sheet:', e);
+      showNotification('Google E-Tablo bağlantı hatası oluştu: ' + (e?.message || e), 'error');
+    } finally {
+      setIsSyncingYellowNg(false);
+    }
+  };
+
+  const handleDeleteYellowNgRecord = async (recordId: string | number) => {
+    try {
+      const res = await fetch(`/api/yellow-ng/${recordId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data && data.status === 'success') {
+        if (data.data?.counts) setYellowNgCounts(data.data.counts);
+        if (data.data?.records) setYellowNgRecords(data.data.records);
+        showNotification('Kayıtlı sarı ikaz satırı Google E-Tablodan silindi.', 'success');
+      } else {
+        showNotification(data?.message || 'Kayıt silinemedi.', 'error');
+      }
+    } catch (e) {
+      showNotification('Kayıt silinirken sunucu hatası oluştu.', 'error');
+    }
+  };
+
   // Olay Takip Çizelgesine Aktarım Formu
   const [isIntegrateModalOpen, setIsIntegrateModalOpen] = useState(false);
   const [integrateForm, setIntegrateForm] = useState({
-    kuyrukNo: selectedTail.fullLabel,
+    kuyrukNo: selectedTail.code,
     tarih: new Date().toLocaleDateString('tr-TR'),
     motorSeriNo: selectedTail.motorSn,
     olayTuru: '',
     tepeNg: '',
     daaRefNo: '',
-    verilenSart: '25 Saat / Kontrol Şartı',
-    pilot: 'Kaptan Pilot Mehmet Yılmaz',
+    verilenSart: '',
+    pilot: '',
     teknikDegerlendirme: '',
     parcaDurumu: 'Onarıma Alındı'
   });
@@ -797,7 +926,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     setSelectedTail(found);
     setIntegrateForm(prev => ({
       ...prev,
-      kuyrukNo: found.fullLabel,
+      kuyrukNo: found.code,
       motorSeriNo: found.motorSn
     }));
     if (analysisResult) {
@@ -1486,6 +1615,8 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
       const progress = Math.min(95, Math.round(30 + ((end / totalDataRows) * 65)));
       setParsingProgress(progress);
       setParsingStatusText(`${end.toLocaleString('tr-TR')} / ${totalDataRows.toLocaleString('tr-TR')} satır tarandı...`);
+      
+
       await new Promise(r => setTimeout(r, 0));
     }
 
@@ -1541,14 +1672,14 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     }
 
     setIntegrateForm({
-      kuyrukNo: currentTailInfo.fullLabel,
+      kuyrukNo: currentTailInfo.code,
       tarih: detectedDate,
       motorSeriNo: currentTailInfo.motorSn,
       olayTuru: defaultOlayTuru,
       tepeNg: peakNg ? `%${peakNg.toFixed(1).replace('.', ',')}` : '%104,0',
-      daaRefNo: redCount > 0 ? 'P&WC-DAA-2026-802-01' : '-',
-      verilenSart: redCount > 0 ? '25 Uçuş Saati / Boroskop Şartı' : 'Rutin Takip',
-      pilot: detectedPilot,
+      daaRefNo: '',
+      verilenSart: '',
+      pilot: '',
       teknikDegerlendirme: defaultTeknik,
       parcaDurumu: defaultParca
     });
@@ -1664,23 +1795,63 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, validCurrentPage, pageSize]);
 
-  // Tabloda gösterilecek başlıklar
-  const activeHeaders = useMemo(() => {
-    if (!analysisResult) return [];
-    if (!showOnlyYellowColumns) return analysisResult.headers;
-    return analysisResult.headers.filter((h, idx) => h.toUpperCase().includes('TIME') || isYellowFocusHeader(h, idx));
-  }, [analysisResult, showOnlyYellowColumns]);
+  // 3. Kısım: Tabloda gösterilecek başlıklar ve orijinal indeksleri
+  const { activeHeaders, activeHeaderIndices } = useMemo(() => {
+    if (!analysisResult) return { activeHeaders: [] as string[], activeHeaderIndices: [] as number[] };
 
-  const activeHeaderIndices = useMemo(() => {
-    if (!analysisResult) return [];
-    if (!showOnlyYellowColumns) return analysisResult.headers.map((_, idx) => idx);
-    return analysisResult.headers
-      .map((h, idx) => (h.toUpperCase().includes('TIME') || isYellowFocusHeader(h, idx) ? idx : -1))
-      .filter(idx => idx !== -1);
-  }, [analysisResult, showOnlyYellowColumns]);
+    // Mod 1: Sadece seçilen parametre sütunu (Kullanıcı Talebi: SIRA, İKAZ, TIME ve SEÇİLEN PARAMETRE)
+    if (tableColumnFilterMode === 'SELECTED_ONLY' && selectedColConfig) {
+      const hdrs: string[] = [];
+      const indices: number[] = [];
+
+      // 1. TIME Sütunu (varsa)
+      const timeIdx = analysisResult.headers.findIndex((h, idx) => h.toUpperCase().includes('TIME') || idx === 0);
+      if (timeIdx >= 0) {
+        hdrs.push(analysisResult.headers[timeIdx]);
+        indices.push(timeIdx);
+      }
+
+      // 2. Seçilen Parametrenin Sütunu (Hemen ardından)
+      const paramIdx = analysisResult.headers.findIndex((h, idx) =>
+        selectedColConfig.matchPattern.test(h) || idx === selectedColConfig.expectedIndex
+      );
+      if (paramIdx >= 0 && paramIdx !== timeIdx) {
+        hdrs.push(analysisResult.headers[paramIdx]);
+        indices.push(paramIdx);
+      } else if (paramIdx < 0 && selectedColConfig.expectedIndex < analysisResult.headers.length) {
+        hdrs.push(analysisResult.headers[selectedColConfig.expectedIndex]);
+        indices.push(selectedColConfig.expectedIndex);
+      }
+
+      return { activeHeaders: hdrs, activeHeaderIndices: indices };
+    }
+
+    // Mod 2: 7 Odak Sarı Parametre Sütunları
+    if (tableColumnFilterMode === 'ALL_YELLOW') {
+      const hdrs: string[] = [];
+      const indices: number[] = [];
+      analysisResult.headers.forEach((h, idx) => {
+        if (h.toUpperCase().includes('TIME') || isYellowFocusHeader(h, idx)) {
+          hdrs.push(h);
+          indices.push(idx);
+        }
+      });
+      return { activeHeaders: hdrs, activeHeaderIndices: indices };
+    }
+
+    // Mod 3: Orijinal Excel'deki Tüm Sütunlar
+    return {
+      activeHeaders: analysisResult.headers,
+      activeHeaderIndices: analysisResult.headers.map((_, idx) => idx)
+    };
+  }, [analysisResult, tableColumnFilterMode, selectedColConfig]);
 
   // Olay Takip Çizelgesine Kaydet
   const handleCommitToOlayTakip = () => {
+    if (!integrateForm.pilot || !integrateForm.pilot.trim()) {
+      showNotification('Sorumlu Pilot alanı boş bırakılamaz!', 'error');
+      return;
+    }
     onAddToOlayTakip(integrateForm);
     setIsIntegrateModalOpen(false);
     showNotification('Limit aşımı kaydı AT-802 "Ng Limit Aşımları Detayı" sayfasına başarıyla eklendi!', 'success');
@@ -1933,9 +2104,9 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                 )}
               </button>
 
-              <div className="text-[11px] font-mono text-emerald-900 flex items-center gap-2">
+              <div className="text-[11px] font-mono text-emerald-900 flex items-center gap-2 flex-wrap">
                 <span>
-                  Uçak: <strong>{selectedTail.fullLabel}</strong>
+                  Uçak Depo: <strong>{selectedTail.fullLabel}</strong>
                 </span>
                 <span>|</span>
                 <span>
@@ -2111,19 +2282,77 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                       </p>
                     </div>
                   </div>
-                  {selectedParamKey && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-300 shadow-2xs">
+                      <span className="font-black text-amber-950 text-xs">Sarı İkaz Adedi:</span>
+                      <button
+                        type="button"
+                        onClick={() => setIsYellowNgHistoryModalOpen(true)}
+                        className="px-2.5 py-0.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-lg text-xs cursor-pointer shadow-xs transition-transform active:scale-95 flex items-center gap-1"
+                        title="Bu hava aracına ait kayıtlı sarı ikaz satırlarını incele"
+                      >
+                        <span>{yellowNgCounts[selectedTail.code] || 0} Adet</span>
+                        <Eye className="w-3.5 h-3.5 opacity-80" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSyncingYellowNg}
+                        onClick={handleCountYellowNg}
+                        className={`px-3.5 py-1.5 ${
+                          isSyncingYellowNg 
+                            ? 'bg-amber-400 text-white cursor-not-allowed opacity-90' 
+                            : 'bg-gradient-to-r from-amber-600 via-amber-700 to-amber-800 hover:from-amber-700 hover:via-amber-800 hover:to-amber-900 active:scale-95 text-white shadow-xs cursor-pointer'
+                        } font-black text-xs uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 border border-amber-500/40`}
+                        title={
+                          isSyncingYellowNg
+                            ? 'Google E-Tabloya aktarılıyor, lütfen bekleyiniz...'
+                            : analysisResult
+                              ? `Yüklü uçuş kaydındaki ${currentNgYellowEpisodes.length} adet Ng Sarı İkazını Google E-Tabloya canlı aktar ve saydır`
+                              : 'Önce MVP/CSV uçuş kayıt dosyası yükleyiniz'
+                        }
+                      >
+                        {isSyncingYellowNg ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-100" />
+                            <span>E-Tabloya Aktarılıyor...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Flame className="w-3.5 h-3.5 text-amber-200" />
+                            <span>Sarı İkazları Saydır{currentNgYellowEpisodes.length > 0 ? ` (${currentNgYellowEpisodes.length})` : ''}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* AT-802F Motor Uçuş Grafiği & Oynatıcı Butonu */}
                     <button
                       type="button"
                       onClick={() => {
-                        setSelectedParamKey(null);
-                        setSelectedEpisodeId(null);
+                        setChartInitialParamKey(selectedParamKey || 'ng');
+                        setIsFlightChartModalOpen(true);
                       }}
-                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                      className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 hover:from-blue-800 text-white font-black text-xs transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95 border border-blue-500/40"
+                      title="AT-802F Uçak İmleçli Motor Uçuş Grafiğini ve Oynatıcıyı Aç (X: Zaman, Y: Limitler)"
                     >
-                      <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Seçimi Temizle (Yalnızca 1. Kısım)</span>
+                      <TrendingUp className="w-3.5 h-3.5 text-amber-300" />
+                      <span>📈 Motor Uçuş Grafiği Aç</span>
                     </button>
-                  )}
+
+                    {selectedParamKey && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedParamKey(null);
+                          setSelectedEpisodeId(null);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Seçimi Temizle (Yalnızca 1. Kısım)</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* 7 PARAMETRE EN YÜKSEK DEĞERLER KARTLARI (Sütun 1 2 3 yok, Odak aşımları yok) */}
@@ -2166,7 +2395,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                             else if (col.key === 'ng') targetPeakVal = analysisResult.peakNg;
                             else if (col.key === 'itt') targetPeakVal = analysisResult.peakItt;
                             else if (col.key === 'torq') targetPeakVal = analysisResult.peakTq;
-                            else if (col.key === 'oil_t') targetPeakVal = analysisResult.peakOilT || analysisResult.maxOilT;
+                            else if (col.key === 'oil_t') targetPeakVal = analysisResult.maxOilT;
 
                             if (targetPeakVal !== null) {
                               const matchRow = analysisResult.rows.find(r => {
@@ -2225,7 +2454,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           {info.limit}
                         </div>
 
-                        <div className="mt-2 pt-1.5 border-t border-slate-200/70 flex items-center justify-between">
+                        <div className="mt-2 pt-1.5 border-t border-slate-200/70 flex items-center justify-between gap-1">
                           {info.total > 0 ? (
                             <div className="flex items-center gap-1 font-mono text-[10px]">
                               {info.red > 0 && (
@@ -2245,9 +2474,24 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                             </span>
                           )}
 
-                          <span className={`text-[10px] font-black ${isSelected ? 'text-emerald-700' : 'text-slate-400 group-hover:text-amber-800'}`}>
-                            {isSelected ? '✓ 2. Kısım Açık' : 'İncele ➔'}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setChartInitialParamKey(col.key);
+                                setIsFlightChartModalOpen(true);
+                              }}
+                              className="px-2 py-0.5 rounded-md bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-[9px] shadow-2xs transition-all flex items-center gap-1 cursor-pointer border border-amber-600/30"
+                              title={`${col.name} Uçuş Grafiğini Aç`}
+                            >
+                              <TrendingUp className="w-2.5 h-2.5 text-slate-950" />
+                              <span>Grafik Aç</span>
+                            </button>
+                            <span className={`text-[10px] font-black ${isSelected ? 'text-emerald-700' : 'text-slate-400 group-hover:text-amber-800'}`}>
+                              {isSelected ? '✓ Açık' : '➔'}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     );
@@ -2498,7 +2742,49 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+
+                      {/* Sütun Görünüm Filtresi Butonları (Kullanıcı Talebi: SIRA, İKAZ, TIME ve Seçilen Parametre) */}
+                      <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-red-200 shadow-2xs">
+                        <Filter className="w-3.5 h-3.5 text-slate-500 ml-1" />
+                        <span className="text-[10px] font-bold text-slate-600 mr-0.5">Sütunlar:</span>
+                        <button
+                          type="button"
+                          onClick={() => setTableColumnFilterMode('SELECTED_ONLY')}
+                          className={`px-2 py-0.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            tableColumnFilterMode === 'SELECTED_ONLY'
+                              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                          title="Sadece SIRA, İKAZ, TIME ve seçilen parametre sütununu göster"
+                        >
+                          🎯 Sadece {selectedColConfig?.name || 'Seçilen'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTableColumnFilterMode('ALL_YELLOW')}
+                          className={`px-2 py-0.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            tableColumnFilterMode === 'ALL_YELLOW'
+                              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                          title="7 Sarı Odak parametresini göster"
+                        >
+                          🟡 7 Parametre
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTableColumnFilterMode('ALL_COLUMNS')}
+                          className={`px-2 py-0.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            tableColumnFilterMode === 'ALL_COLUMNS'
+                              ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                          title="Orijinal dosyadaki tüm sütunları aç"
+                        >
+                          📋 Tüm Sütunlar ({analysisResult?.headers.length})
+                        </button>
+                      </div>
 
                       <button
                         type="button"
@@ -2552,7 +2838,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           showNotification('Renkli Excel Raporu (.xls) başarıyla indirildi!', 'success');
                         }}
                         className="px-3 py-1 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black transition-all cursor-pointer shadow-xs flex items-center gap-1.5"
-                        title="Tabloyu ikaz renkleriyle boyanmış Excel (.xls) formatında indir (Kritik tepe satırları en üstte)"
+                        title="Tabloyu ikaz renkleriyle boyanmış Excel (.xls) formatında indir"
                       >
                         <Download className="w-3.5 h-3.5 text-white" />
                         <span>Excel İndir (.xls)</span>
@@ -2568,7 +2854,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                     </div>
                   </div>
 
-                  {/* TABLO GÖRÜNÜMÜ: ORİJİNAL EXCEL TASARIMI (Başlıklarda Sütun 1 2 3 Kaldırıldı) */}
+                  {/* TABLO GÖRÜNÜMÜ: ORİJİNAL EXCEL TASARIMI */}
                   <div className="w-full overflow-x-auto flex-1">
                     <table className="min-w-max w-full text-left border-collapse bg-white border border-slate-300">
                       <thead className="sticky top-0 z-20 shadow-xs font-mono">
@@ -2582,15 +2868,17 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           </th>
                           {activeHeaders.map((hdr, hIdx) => {
                             const origColIdx = activeHeaderIndices[hIdx];
-                            const isYellowFocus = isYellowFocusHeader(hdr, origColIdx);
+                            const isSelectedParamCol = selectedColConfig
+                              ? (origColIdx === selectedColConfig.expectedIndex || selectedColConfig.matchPattern.test(hdr) || hdr.toUpperCase().includes(selectedColConfig.name.toUpperCase()))
+                              : false;
                             const excelLetter = getExcelColumnLetter(origColIdx);
 
                             return (
                               <th
                                 key={`letter-${hIdx}`}
                                 className={`px-3 py-1 text-center border-r border-b transition-colors ${
-                                  isYellowFocus
-                                    ? 'bg-[#facc15] text-slate-950 border-[#ca8a04] font-black'
+                                  isSelectedParamCol
+                                    ? 'bg-[#facc15] text-slate-950 border-[#ca8a04] font-black ring-2 ring-amber-400 shadow-sm'
                                     : 'bg-slate-200 text-slate-700 border-slate-300 font-bold'
                                 }`}
                               >
@@ -2602,7 +2890,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           })}
                         </tr>
 
-                        {/* EXCEL BAŞLIK SATIRI: PARAMETRE ADLARI (Sütun 1 2 3 Yazısı Kaldırıldı!) */}
+                        {/* EXCEL BAŞLIK SATIRI: PARAMETRE ADLARI (YALNIZCA SEÇİLEN PARAMETREDE SARI DOLGU) */}
                         <tr className="border-b border-slate-300">
                           <th className="px-2 py-2 text-[10px] font-black text-slate-700 uppercase tracking-wider border-r border-b border-slate-300 text-center bg-slate-100 sticky left-0 z-30">
                             SIRA
@@ -2613,23 +2901,25 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
 
                           {activeHeaders.map((hdr, hIdx) => {
                             const origColIdx = activeHeaderIndices[hIdx];
-                            const isYellowFocus = isYellowFocusHeader(hdr, origColIdx);
+                            const isSelectedParamCol = selectedColConfig
+                              ? (origColIdx === selectedColConfig.expectedIndex || selectedColConfig.matchPattern.test(hdr) || hdr.toUpperCase().includes(selectedColConfig.name.toUpperCase()))
+                              : false;
 
                             return (
                               <th
                                 key={`header-${hIdx}`}
-                                style={{ minWidth: isYellowFocus ? '135px' : hdr.toUpperCase().includes('TIME') ? '210px' : '95px' }}
+                                style={{ minWidth: isSelectedParamCol ? '150px' : hdr.toUpperCase().includes('TIME') ? '230px' : '95px' }}
                                 className={`px-3 py-2 text-[10px] uppercase tracking-wider border-r border-b whitespace-nowrap text-center transition-all ${
-                                  isYellowFocus
-                                    ? 'bg-[#fef08a] text-slate-950 border-[#ca8a04] font-black shadow-xs'
+                                  isSelectedParamCol
+                                    ? 'bg-[#fef08a] text-slate-950 border-[#ca8a04] font-black shadow-md ring-2 ring-amber-400'
                                     : 'bg-slate-100 text-slate-800 border-slate-300 font-bold'
                                 }`}
                               >
                                 <div className="flex flex-col items-center justify-center py-0.5">
                                   <span className="font-black text-[11px] tracking-tight">{hdr}</span>
-                                  {isYellowFocus && (
-                                    <span className="text-[8px] bg-amber-950 text-amber-200 px-1.5 py-0.2 rounded font-black mt-0.5 tracking-wider">
-                                      SARI DOLGU
+                                  {isSelectedParamCol && (
+                                    <span className="text-[8px] bg-amber-950 text-amber-200 px-2 py-0.5 rounded font-black mt-0.5 tracking-wider shadow-2xs">
+                                      ★ SEÇİLEN ODAK (SARI DOLGU)
                                     </span>
                                   )}
                                 </div>
@@ -2648,8 +2938,8 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           </tr>
                         ) : (
                           paginatedRows.map((row, rIdx) => {
-                            const isRed = row.severity === 'RED';
-                            const isYellow = row.severity === 'YELLOW';
+                            const isRed = row.severity === 'RED' || row.violations.some(v => v.level === 'RED');
+                            const isYellow = !isRed && (row.severity === 'YELLOW' || row.violations.some(v => v.level === 'YELLOW'));
                             const isViolatedRow = isRed || isYellow;
                             const ep = row.primaryEpisode;
                             const primaryViolation = row.violations[0];
@@ -2670,7 +2960,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                                   #{row.originalIndex}
                                 </td>
 
-                                {/* Aşım Durumu Rozeti */}
+                                {/* İkaz Durumu Rozeti */}
                                 <td className="px-3 py-2 text-center border-r border-b border-slate-200 whitespace-nowrap">
                                   {isRed ? (
                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-600 text-white shadow-2xs">
@@ -2693,33 +2983,35 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                                 {activeHeaders.map((hdr, hIdx) => {
                                   const origColIdx = activeHeaderIndices[hIdx];
                                   const cellVal = row.cells[origColIdx] !== undefined ? row.cells[origColIdx] : '-';
-                                  const isYellowFocus = isYellowFocusHeader(hdr, origColIdx);
+                                  const isSelectedParamCol = selectedColConfig
+                                    ? (origColIdx === selectedColConfig.expectedIndex || selectedColConfig.matchPattern.test(hdr) || hdr.toUpperCase().includes(selectedColConfig.name.toUpperCase()))
+                                    : false;
 
-                                  // TIME SÜTUNU: LİMİT AŞIMI DURUMUNDA KIRMIZI ÇERÇEVELİ SÜRE FARKI GÖSTERİMİ
+                                  // TIME SÜTUNU: SARI İSE SARI ÇERÇEVELİ "SARI İKAZ ZAMAN ARALIĞI", KIRMIZI İSE KIRMIZI ÇERÇEVELİ "KIRMIZI AŞIM"
                                   if (hdr.toUpperCase().includes('TIME') || origColIdx === 0) {
                                     return (
                                       <td
                                         key={hIdx}
-                                        style={{ minWidth: isViolatedRow ? '225px' : '110px' }}
+                                        style={{ minWidth: isViolatedRow ? '240px' : '110px' }}
                                         className={`px-2 py-1.5 border-r border-b border-slate-200 whitespace-nowrap font-mono text-center transition-colors ${
-                                          isViolatedRow ? 'bg-red-50/80' : 'bg-slate-50 text-slate-800'
+                                          isRed ? 'bg-red-50/80' : isYellow ? 'bg-amber-50/80' : 'bg-slate-50 text-slate-800'
                                         }`}
                                       >
-                                        {isViolatedRow ? (
-                                          <div className="border-2 border-red-600 bg-white rounded-xl p-2 shadow-xs ring-2 ring-red-400/40 text-left">
+                                        {isRed ? (
+                                          <div className="border-2 border-red-600 bg-red-50/90 rounded-xl p-2 shadow-xs ring-2 ring-red-400/40 text-left">
                                             <div className="flex items-center justify-between gap-1.5 pb-1 border-b border-red-200">
                                               <span className="font-mono font-black text-xs text-red-950 flex items-center gap-1">
                                                 <Clock className="w-3.5 h-3.5 text-red-600 shrink-0" />
                                                 <span>{cellVal}</span>
                                               </span>
                                               <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-red-600 text-white uppercase tracking-wider animate-pulse">
-                                                🔴 AŞIM
+                                                🔴 KIRMIZI AŞIM
                                               </span>
                                             </div>
 
                                             {(ep?.startTimeStr || primaryViolation?.timeRangeStr) && (
-                                              <div className="mt-1 text-[10px] font-bold text-red-900 bg-red-50 px-1.5 py-0.5 rounded border border-red-200 flex items-center gap-1">
-                                                <span className="text-red-700 font-black">Aralık:</span>
+                                              <div className="mt-1 text-[10px] font-bold text-red-900 bg-red-100/70 px-1.5 py-0.5 rounded border border-red-300 flex items-center gap-1">
+                                                <span className="text-red-800 font-black">Kırmızı Aşım Zaman Aralığı:</span>
                                                 <span className="font-mono font-black tracking-tight">
                                                   {ep ? `${ep.startTimeStr} ➔ ${ep.endTimeStr}` : primaryViolation?.timeRangeStr}
                                                 </span>
@@ -2738,6 +3030,39 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                                               </span>
                                             </div>
                                           </div>
+                                        ) : isYellow ? (
+                                          <div className="border-2 border-amber-500 bg-amber-50/95 rounded-xl p-2 shadow-xs ring-2 ring-amber-300/60 text-left">
+                                            <div className="flex items-center justify-between gap-1.5 pb-1 border-b border-amber-200">
+                                              <span className="font-mono font-black text-xs text-amber-950 flex items-center gap-1">
+                                                <Clock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                                                <span>{cellVal}</span>
+                                              </span>
+                                              <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-amber-500 text-slate-950 uppercase tracking-wider">
+                                                🟡 SARI İKAZ
+                                              </span>
+                                            </div>
+
+                                            {(ep?.startTimeStr || primaryViolation?.timeRangeStr) && (
+                                              <div className="mt-1 text-[10px] font-bold text-amber-950 bg-amber-100/90 px-1.5 py-0.5 rounded border border-amber-300 flex items-center gap-1">
+                                                <span className="text-amber-900 font-black">Sarı İkaz Zaman Aralığı:</span>
+                                                <span className="font-mono font-black tracking-tight">
+                                                  {ep ? `${ep.startTimeStr} ➔ ${ep.endTimeStr}` : primaryViolation?.timeRangeStr}
+                                                </span>
+                                              </div>
+                                            )}
+
+                                            <div className="mt-1 flex items-center gap-1.5 text-[10px] font-black">
+                                              <span className="px-1.5 py-0.2 rounded bg-amber-500 text-slate-950 font-mono font-black shrink-0">
+                                                ⏱ {ep?.durationFormatted || primaryViolation?.durationFormatted || '0 sn'}
+                                              </span>
+                                              <span
+                                                className="text-amber-950 truncate font-mono font-black"
+                                                title={ep?.summaryText || primaryViolation?.summaryText}
+                                              >
+                                                {ep?.summaryText || primaryViolation?.summaryText || primaryViolation?.colName}
+                                              </span>
+                                            </div>
+                                          </div>
                                         ) : (
                                           <span className="font-mono font-semibold text-slate-700">{cellVal}</span>
                                         )}
@@ -2745,36 +3070,34 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                                     );
                                   }
 
-                                  // DİĞER SÜTUNLAR: YALNIZCA 7 SARI SÜTUN İÇİN LİMİT KONTROLÜ
-                                  const violation = isYellowFocus
-                                    ? row.violations.find(
-                                        v => v.colIndex === origColIdx || isYellowFocusHeader(v.colName, origColIdx)
-                                      )
-                                    : undefined;
+                                  // DİĞER SÜTUNLAR: YALNIZCA SEÇİLEN PARAMETRE SÜTUNUNDA DİKKAT ÇEKİCİ SARI DOLGU
+                                  const violation = row.violations.find(
+                                    v => v.colIndex === origColIdx || (selectedColConfig && isYellowFocusHeader(v.colName, origColIdx))
+                                  );
 
                                   return (
                                     <td
                                       key={hIdx}
-                                      style={{ minWidth: isYellowFocus ? '135px' : '95px' }}
+                                      style={{ minWidth: isSelectedParamCol ? '150px' : '95px' }}
                                       className={`px-3 py-1.5 text-center border-r border-b border-slate-200 whitespace-nowrap transition-colors font-mono text-[11px] ${
-                                        violation?.level === 'RED'
-                                          ? 'bg-red-500 text-white font-black shadow-inner'
-                                          : violation?.level === 'YELLOW'
-                                          ? 'bg-amber-300 text-slate-950 font-black shadow-inner'
-                                          : isYellowFocus
-                                          ? 'bg-amber-50/50 text-slate-900 font-semibold'
-                                          : 'text-slate-800'
+                                        isSelectedParamCol
+                                          ? violation?.level === 'RED'
+                                            ? 'bg-red-600 text-white font-black shadow-inner ring-1 ring-red-400'
+                                            : violation?.level === 'YELLOW'
+                                            ? 'bg-[#fef08a] text-slate-950 font-black border-2 border-amber-500 shadow-inner ring-1 ring-amber-400'
+                                            : 'bg-amber-100/80 text-slate-950 font-black border-x-2 border-amber-400 shadow-2xs'
+                                          : 'text-slate-800 bg-white hover:bg-slate-50'
                                       }`}
                                       title={violation ? violation.rule : undefined}
                                     >
                                       <div className="flex flex-col items-center justify-center">
-                                        <span className="font-bold">{cellVal}</span>
+                                        <span className={`font-bold ${isSelectedParamCol ? 'text-xs' : ''}`}>{cellVal}</span>
                                         {violation && (
                                           <span
                                             className={`text-[9px] px-1 rounded font-black mt-0.5 ${
                                               violation.level === 'RED'
                                                 ? 'bg-red-950 text-red-200'
-                                                : 'bg-amber-950/20 text-amber-900'
+                                                : 'bg-amber-950 text-amber-200'
                                             }`}
                                           >
                                             {violation.summaryText || `${violation.durationSeconds?.toFixed(1) || '0'}s`}
@@ -3055,156 +3378,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
           </div>
         </div>
       )}
-      {/* Olay Takip Entegrasyon Modal */}
-      {isIntegrateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden flex flex-col">
-            <div className="p-4 bg-gradient-to-r from-red-800 to-amber-800 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Plane className="w-5 h-5 text-amber-300" />
-                <h3 className="text-sm font-black uppercase tracking-wider">
-                  Olay Takip Çizelgesine Veri Aktarımı
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsIntegrateModalOpen(false)}
-                className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white cursor-pointer transition-colors"
-              >
-                ✕
-              </button>
-            </div>
 
-            <div className="p-5 space-y-4 text-xs font-sans">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Kuyruk Numarası:</label>
-                  <input
-                    type="text"
-                    value={integrateForm.kuyrukNo}
-                    onChange={e => setIntegrateForm({ ...integrateForm, kuyrukNo: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-bold text-slate-900 bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Tarih:</label>
-                  <input
-                    type="text"
-                    value={integrateForm.tarih}
-                    onChange={e => setIntegrateForm({ ...integrateForm, tarih: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-mono font-bold text-slate-900 bg-slate-50"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Motor Seri No:</label>
-                  <input
-                    type="text"
-                    value={integrateForm.motorSeriNo}
-                    onChange={e => setIntegrateForm({ ...integrateForm, motorSeriNo: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-mono font-bold text-emerald-900 bg-slate-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Tepe Ng Değeri:</label>
-                  <input
-                    type="text"
-                    value={integrateForm.tepeNg}
-                    onChange={e => setIntegrateForm({ ...integrateForm, tepeNg: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-mono font-bold text-red-700 bg-red-50/50"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 font-bold mb-1">Olay / İşlem Türü:</label>
-                <input
-                  type="text"
-                  value={integrateForm.olayTuru}
-                  onChange={e => setIntegrateForm({ ...integrateForm, olayTuru: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 font-bold"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">DAA Referans No:</label>
-                  <input
-                    type="text"
-                    value={integrateForm.daaRefNo}
-                    onChange={e => setIntegrateForm({ ...integrateForm, daaRefNo: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Verilen Şart / Kontrol:</label>
-                  <input
-                    type="text"
-                    value={integrateForm.verilenSart}
-                    onChange={e => setIntegrateForm({ ...integrateForm, verilenSart: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 font-bold mb-1">Sorumlu Pilot:</label>
-                <input
-                  type="text"
-                  value={integrateForm.pilot}
-                  onChange={e => setIntegrateForm({ ...integrateForm, pilot: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-600 font-bold mb-1">Teknik Değerlendirme / Açıklama:</label>
-                <textarea
-                  rows={3}
-                  value={integrateForm.teknikDegerlendirme}
-                  onChange={e => setIntegrateForm({ ...integrateForm, teknikDegerlendirme: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 leading-relaxed font-sans"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-600 font-bold mb-1">Parça / Uçak Durumu:</label>
-                <select
-                  value={integrateForm.parcaDurumu}
-                  onChange={e => setIntegrateForm({ ...integrateForm, parcaDurumu: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-bold"
-                >
-                  <option value="Faal">Faal</option>
-                  <option value="Gözlem Altında Faal">Gözlem Altında Faal</option>
-                  <option value="Bakım / Kontrol Gerekli">Bakım / Kontrol Gerekli</option>
-                  <option value="Onarıma Alındı">Onarıma Alındı</option>
-                  <option value="Gayrifaal">Gayrifaal</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setIsIntegrateModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold cursor-pointer"
-              >
-                Vazgeç
-              </button>
-              <button
-                type="button"
-                onClick={handleCommitToOlayTakip}
-                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider flex items-center gap-2 shadow-md cursor-pointer transition-all active:scale-95"
-              >
-                <Save className="w-4 h-4" />
-                <span>Çizelgeye Ekle</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Anlık (Süre Koşulunu Sağlamayan) Tepe Değer Uyarı Penceresi */}
       {transientWarningPopup && transientWarningPopup.isOpen && (
@@ -3325,6 +3499,158 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
             </div>
           </div>
         </div>
+      )}
+
+      {/* SARI İKAZ KAYITLARI & GEÇMİŞ DETAYI MODALI */}
+      {isYellowNgHistoryModalOpen && (
+        <div className="fixed inset-0 z-[11000] flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[88vh] flex flex-col overflow-hidden animate-scale-up">
+            <div className="px-6 py-4 bg-gradient-to-r from-amber-600 via-amber-700 to-amber-900 text-white flex items-center justify-between shrink-0 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center text-white">
+                  <Flame className="w-5 h-5 text-amber-200" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black tracking-tight text-white flex items-center gap-2">
+                    <span>{selectedTail.fullLabel}</span>
+                    <span className="text-xs bg-amber-500/80 px-2 py-0.5 rounded font-mono font-bold">
+                      Motor S/N: {selectedTail.motorSn}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-amber-100 font-mono">
+                    Kayıtlı Ng Sarı İkaz Satırları (Mevcut Adet: {(yellowNgRecords.filter(r => r.tailCode === selectedTail.code)).length} Adet)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsYellowNgHistoryModalOpen(false)}
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 font-mono text-xs">
+              {(() => {
+                const tailRecords = yellowNgRecords.filter(r => r.tailCode === selectedTail.code);
+                if (tailRecords.length === 0) {
+                  return (
+                    <div className="text-center py-12 text-slate-500">
+                      <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto mb-2 opacity-60" />
+                      <p className="font-bold text-sm text-slate-700">Bu hava aracı ({selectedTail.code}) için henüz kayıtlı sarı ikaz satırı bulunmuyor.</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                        Uçuş kaydı yüklendiğinde "Sarı İkazları Saydır" butonuna basarak dosyadaki sarı ikaz adedi kadar satır açabilir ve adedi otomatik işletebilirsiniz.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-xs text-slate-600 bg-amber-50/70 p-2.5 rounded-xl border border-amber-200">
+                      <span className="font-bold text-amber-950">
+                        {selectedTail.code} Kuyruk Nolu Uçağın Kayıtlı Satır Adedi: <strong>{tailRecords.length} Adet</strong>
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Sistemde kaç satır açıldıysa o kadar adet sayılır.
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto border border-slate-200 rounded-2xl shadow-2xs">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-amber-100/70 text-slate-900 border-b border-amber-200 text-[11px] font-black uppercase">
+                            <th className="px-3 py-2 text-center w-12">#</th>
+                            <th className="px-3 py-2">Kuyruk No</th>
+                            <th className="px-3 py-2">Motor S/N</th>
+                            <th className="px-3 py-2">Olay Numarası</th>
+                            <th className="px-3 py-2">Zaman Aralığı (TIME)</th>
+                            <th className="px-3 py-2 text-center">Olay Tepesi</th>
+                            <th className="px-3 py-2">Satır Aralığı</th>
+                            <th className="px-3 py-2 text-center">Süre</th>
+                            <th className="px-3 py-2">Sisteme Kayıt Tarihi</th>
+                            <th className="px-3 py-2 text-center">İşlem</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-[11px]">
+                          {tailRecords.map((r, idx) => (
+                            <tr key={r.id || idx} className="hover:bg-amber-50/50 transition-colors">
+                              <td className="px-3 py-2 text-center font-bold text-slate-400">
+                                {tailRecords.length - idx}
+                              </td>
+                              <td className="px-3 py-2 font-black text-slate-800">
+                                {r.tailCode || selectedTail.code}
+                              </td>
+                              <td className="px-3 py-2 text-emerald-800 font-bold">
+                                {r.motorSn || selectedTail.motorSn}
+                              </td>
+                              <td className="px-3 py-2 font-bold text-slate-700">
+                                {r.olayNo || `#${idx + 1}`}
+                              </td>
+                              <td className="px-3 py-2 text-amber-900 font-bold">
+                                {r.zamanAraligi || '-'}
+                              </td>
+                              <td className="px-3 py-2 text-center font-black text-amber-600 bg-amber-50/50 rounded">
+                                {r.olayTepesi || '-'}
+                              </td>
+                              <td className="px-3 py-2 text-slate-600">
+                                {r.satirAraligi || '-'}
+                              </td>
+                              <td className="px-3 py-2 text-center font-bold text-slate-700">
+                                {r.sure || '-'}
+                              </td>
+                              <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
+                                {r.sistemKayitTarihi || new Date(r.createdAt || Date.now()).toLocaleString('tr-TR')}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteYellowNgRecord(r.id)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer transition-colors"
+                                  title="Bu sarı ikaz satırını sil (adet otomatik 1 düşer)"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+              <span className="text-xs text-slate-500 font-mono">
+                Her bir sarı ikaz satırı sisteme kalıcı olarak işlenir ve kuyruk no bazında adedi otomatik sayılır.
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsYellowNgHistoryModalOpen(false)}
+                className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs cursor-pointer transition-all active:scale-95"
+              >
+                Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AT-802F Motor Uçuş Grafiği & Oynatıcı Modalı */}
+      {isFlightChartModalOpen && (
+        <FlightEngineChartModal
+          isOpen={isFlightChartModalOpen}
+          onClose={() => setIsFlightChartModalOpen(false)}
+          rows={analysisResult?.rows || []}
+          headers={analysisResult?.headers || []}
+          episodes={analysisResult?.episodes || []}
+          initialParamKey={chartInitialParamKey}
+          tailLabel={selectedTail.fullLabel}
+          motorSn={analysisResult?.motorSn || selectedTail.motorSn || 'PT6A-67AG'}
+        />
       )}
     </div>
   );

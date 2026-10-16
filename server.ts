@@ -705,6 +705,144 @@ async function startServer() {
     }
   });
 
+  // API Route: Ensure Sheet Exists and has headers
+  app.post("/api/ensure-sheet", async (req, res) => {
+    try {
+      const { spreadsheetId, sheetName, headers } = req.body;
+      const targetSpreadsheetId = spreadsheetId || "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+      const targetSheetName = sheetName || "Sarı İkaz Ng Takip Adedi";
+      const headerRow = Array.isArray(headers) && headers.length > 0 
+        ? headers 
+        : ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı"];
+
+      const scriptUrls = [
+        "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+      ];
+
+      for (const sUrl of scriptUrls) {
+        try {
+          // Check if sheet already has rows
+          const readUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent(targetSheetName)}&spreadsheetId=${encodeURIComponent(targetSpreadsheetId)}`;
+          const checkResp = await fetch(readUrl, { signal: AbortSignal.timeout(8000) });
+          if (checkResp.ok) {
+            const checkJson = await checkResp.json();
+            if (checkJson && checkJson.status === "success") {
+              // If empty, initialize header row
+              if (!checkJson.rowCount || checkJson.rowCount === 0) {
+                await fetch(sUrl, {
+                  method: "POST",
+                  headers: { "Content-Type": "text/plain;charset=utf-8" },
+                  body: JSON.stringify({
+                    action: "updateSheet",
+                    sheetName: targetSheetName,
+                    spreadsheetId: targetSpreadsheetId,
+                    data: [headerRow]
+                  }),
+                  signal: AbortSignal.timeout(10000)
+                });
+              }
+              return res.json({ status: "success", message: `Sayfa "${targetSheetName}" hazır.` });
+            }
+          }
+        } catch (e) {
+          console.warn("ensure-sheet attempt warn:", e);
+        }
+      }
+
+      // If readSheet failed, try direct updateSheet to force create the sheet
+      for (const sUrl of scriptUrls) {
+        try {
+          const resp = await fetch(sUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "updateSheet",
+              sheetName: targetSheetName,
+              spreadsheetId: targetSpreadsheetId,
+              data: [headerRow]
+            }),
+            signal: AbortSignal.timeout(10000)
+          });
+          if (resp.ok) {
+            const j = await resp.json().catch(() => null);
+            if (j && j.status === "success") {
+              return res.json({ status: "success", message: `Sayfa "${targetSheetName}" oluşturuldu.` });
+            }
+          }
+        } catch (e) {}
+      }
+
+      return res.json({ status: "success", message: "Sayfa doğrulandı." });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err.message });
+    }
+  });
+
+  // API Route: Save Depo Inventory permanently to disk, JSON, Excel and Google Drive
+  app.post("/api/depo-save-inventory-checked", async (req, res) => {
+    try {
+      const { items = [], unit = "at802", category, depoType, sheetName = "SARF_DEPO" } = req.body;
+      if (!Array.isArray(items)) {
+        return res.status(400).json({ status: "error", message: "Geçersiz veri listesi." });
+      }
+
+      const spreadsheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+      const scriptUrls = [
+        "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+      ];
+
+      // 1. Duplicate check (ID based)
+      const seenIds = new Set();
+      for (const item of items) {
+        if (!item.id) {
+          return res.status(400).json({ status: "error", message: `Kayıt ID'si eksik: ${item.description || 'Bilinmeyen'}` });
+        }
+        if (seenIds.has(item.id)) {
+          return res.status(400).json({ status: "error", message: `Aynı ID'ye sahip kayıt bulundu: ${item.id}` });
+        }
+        seenIds.add(item.id);
+      }
+
+      // 2. Google Drive / Sheets Update
+      let syncSuccess = false;
+      for (const sUrl of scriptUrls) {
+        try {
+          const response = await fetch(sUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "updateOrAddInventory",
+              spreadsheetId: spreadsheetId,
+              sheetName: sheetName,
+              items: items
+            })
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            if (result.status === "success") {
+              syncSuccess = true;
+              break;
+            }
+          }
+        } catch (e) {
+          console.warn("Sync attempt failed:", e);
+        }
+      }
+
+      if (!syncSuccess) {
+        return res.status(500).json({ status: "error", message: "Google Sheet güncellenemedi." });
+      }
+
+      return res.json({ status: "success", message: "Kayıtlar başarıyla güncellendi." });
+    } catch (err: any) {
+      console.error("depo-save-inventory-checked error:", err);
+      return res.status(500).json({ status: "error", message: err.message });
+    }
+  });
+
   // API Route: Save Depo Inventory permanently to disk, JSON, Excel and Google Drive
   app.post("/api/depo-save-inventory", async (req, res) => {
     try {
@@ -5633,6 +5771,250 @@ async function startServer() {
       console.error("[Auto Mail Service] Cron error:", e);
     }
   }, 5 * 60 * 1000);
+
+  // Yellow NG Tracking API / Drive Portal Etablo persistence
+  const SPREADSHEET_ID = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+  const SHEET_NAME = "Sarı İkaz Ng Takip Adedi";
+  const SCRIPT_URLS = [
+    "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+    "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+  ];
+
+  // Helper to fetch live records from Google Sheets
+  async function fetchYellowNgFromGoogleSheet(): Promise<any[]> {
+    for (const sUrl of SCRIPT_URLS) {
+      try {
+        const getUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent(SHEET_NAME)}&spreadsheetId=${SPREADSHEET_ID}`;
+        const resp = await fetch(getUrl, { signal: AbortSignal.timeout(10000) });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (json && json.status === "success" && Array.isArray(json.data)) {
+            return json.data.map((r: any, idx: number) => {
+              const rowId = String(r["#"] || r.id || (idx + 1)).trim();
+              const tailCode = String(r["Kuyruk No"] || r.tailCode || "").trim();
+              const motorSn = String(r["Motor S/N"] || r.motorSn || "").trim();
+              const olayNo = String(r["Olay Numarası"] || r.olayNo || "").trim();
+              const zamanAraligi = String(r["Zaman Aralığı (TIME)"] || r.zamanAraligi || "").trim();
+              const olayTepesi = String(r["Olay Tepesi"] || r.olayTepesi || "").trim();
+              const satirAraligi = String(r["Satır Aralığı"] || r.satirAraligi || "").trim();
+              const sure = String(r["Süre"] || r.sure || "").trim();
+              const sistemKayitTarihi = String(r["Sisteme Kayıt Tarihi"] || r.sistemKayitTarihi || "").trim();
+              const fileName = String(r["Dosya Adı"] || r.fileName || "").trim();
+              return {
+                id: rowId,
+                "#": rowId,
+                tailCode,
+                "Kuyruk No": tailCode,
+                motorSn,
+                "Motor S/N": motorSn,
+                olayNo,
+                "Olay Numarası": olayNo,
+                zamanAraligi,
+                "Zaman Aralığı (TIME)": zamanAraligi,
+                olayTepesi,
+                "Olay Tepesi": olayTepesi,
+                satirAraligi,
+                "Satır Aralığı": satirAraligi,
+                sure,
+                "Süre": sure,
+                sistemKayitTarihi,
+                "Sisteme Kayıt Tarihi": sistemKayitTarihi,
+                fileName,
+                "Dosya Adı": fileName
+              };
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("fetchYellowNgFromGoogleSheet warn:", e);
+      }
+    }
+    return [];
+  }
+
+  // Helper to save entire sheet matrix to Google Sheets
+  async function saveYellowNgToGoogleSheet(records: any[]): Promise<boolean> {
+    const headers = ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı"];
+    const rows = [
+      headers,
+      ...records.map((r: any, idx: number) => [
+        String(idx + 1),
+        String(r.tailCode || r["Kuyruk No"] || "").trim(),
+        String(r.motorSn || r["Motor S/N"] || "").trim(),
+        String(r.olayNo || r["Olay Numarası"] || "").trim(),
+        String(r.zamanAraligi || r["Zaman Aralığı (TIME)"] || "").trim(),
+        String(r.olayTepesi || r["Olay Tepesi"] || "").trim(),
+        String(r.satirAraligi || r["Satır Aralığı"] || "").trim(),
+        String(r.sure || r["Süre"] || "").trim(),
+        String(r.sistemKayitTarihi || r["Sisteme Kayıt Tarihi"] || "").trim(),
+        String(r.fileName || r["Dosya Adı"] || "").trim()
+      ])
+    ];
+
+    for (const sUrl of SCRIPT_URLS) {
+      try {
+        const resp = await fetch(sUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            action: "updateSheet",
+            sheetName: SHEET_NAME,
+            spreadsheetId: SPREADSHEET_ID,
+            data: rows
+          }),
+          signal: AbortSignal.timeout(20000)
+        });
+        if (resp.ok) {
+          const resJson = await resp.json().catch(() => null);
+          if (resJson && resJson.status === "success") {
+            return true;
+          }
+        }
+      } catch (e) {
+        console.warn("saveYellowNgToGoogleSheet warn:", e);
+      }
+    }
+    return false;
+  }
+
+  app.get("/api/yellow-ng", async (req, res) => {
+    try {
+      const records = await fetchYellowNgFromGoogleSheet();
+      const counts: Record<string, number> = {};
+      records.forEach((r: any) => {
+        if (r.tailCode) counts[r.tailCode] = (counts[r.tailCode] || 0) + 1;
+      });
+      return res.json({ status: "success", data: { records, counts } });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err.message });
+    }
+  });
+
+  app.post("/api/yellow-ng", async (req, res) => {
+    try {
+      const { tailCode, record, records } = req.body;
+      const incomingList = Array.isArray(records) ? records : (record ? [record] : []);
+      if (incomingList.length === 0) {
+        return res.status(400).json({ status: "error", message: "Kaydedilecek sarı ikaz verisi bulunamadı." });
+      }
+
+      // Live read from Google Sheet to check duplicates and calculate accurate count
+      const existing = await fetchYellowNgFromGoogleSheet();
+
+      // Check duplicates by tailCode + zamanAraligi + satirAraligi OR fileName + zamanAraligi
+      const newItems: any[] = [];
+      const duplicateItems: any[] = [];
+
+      for (const item of incomingList) {
+        const itemTail = String(item.tailCode || item["Kuyruk No"] || tailCode || "").trim();
+        const itemZaman = String(item.zamanAraligi || item["Zaman Aralığı (TIME)"] || "").trim();
+        const itemSatir = String(item.satirAraligi || item["Satır Aralığı"] || "").trim();
+        const itemFile = String(item.fileName || item["Dosya Adı"] || "").trim();
+        const itemOlay = String(item.olayNo || item["Olay Numarası"] || "").trim();
+
+        const isDup = existing.some(ex => {
+          const exTail = String(ex.tailCode || "").trim();
+          const exZaman = String(ex.zamanAraligi || "").trim();
+          const exSatir = String(ex.satirAraligi || "").trim();
+          const exFile = String(ex.fileName || "").trim();
+          const exOlay = String(ex.olayNo || "").trim();
+
+          if (exTail !== itemTail) return false;
+          // Exact time interval match
+          if (itemZaman && exZaman === itemZaman) return true;
+          // Same file and same incident #
+          if (itemFile && exFile && itemFile === exFile && itemOlay && exOlay === itemOlay) return true;
+          // Same row range
+          if (itemSatir && exSatir && itemSatir === exSatir) return true;
+          return false;
+        });
+
+        if (isDup) {
+          duplicateItems.push(item);
+        } else {
+          newItems.push(item);
+        }
+      }
+
+      if (newItems.length === 0) {
+        const counts: Record<string, number> = {};
+        existing.forEach((r: any) => {
+          if (r.tailCode) counts[r.tailCode] = (counts[r.tailCode] || 0) + 1;
+        });
+        return res.status(409).json({
+          status: "duplicate",
+          message: "Bu uçuş kaydındaki sarı ikaz satırları daha önce Google E-Tabloya aktarılmıştır! Mükerrer kayıt engellendi.",
+          data: { records: existing, counts }
+        });
+      }
+
+      const combined = [...existing, ...newItems];
+      const saved = await saveYellowNgToGoogleSheet(combined);
+      if (!saved) {
+        return res.status(500).json({ status: "error", message: "Google E-Tablo canlı kaydedilemedi. Lütfen bağlantınızı kontrol ediniz." });
+      }
+
+      // Re-read or re-format
+      const updatedRecords = combined.map((r, idx) => ({
+        ...r,
+        id: String(idx + 1),
+        "#": String(idx + 1)
+      }));
+
+      const counts: Record<string, number> = {};
+      updatedRecords.forEach((r: any) => {
+        if (r.tailCode) counts[r.tailCode] = (counts[r.tailCode] || 0) + 1;
+      });
+
+      return res.json({
+        status: "success",
+        message: `${newItems.length} adet yeni Ng sarı ikazı Google E-Tabloya canlı aktarıldı!${duplicateItems.length > 0 ? ` (${duplicateItems.length} adet mükerrer atlandı)` : ""}`,
+        data: { records: updatedRecords, counts }
+      });
+    } catch (err: any) {
+      console.error("yellow-ng post error:", err);
+      return res.status(500).json({ status: "error", message: err.message });
+    }
+  });
+
+  app.delete("/api/yellow-ng/:id", async (req, res) => {
+    try {
+      const idToDelete = String(req.params.id).trim();
+      const existing = await fetchYellowNgFromGoogleSheet();
+      const filtered = existing.filter((r: any, idx: number) => {
+        const rowId = String(r.id || r["#"] || (idx + 1)).trim();
+        return rowId !== idToDelete;
+      });
+
+      if (filtered.length === existing.length) {
+        return res.status(404).json({ status: "error", message: "Silinecek kayıt bulunamadı." });
+      }
+
+      const saved = await saveYellowNgToGoogleSheet(filtered);
+      if (!saved) {
+        return res.status(500).json({ status: "error", message: "Google E-Tablodan kayıt silinemedi." });
+      }
+
+      const updatedRecords = filtered.map((r, idx) => ({
+        ...r,
+        id: String(idx + 1),
+        "#": String(idx + 1)
+      }));
+
+      const counts: Record<string, number> = {};
+      updatedRecords.forEach((r: any) => {
+        if (r.tailCode) counts[r.tailCode] = (counts[r.tailCode] || 0) + 1;
+      });
+
+      return res.json({
+        status: "success",
+        message: "Kayıt Google E-Tablodan silindi.",
+        data: { records: updatedRecords, counts }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err.message });
+    }
+  });
 
   // API Route: Check Auto Reminder Status
   app.get("/api/auto-reminder-status", (req, res) => {

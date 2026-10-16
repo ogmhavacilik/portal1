@@ -13839,14 +13839,24 @@ export default function App() {
               }).catch(err => console.warn("Depo sync background error:", err));
             } catch (e) {}
           }}
-          onUpdateInventory={(updated) => {
+          onUpdateInventory={async (updated) => {
             try {
               localStorage.setItem('ogm_depo_inventory_v5', JSON.stringify(updated));
-              // Also sync to backend/drive
-              fetch('/api/depo-save-inventory', {
+              const unit = barkodOkuyucuInitialUnit || 'at802';
+              const sheetName = unit.toUpperCase() + '_SARF_DEPO';
+              
+              // 1. Ensure sheet exists
+              await fetch('/api/ensure-sheet', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ spreadsheetId: '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0', sheetName: sheetName })
+              });
+
+              // 2. Also sync to backend/drive with duplicate checking
+              fetch('/api/depo-save-inventory-checked', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items: updated, unit: barkodOkuyucuInitialUnit || 'at802' })
+                body: JSON.stringify({ items: updated, unit: unit, sheetName: sheetName })
               }).catch(err => console.warn("Inventory sync background error:", err));
             } catch (e) {}
           }}
