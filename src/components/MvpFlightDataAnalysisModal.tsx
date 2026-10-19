@@ -205,7 +205,7 @@ export const YELLOW_FOCUS_COLUMNS: YellowFocusColumnConfig[] = [
     colNumber: 3,
     expectedIndex: 2,
     rulesText: 'Yeşil: < %104 | Sarı: %104-105,5 (0-20 sn) | Kırmızı: > %105,5 veya %104-105,5 (>20 sn)',
-    matchPattern: /^ng/i
+    matchPattern: /^ng\b(?!.*\b(lo|hi|warn|status|flg)\b)/i
   },
   {
     key: 'itt',
@@ -214,7 +214,7 @@ export const YELLOW_FOCUS_COLUMNS: YellowFocusColumnConfig[] = [
     colNumber: 16,
     expectedIndex: 15,
     rulesText: 'Yeşil: < 870°C | Sarı: 870-910°C (20 saniye), 910-1000°C (5 saniye) | Kırmızı: > 1000°C',
-    matchPattern: /^itt/i
+    matchPattern: /^itt\b(?!.*\b(lo|hi|warn|status|flg)\b)/i
   },
   {
     key: 'np',
@@ -223,7 +223,7 @@ export const YELLOW_FOCUS_COLUMNS: YellowFocusColumnConfig[] = [
     colNumber: 4,
     expectedIndex: 3,
     rulesText: 'Yeşil: < 1700 RPM | Sarı: 1700-1870 RPM | Kırmızı: > 1870 RPM',
-    matchPattern: /^np/i
+    matchPattern: /^np\b(?!.*\b(lo|hi|warn|status|flg)\b)/i
   },
   {
     key: 'torq',
@@ -232,7 +232,7 @@ export const YELLOW_FOCUS_COLUMNS: YellowFocusColumnConfig[] = [
     colNumber: 10,
     expectedIndex: 9,
     rulesText: 'Yeşil: < 5252 LB/FT | Sarı: 5252-6092 LB/FT (20 saniye) | Kırmızı: > 6092 LB/FT',
-    matchPattern: /torq|trq/i
+    matchPattern: /^(tq|torq|torque)\b(?!.*\b(lo|hi|warn|status|flg)\b)/i
   },
   {
     key: 'fuel_p',
@@ -241,7 +241,7 @@ export const YELLOW_FOCUS_COLUMNS: YellowFocusColumnConfig[] = [
     colNumber: 11,
     expectedIndex: 10,
     rulesText: 'Yeşil: 10-25 PSI | Kırmızı: < 10 PSI veya > 25 PSI',
-    matchPattern: /fuel\s*p/i
+    matchPattern: /^fuel\s*p\b(?!.*\b(lo|hi|warn|status|flg)\b)/i
   },
   {
     key: 'oil_p',
@@ -250,7 +250,7 @@ export const YELLOW_FOCUS_COLUMNS: YellowFocusColumnConfig[] = [
     colNumber: 12,
     expectedIndex: 11,
     rulesText: 'Yeşil: 90-135 PSI | Sarı: 60-90 PSI | Kırmızı: < 60 PSI veya > 135 PSI',
-    matchPattern: /oil\s*p/i
+    matchPattern: /^oil\s*p\b(?!.*\b(lo|hi|warn|status|flg)\b)/i
   },
   {
     key: 'oil_t',
@@ -259,14 +259,12 @@ export const YELLOW_FOCUS_COLUMNS: YellowFocusColumnConfig[] = [
     colNumber: 17,
     expectedIndex: 16,
     rulesText: 'Yeşil: -40-105°C | Sarı: 105-110°C (10 dakika) | Kırmızı: > 110°C',
-    matchPattern: /oil\s*t/i
+    matchPattern: /^oil\s*t\b(?!.*\b(lo|hi|warn|status|flg)\b)/i
   }
 ];
 
 export const isYellowFocusHeader = (headerName: string, colIndex: number): boolean => {
   const clean = headerName.trim();
-  const byIndex = YELLOW_FOCUS_COLUMNS.some(c => c.expectedIndex === colIndex);
-  if (byIndex) return true;
   return YELLOW_FOCUS_COLUMNS.some(c => c.matchPattern.test(clean));
 };
 
@@ -2964,13 +2962,13 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               {selectedParamKey && !selectedEpisodeId && (
                 <div className="flex-1 flex items-center justify-center p-8 text-center bg-white border-t border-slate-200 animate-fade-in">
                   <div className="max-w-md mx-auto">
-                    <div className="w-10 h-10 mx-auto rounded-2xl bg-red-100 text-red-800 flex items-center justify-center font-black text-sm mb-2 shadow-inner">
+                    <div className="w-10 h-10 mx-auto rounded-2xl bg-red-100 text-red-800 flex items-center justify-center font-black text-sm mb-2 shadow-inner" style={{display: 'none'}}>
                       3
                     </div>
-                    <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-1">
+                    <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider mb-1" style={{display: 'none'}}>
                       3. Kısım: Orijinal Excel Satır Kayıtları
                     </h4>
-                    <p className="text-xs text-slate-500 mb-3">
+                    <p className="text-xs text-slate-500 mb-3" style={{display: 'none'}}>
                       2. Kısımdaki limit aşım aralıklarından birine basarak o aralığa denk gelen orijinal Excel satır kayıtlarını ve satır numaralarını inceleyiniz.
                     </p>
                     <button
@@ -3069,6 +3067,33 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                           html += `.row-yellow { background-color: #fef9c3; color: #713f12; font-weight: bold; }`;
                           html += `.row-normal { background-color: #ffffff; color: #0f172a; }`;
                           html += `</style></head><body>`;
+
+                          // Uçak & Kayıt Tanıtım Bilgileri (Ham CSV ilk 15 Metadata Satırı)
+                          html += `<table style="border-collapse: collapse; border: 2px solid #0f172a; margin-bottom: 20px; width: 550px;">`;
+                          html += `<tr><td colspan="2" style="background-color: #1e293b; color: #ffffff; font-weight: bold; text-align: center; padding: 8px; border: 1px solid #0f172a; font-size: 11pt;">Uçak & Kayıt Tanıtım Bilgileri (Metadata Satırları)</td></tr>`;
+                          
+                          const rawMetaLines = (analysisResult.metadataLines || []).slice(0, 15);
+                          if (rawMetaLines.length > 0) {
+                            rawMetaLines.forEach((mLine, idx) => {
+                              const cleanedLine = String(mLine).replace(/[;]+$/, '').trim();
+                              let label = `Metadata Satır ${idx + 1}`;
+                              let val = cleanedLine;
+                              if (cleanedLine.includes(':')) {
+                                const parts = cleanedLine.split(':');
+                                label = parts[0].trim();
+                                val = parts.slice(1).join(':').replace(/[;]+$/, '').trim();
+                              } else if (idx === 0) {
+                                label = 'Description';
+                              } else if (idx === 1) {
+                                label = 'Model';
+                              }
+                              html += `<tr><td style="font-weight: bold; background-color: #f8fafc; padding: 6px 10px; border: 1px solid #cbd5e1; width: 220px;">${String(label).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td><td style="padding: 6px 10px; border: 1px solid #cbd5e1; mso-number-format:'\\@';">${String(val).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td></tr>`;
+                            });
+                          } else {
+                            html += `<tr><td colspan="2" style="padding: 6px 10px; border: 1px solid #cbd5e1; text-align: center;">Metadata satırı bulunamadı</td></tr>`;
+                          }
+                          html += `</table><br/>`;
+
                           html += `<table><thead><tr>`;
                           html += `<th>SATIR NO</th><th>DURUM</th>`;
                           headers.forEach(h => {
@@ -3117,6 +3142,8 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                         <Download className="w-3.5 h-3.5 text-white" />
                         <span>Filtrelenmiş Excel İndir (.xls)</span>
                       </button>
+
+
 
                       <button
                         type="button"

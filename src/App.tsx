@@ -11297,16 +11297,10 @@ export default function App() {
                                       <FileSpreadsheet className="w-10 h-10 text-slate-500" />
                                     </div>
                                     <div className="text-center max-w-lg">
-                                      <span className="text-slate-800 font-black text-base uppercase tracking-wider block mb-1">
-                                        {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter 
-                                          ? "🔍 ARAMA KRİTERLERİNE UYGUN KAYIT BULUNAMADI" 
-                                          : "VERİLER HENÜZ GOOGLE DRIVE'DAN ÇEKİLMEDİ (LİSTE BOŞ)"}
-                                      </span>
-                                      <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                                        {techizatSearchQuery || techizatFirmaFilter || techizatDurumFilter
-                                          ? "Filtreleri temizleyerek tüm listeyi görebilirsiniz."
-                                          : "Önbellek ve yerel hafıza kullanımı tamamen kapatılmıştır. Doğrudan Google Drive üzerindeki güncel Excel dosyasından canlı verileri çekmek için lütfen aşağıdaki butona basınız."}
-                                      </p>
+                                      {/* Removed warning messages as requested */}
+                                      <div className="mb-4">
+                                        <RefreshCw className="w-12 h-12 text-slate-300 mx-auto" />
+                                      </div>
                                     </div>
                                     {!techizatSearchQuery && !techizatFirmaFilter && !techizatDurumFilter && (
                                       <button
