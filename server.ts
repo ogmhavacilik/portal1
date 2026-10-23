@@ -2072,6 +2072,177 @@ async function startServer() {
   const SPARE_AIR_FILE = path.resolve(process.cwd(), "data/spare_air_stok.json");
   const HELMET_KIT_FILE = path.resolve(process.cwd(), "data/helmet_kit_stok.json");
 
+  const PERSONNEL_FILE = path.resolve(process.cwd(), "data/personnel_list.json");
+  const PERSONNEL_EXCEL_FILE = path.resolve(process.cwd(), "data/personnel_list.xlsx");
+
+  const SEED_AT802_PERSONNEL = [
+    { id: "p_1", sNo: 1, adSoyad: "OKAN AKÇA", unvan: "Teknisyen" },
+    { id: "p_2", sNo: 2, adSoyad: "KEMAL CAN", unvan: "Teknisyen" },
+    { id: "p_3", sNo: 3, adSoyad: "DOĞAN ÖZTÜRK", unvan: "Teknisyen" },
+    { id: "p_4", sNo: 4, adSoyad: "SERDAR TOY", unvan: "Teknisyen" },
+    { id: "p_5", sNo: 5, adSoyad: "TAŞKIN ÇALIŞIR", unvan: "Teknisyen" },
+    { id: "p_6", sNo: 6, adSoyad: "FATİH YAŞBAY", unvan: "Teknisyen" },
+    { id: "p_7", sNo: 7, adSoyad: "ÖZGÜR UYAR", unvan: "Teknisyen" },
+    { id: "p_8", sNo: 8, adSoyad: "UĞUR GÜRCAN", unvan: "Teknisyen" },
+    { id: "p_9", sNo: 9, adSoyad: "URAL UÇURUM", unvan: "Teknisyen" },
+    { id: "p_10", sNo: 10, adSoyad: "YUNUS EROL", unvan: "Teknisyen" },
+    { id: "p_11", sNo: 11, adSoyad: "SELÇUK İBİŞ", unvan: "Teknisyen" },
+    { id: "p_12", sNo: 12, adSoyad: "ALİ TOPALAN", unvan: "Teknisyen" },
+    { id: "p_13", sNo: 13, adSoyad: "FATİH PARLAK", unvan: "Teknisyen" },
+    { id: "p_14", sNo: 14, adSoyad: "TALAT TÖNGÜŞ", unvan: "Teknisyen" },
+    { id: "p_15", sNo: 15, adSoyad: "AHMET BİLGEN", unvan: "Teknisyen" },
+    { id: "p_16", sNo: 16, adSoyad: "BARIŞ BUĞRA KARACA", unvan: "Teknisyen" },
+    { id: "p_17", sNo: 17, adSoyad: "BARIŞ ÇELİKER", unvan: "Teknisyen" },
+    { id: "p_18", sNo: 18, adSoyad: "FERDİ GÖL", unvan: "Teknisyen" },
+    { id: "p_19", sNo: 19, adSoyad: "KEMAL ÇAKMAK", unvan: "Teknisyen" },
+    { id: "p_20", sNo: 20, adSoyad: "BURHAN GÜLER", unvan: "Pilot" },
+    { id: "p_21", sNo: 21, adSoyad: "ALPER GİDER", unvan: "Pilot" },
+    { id: "p_22", sNo: 22, adSoyad: "OSMAN AKTAŞ", unvan: "Pilot" },
+    { id: "p_23", sNo: 23, adSoyad: "KAĞAN BASKAK", unvan: "Pilot" },
+    { id: "p_24", sNo: 24, adSoyad: "ATAKAN TANSÜYER", unvan: "Pilot" },
+    { id: "p_25", sNo: 25, adSoyad: "MUZAFFER BARIŞ COŞAR", unvan: "Pilot" },
+    { id: "p_26", sNo: 26, adSoyad: "ŞENER TURAN", unvan: "Pilot" },
+    { id: "p_27", sNo: 27, adSoyad: "SERDAR KADEMLİOĞLU", unvan: "Pilot" },
+    { id: "p_28", sNo: 28, adSoyad: "AYDINER ÇILDIR", unvan: "Pilot" },
+    { id: "p_29", sNo: 29, adSoyad: "MEHMET AKİF BOZKURT", unvan: "Pilot" },
+    { id: "p_30", sNo: 30, adSoyad: "OSMAN UZUNER", unvan: "Pilot" },
+    { id: "p_31", sNo: 31, adSoyad: "RECEP BEKEN", unvan: "Pilot" },
+    { id: "p_32", sNo: 32, adSoyad: "OĞUZHAN ŞENSÖZ", unvan: "Pilot" }
+  ];
+
+  function readPersonnelFromExcel(): any[] {
+    try {
+      const jsonItems = readJsonFile(PERSONNEL_FILE);
+      if (Array.isArray(jsonItems) && jsonItems.length > 0) {
+        return jsonItems;
+      }
+      if (fs.existsSync(PERSONNEL_EXCEL_FILE)) {
+        const workbook = XLSX.readFile(PERSONNEL_EXCEL_FILE);
+        const sheetName = workbook.SheetNames.includes("Personel Listesi")
+          ? "Personel Listesi"
+          : (workbook.SheetNames.includes("AT-802 PERSONEL VERİSİ") 
+            ? "AT-802 PERSONEL VERİSİ" 
+            : (workbook.SheetNames.includes("PERSONEL LİSTESİ") ? "PERSONEL LİSTESİ" : workbook.SheetNames[0]));
+        const sheet = workbook.Sheets[sheetName];
+        if (sheet) {
+          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+          if (rows && rows.length > 0) {
+            const items = rows.map((r, idx) => {
+              const rowStr = JSON.stringify(r).toUpperCase();
+              if (rowStr.includes("KASK TAKIMI") || rowStr.includes("KOLTUK SAYISI") || rowStr.includes("DOUBLE HAVA") || rowStr.includes("SINGLE HAVA")) {
+                return null;
+              }
+              const keys = Object.keys(r);
+              const adSoyadVal = (r["PERSONEL ADI SOYADI"] || r.adSoyad || r.Personel || r["AD SOYAD"] || (keys[1] ? r[keys[1]] : "") || "").toString().trim().toUpperCase();
+              const unvanVal = (r["ÜNVANI / GÖREVİ"] || r.unvan || r.Unvan || r["ÜNVA"] || (keys[2] ? r[keys[2]] : "Teknisyen") || "Teknisyen").toString().trim();
+              return {
+                id: r.id || r.ID || `p_${idx + 1}`,
+                adSoyad: adSoyadVal,
+                unvan: unvanVal
+              };
+            }).filter(p => p !== null && p.adSoyad && p.adSoyad.length > 0);
+            if (items.length > 0) {
+              writeJsonFile(PERSONNEL_FILE, items);
+              return items;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("readPersonnelFromExcel error:", err);
+    }
+
+    // Default clean seed fallback
+    writePersonnelToExcel(SEED_AT802_PERSONNEL);
+    return SEED_AT802_PERSONNEL;
+  }
+
+  async function fetchPersonnelLive(): Promise<any[]> {
+    const existing = readPersonnelFromExcel();
+    if (Array.isArray(existing) && existing.length > 0) {
+      return existing;
+    }
+
+    const sheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+    const candidates = [
+      "Personel Listesi",
+      "AT-802 PERSONEL VERİSİ",
+      "PERSONEL LİSTESİ",
+      "5-Personel_Bilgi"
+    ];
+
+    for (const sheetName of candidates) {
+      try {
+        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (resp.ok) {
+          const csvText = await resp.text();
+          if (!csvText.includes("<!DOCTYPE") && !csvText.includes("<html") && csvText.trim().length > 0) {
+            const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+            if (lines.length > 1) {
+              const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+              const remoteList: any[] = [];
+              for (let i = 1; i < lines.length; i++) {
+                const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
+                if (sheetName === "5-Personel_Bilgi") {
+                  if (cols.length >= 2 && cols[1]) {
+                    const name = cols[1].trim().toUpperCase();
+                    const unvan = cols.length >= 5 && cols[4] ? cols[4].trim() : "Teknisyen";
+                    if (name && !name.includes("ADI SOYADI") && !name.includes("SIRA")) {
+                      remoteList.push({ id: `p_${remoteList.length + 1}`, adSoyad: name, unvan });
+                    }
+                  }
+                } else {
+                  if (cols.length >= 2 && cols[1]) {
+                    const name = cols[1].trim().toUpperCase();
+                    const unvan = cols.length >= 3 && cols[2] ? cols[2].trim() : "Teknisyen";
+                    if (name && !name.includes("PERSONEL ADI") && !name.includes("SIRA NO")) {
+                      remoteList.push({ id: `p_${remoteList.length + 1}`, adSoyad: name, unvan });
+                    }
+                  }
+                }
+              }
+              if (remoteList.length > 0) {
+                writePersonnelToExcel(remoteList);
+                return remoteList;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // try next candidate
+      }
+    }
+
+    return [];
+  }
+
+  function writePersonnelToExcel(items: any[]): void {
+    try {
+      const dir = path.dirname(PERSONNEL_EXCEL_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      const rows = [
+        ["SIRA NO", "PERSONEL ADI SOYADI", "ÜNVANI / GÖREVİ"],
+        ...items.map((p, idx) => [
+          String(idx + 1),
+          typeof p === "string" ? p : (p.adSoyad || ""),
+          typeof p === "string" ? "Teknisyen" : (p.unvan || "Teknisyen")
+        ])
+      ];
+
+      const worksheet = XLSX.utils.aoa_to_sheet(rows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "AT-802 PERSONEL VERİSİ");
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Personel Listesi");
+      XLSX.writeFile(workbook, PERSONNEL_EXCEL_FILE);
+
+      writeJsonFile(PERSONNEL_FILE, items);
+    } catch (err) {
+      console.warn("writePersonnelToExcel error:", err);
+    }
+  }
+
   function readJsonFile(filePath: string, fallback: any[] = []): any[] {
     try {
       if (fs.existsSync(filePath)) {
@@ -2412,6 +2583,24 @@ async function startServer() {
 
       const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
 
+      // Durum ve Renk Analiz Kriteri
+      const getStockColorInfo = (assignedStr: string, noteStr: string) => {
+        const text = ((assignedStr || "") + " " + (noteStr || "")).toUpperCase();
+        if (text.includes("SİL") || text.includes("KAYIT SİLME") || text.includes("GAYRİFAAL")) {
+          return { durum: "KAYIT SİLME", color: "#ff0000" }; // Kırmızı
+        }
+        if (text.includes("BAKIM") || text.includes("DOLUM")) {
+          return { durum: "BAKIMA GİDECEK", color: "#00b0f0" }; // Mavi
+        }
+        if (text.includes("ONARIM") || text.includes("DEVREDİLDİ")) {
+          return { durum: "ONARIMDA", color: "#ffff00" }; // Sarı
+        }
+        if (!assignedStr || assignedStr === "-" || text.includes("DEPO") || text.includes("BOŞ")) {
+          return { durum: "DEPODA", color: "#ffffff" }; // Beyaz / Müsait
+        }
+        return { durum: "GÖREV BÖLGESİNDE", color: "#92d050" }; // Yeşil
+      };
+
       // 1. Can Yeleği
       if (resCY.status === "fulfilled" && resCY.value && !resCY.value.includes("<!DOCTYPE")) {
         const lines = resCY.value.split(/\r?\n/).filter(l => l.trim().length > 0);
@@ -2419,22 +2608,21 @@ async function startServer() {
           const remoteCY: any[] = [];
           for (let i = 1; i < lines.length; i++) {
             const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
-            if (cols.length >= 4 && cols[3]) {
+            if (cols.length >= 4 && cols[3] && cols[3] !== "SERİ NO") {
               const assigned = cols[6] || "";
-              const isDepot = !assigned || assigned === "-" || assigned.toUpperCase().includes("DEPO") || assigned.toUpperCase().includes("BOŞ");
-              const durum = isDepot ? "DEPODA" : ((assigned.toUpperCase().includes("SİL")) ? "KAYIT SİLME" : "GÖREV BÖLGESİNDE");
-              const color = isDepot ? "#ffffff" : ((durum === "KAYIT SİLME") ? "#ff0000" : "#92d050");
+              const notlar = cols[5] || "";
+              const info = getStockColorInfo(assigned, notlar);
               remoteCY.push({
                 sNo: Number(cols[0]) || i,
                 malzemeAdi: cols[1] || "LIFE WEST - CAN YELEĞİ",
                 parcaNo: cols[2] || "S-7200-511",
                 seriNo: cols[3] || "-",
                 disNo: cols[4] || "-",
-                notlar: cols[5] || "-",
-                aciklamalar: isDepot ? "DEPODA" : assigned,
-                tarih: cols[7] || (isDepot ? "-" : "DEVAM EDİYOR"),
-                durum,
-                color
+                notlar: notlar || "-",
+                aciklamalar: info.durum === "DEPODA" ? "DEPODA" : assigned,
+                tarih: cols[7] || (info.durum === "DEPODA" ? "-" : "DEVAM EDİYOR"),
+                durum: info.durum,
+                color: info.color
               });
             }
           }
@@ -2452,21 +2640,20 @@ async function startServer() {
           const remoteSA: any[] = [];
           for (let i = 1; i < lines.length; i++) {
             const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
-            if (cols.length >= 4 && cols[3]) {
+            if (cols.length >= 4 && cols[3] && cols[3] !== "SERİ NO") {
               const assigned = cols[5] || "";
-              const isDepot = !assigned || assigned === "-" || assigned.toUpperCase().includes("DEPO") || assigned.toUpperCase().includes("BOŞ");
-              const durum = isDepot ? "DEPODA" : ((assigned.toUpperCase().includes("SİL")) ? "KAYIT SİLME" : "GÖREV BÖLGESİNDE");
-              const color = isDepot ? "#ffffff" : ((durum === "KAYIT SİLME") ? "#ff0000" : "#92d050");
+              const notlar = cols[4] || "";
+              const info = getStockColorInfo(assigned, notlar);
               remoteSA.push({
                 sNo: Number(cols[0]) || i,
                 malzemeAdi: cols[1] || "SPARE AIR (HEED 3)",
                 parcaNo: cols[2] || "175-001-CE",
                 seriNo: cols[3] || "-",
-                notlar: cols[4] || "-",
-                aciklamalar: isDepot ? "DEPODA" : assigned,
-                tarih: cols[6] || (isDepot ? "-" : "DEVAM EDİYOR"),
-                durum,
-                color
+                notlar: notlar || "-",
+                aciklamalar: info.durum === "DEPODA" ? "DEPODA" : assigned,
+                tarih: cols[6] || (info.durum === "DEPODA" ? "-" : "DEVAM EDİYOR"),
+                durum: info.durum,
+                color: info.color
               });
             }
           }
@@ -2484,11 +2671,10 @@ async function startServer() {
           const remoteHK: any[] = [];
           for (let i = 1; i < lines.length; i++) {
             const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
-            if (cols.length >= 2) {
+            if (cols.length >= 2 && cols[1] !== "MALZEME ADI 1") {
               const assigned = cols[8] || "";
-              const isDepot = !assigned || assigned === "-" || assigned.toUpperCase().includes("DEPO") || assigned.toUpperCase().includes("BOŞ");
-              const durum = isDepot ? "DEPODA" : ((assigned.toUpperCase().includes("SİL")) ? "KAYIT SİLME" : "GÖREV BÖLGESİNDE");
-              const color = isDepot ? "#ffffff" : ((durum === "KAYIT SİLME") ? "#ff0000" : "#92d050");
+              const notlar = cols[7] || "";
+              const info = getStockColorInfo(assigned, notlar);
               const sn2 = cols[6] && cols[6] !== "-" ? cols[6] : `H-10-13X-${i}`;
               remoteHK.push({
                 sNo: Number(cols[0]) || i,
@@ -2498,11 +2684,11 @@ async function startServer() {
                 malzemeAdi2: cols[4] || "DAVID CLARK",
                 parcaNo2: cols[5] || "H-10-13X",
                 seriNo2: sn2,
-                notlar: cols[7] || "-",
-                aciklamalar: isDepot ? "DEPODA" : assigned,
-                tarih: cols[9] || (isDepot ? "-" : "DEVAM EDİYOR"),
-                durum,
-                color
+                notlar: notlar || "-",
+                aciklamalar: info.durum === "DEPODA" ? "DEPODA" : assigned,
+                tarih: cols[9] || (info.durum === "DEPODA" ? "-" : "DEVAM EDİYOR"),
+                durum: info.durum,
+                color: info.color
               });
             }
           }
@@ -2948,51 +3134,66 @@ async function startServer() {
   // GET /api/yasam-destek
   app.get("/api/yasam-destek", async (req, res) => {
     try {
-      let records = readYasamDestekData();
+      let records: any[] = [];
 
-      // Try reading directly from Google Sheets if online
+      // Try reading directly from Google Sheets
       try {
         const sheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
-        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("YAŞAM DESTEK AT-802")}`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(4000) });
-        if (resp.ok) {
-          const csvText = await resp.text();
-          if (!csvText.includes("<!DOCTYPE") && !csvText.includes("<html") && csvText.trim().length > 0) {
-            const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
-            if (lines.length > 1 && lines[0].includes("PERSONEL")) {
-              const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
-              const remoteList: any[] = [];
-              for (let i = 1; i < lines.length; i++) {
-                const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
-                if (cols.length >= 2 && cols[1]) {
-                  remoteList.push({
-                    id: `yd_row_${i}`,
-                    siraNo: i,
-                    personelAdi: cols[1] || "",
-                    gorevYeri: cols[2] || "",
-                    baslangicTarihi: cols[3] || "",
-                    bitisTarihi: cols[4] || "-",
-                    lifeVestSn: cols[5] || "-",
-                    spareAirSn: cols[6] || "-",
-                    helmetKitSn: cols[7] || "-",
-                    durum: cols[8] || "GÖREVDE",
-                    devredilenPersonel: cols[9] || "-",
-                    teslimAlanPersonel: cols[10] || "-",
-                    notlar: cols[11] || "",
-                    guncellenmeTarihi: cols[12] || ""
-                  });
-                }
+        const urls = [
+          `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=1114555329&_t=${Date.now()}`,
+          `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("GÖREV VE ZİMMETLER")}&_t=${Date.now()}`,
+          `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("YAŞAM DESTEK AT-802")}&_t=${Date.now()}`
+        ];
+
+        let csvText = "";
+        for (const url of urls) {
+          try {
+            const resp = await fetch(url, { signal: AbortSignal.timeout(5000), cache: 'no-store' });
+            if (resp.ok) {
+              const text = await resp.text();
+              if (text && !text.includes("<!DOCTYPE") && !text.includes("<html") && text.trim().length > 0) {
+                csvText = text;
+                break;
               }
-              if (remoteList.length > 0) {
-                records = remoteList;
-                writeYasamDestekData(records);
+            }
+          } catch {}
+        }
+
+        if (csvText) {
+          const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+          if (lines.length > 1) {
+            const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+            const remoteList: any[] = [];
+            for (let i = 1; i < lines.length; i++) {
+              const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
+              if (cols.length >= 2 && cols[1] && !cols[1].toUpperCase().includes("PERSONEL ADI") && !cols[1].toUpperCase().includes("SIRA NO")) {
+                remoteList.push({
+                  id: `yd_row_${i}`,
+                  siraNo: i,
+                  personelAdi: cols[1] || "",
+                  gorevYeri: cols[2] || "",
+                  baslangicTarihi: cols[3] || "",
+                  bitisTarihi: cols[4] || "-",
+                  lifeVestSn: cols[5] || "-",
+                  spareAirSn: cols[6] || "-",
+                  helmetKitSn: cols[7] || "-",
+                  durum: cols[8] || "GÖREVDE",
+                  devredilenPersonel: cols[9] || "-",
+                  teslimAlanPersonel: cols[10] || "-",
+                  notlar: cols[11] || "",
+                  guncellenmeTarihi: cols[12] || ""
+                });
               }
+            }
+            if (remoteList.length > 0) {
+              records = remoteList;
+              writeYasamDestekData(records);
             }
           }
         }
       } catch (sheetErr) {
         console.error("Google Sheet okuma hatası:", sheetErr);
-        // Fall back to local records
+        return res.status(500).json({ status: "error", message: "Canlı veri çekilemedi." });
       }
 
       return res.json({
@@ -3531,177 +3732,6 @@ async function startServer() {
     return res.redirect("/api/yasam-destek-index");
   });
 
-  const PERSONNEL_FILE = path.resolve(process.cwd(), "data/personnel_list.json");
-  const PERSONNEL_EXCEL_FILE = path.resolve(process.cwd(), "data/personnel_list.xlsx");
-
-  const SEED_AT802_PERSONNEL = [
-    { id: "p_1", sNo: 1, adSoyad: "OKAN AKÇA", unvan: "Teknisyen" },
-    { id: "p_2", sNo: 2, adSoyad: "KEMAL CAN", unvan: "Teknisyen" },
-    { id: "p_3", sNo: 3, adSoyad: "DOĞAN ÖZTÜRK", unvan: "Teknisyen" },
-    { id: "p_4", sNo: 4, adSoyad: "SERDAR TOY", unvan: "Teknisyen" },
-    { id: "p_5", sNo: 5, adSoyad: "TAŞKIN ÇALIŞIR", unvan: "Teknisyen" },
-    { id: "p_6", sNo: 6, adSoyad: "FATİH YAŞBAY", unvan: "Teknisyen" },
-    { id: "p_7", sNo: 7, adSoyad: "ÖZGÜR UYAR", unvan: "Teknisyen" },
-    { id: "p_8", sNo: 8, adSoyad: "UĞUR GÜRCAN", unvan: "Teknisyen" },
-    { id: "p_9", sNo: 9, adSoyad: "URAL UÇURUM", unvan: "Teknisyen" },
-    { id: "p_10", sNo: 10, adSoyad: "YUNUS EROL", unvan: "Teknisyen" },
-    { id: "p_11", sNo: 11, adSoyad: "SELÇUK İBİŞ", unvan: "Teknisyen" },
-    { id: "p_12", sNo: 12, adSoyad: "ALİ TOPALAN", unvan: "Teknisyen" },
-    { id: "p_13", sNo: 13, adSoyad: "FATİH PARLAK", unvan: "Teknisyen" },
-    { id: "p_14", sNo: 14, adSoyad: "TALAT TÖNGÜŞ", unvan: "Teknisyen" },
-    { id: "p_15", sNo: 15, adSoyad: "AHMET BİLGEN", unvan: "Teknisyen" },
-    { id: "p_16", sNo: 16, adSoyad: "BARIŞ BUĞRA KARACA", unvan: "Teknisyen" },
-    { id: "p_17", sNo: 17, adSoyad: "BARIŞ ÇELİKER", unvan: "Teknisyen" },
-    { id: "p_18", sNo: 18, adSoyad: "FERDİ GÖL", unvan: "Teknisyen" },
-    { id: "p_19", sNo: 19, adSoyad: "KEMAL ÇAKMAK", unvan: "Teknisyen" },
-    { id: "p_20", sNo: 20, adSoyad: "BURHAN GÜLER", unvan: "Pilot" },
-    { id: "p_21", sNo: 21, adSoyad: "ALPER GİDER", unvan: "Pilot" },
-    { id: "p_22", sNo: 22, adSoyad: "OSMAN AKTAŞ", unvan: "Pilot" },
-    { id: "p_23", sNo: 23, adSoyad: "KAĞAN BASKAK", unvan: "Pilot" },
-    { id: "p_24", sNo: 24, adSoyad: "ATAKAN TANSÜYER", unvan: "Pilot" },
-    { id: "p_25", sNo: 25, adSoyad: "MUZAFFER BARIŞ COŞAR", unvan: "Pilot" },
-    { id: "p_26", sNo: 26, adSoyad: "ŞENER TURAN", unvan: "Pilot" },
-    { id: "p_27", sNo: 27, adSoyad: "SERDAR KADEMLİOĞLU", unvan: "Pilot" },
-    { id: "p_28", sNo: 28, adSoyad: "AYDINER ÇILDIR", unvan: "Pilot" },
-    { id: "p_29", sNo: 29, adSoyad: "MEHMET AKİF BOZKURT", unvan: "Pilot" },
-    { id: "p_30", sNo: 30, adSoyad: "OSMAN UZUNER", unvan: "Pilot" },
-    { id: "p_31", sNo: 31, adSoyad: "RECEP BEKEN", unvan: "Pilot" },
-    { id: "p_32", sNo: 32, adSoyad: "OĞUZHAN ŞENSÖZ", unvan: "Pilot" }
-  ];
-
-  function readPersonnelFromExcel(): any[] {
-    try {
-      const jsonItems = readJsonFile(PERSONNEL_FILE);
-      if (Array.isArray(jsonItems) && jsonItems.length > 0) {
-        return jsonItems;
-      }
-      if (fs.existsSync(PERSONNEL_EXCEL_FILE)) {
-        const workbook = XLSX.readFile(PERSONNEL_EXCEL_FILE);
-        const sheetName = workbook.SheetNames.includes("Personel Listesi")
-          ? "Personel Listesi"
-          : (workbook.SheetNames.includes("AT-802 PERSONEL VERİSİ") 
-            ? "AT-802 PERSONEL VERİSİ" 
-            : (workbook.SheetNames.includes("PERSONEL LİSTESİ") ? "PERSONEL LİSTESİ" : workbook.SheetNames[0]));
-        const sheet = workbook.Sheets[sheetName];
-        if (sheet) {
-          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          if (rows && rows.length > 0) {
-            const items = rows.map((r, idx) => {
-              const rowStr = JSON.stringify(r).toUpperCase();
-              if (rowStr.includes("KASK TAKIMI") || rowStr.includes("KOLTUK SAYISI") || rowStr.includes("DOUBLE HAVA") || rowStr.includes("SINGLE HAVA")) {
-                return null;
-              }
-              const keys = Object.keys(r);
-              const adSoyadVal = (r["PERSONEL ADI SOYADI"] || r.adSoyad || r.Personel || r["AD SOYAD"] || (keys[1] ? r[keys[1]] : "") || "").toString().trim().toUpperCase();
-              const unvanVal = (r["ÜNVANI / GÖREVİ"] || r.unvan || r.Unvan || r["ÜNVA"] || (keys[2] ? r[keys[2]] : "Teknisyen") || "Teknisyen").toString().trim();
-              return {
-                id: r.id || r.ID || `p_${idx + 1}`,
-                adSoyad: adSoyadVal,
-                unvan: unvanVal
-              };
-            }).filter(p => p !== null && p.adSoyad && p.adSoyad.length > 0);
-            if (items.length > 0) {
-              writeJsonFile(PERSONNEL_FILE, items);
-              return items;
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("readPersonnelFromExcel error:", err);
-    }
-
-    // Default clean seed fallback
-    writePersonnelToExcel(SEED_AT802_PERSONNEL);
-    return SEED_AT802_PERSONNEL;
-  }
-
-  async function fetchPersonnelLive(): Promise<any[]> {
-    const existing = readPersonnelFromExcel();
-    if (Array.isArray(existing) && existing.length > 0) {
-      return existing;
-    }
-
-    const sheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
-    const candidates = [
-      "Personel Listesi",
-      "AT-802 PERSONEL VERİSİ",
-      "PERSONEL LİSTESİ",
-      "5-Personel_Bilgi"
-    ];
-
-    for (const sheetName of candidates) {
-      try {
-        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
-        if (resp.ok) {
-          const csvText = await resp.text();
-          if (!csvText.includes("<!DOCTYPE") && !csvText.includes("<html") && csvText.trim().length > 0) {
-            const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
-            if (lines.length > 1) {
-              const regex = new RegExp(`,(?=(?:(?:[^"]*"){2})*[^"]*$)`);
-              const remoteList: any[] = [];
-              for (let i = 1; i < lines.length; i++) {
-                const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
-                if (sheetName === "5-Personel_Bilgi") {
-                  if (cols.length >= 2 && cols[1]) {
-                    const name = cols[1].trim().toUpperCase();
-                    const unvan = cols.length >= 5 && cols[4] ? cols[4].trim() : "Teknisyen";
-                    if (name && !name.includes("ADI SOYADI") && !name.includes("SIRA")) {
-                      remoteList.push({ id: `p_${remoteList.length + 1}`, adSoyad: name, unvan });
-                    }
-                  }
-                } else {
-                  if (cols.length >= 2 && cols[1]) {
-                    const name = cols[1].trim().toUpperCase();
-                    const unvan = cols.length >= 3 && cols[2] ? cols[2].trim() : "Teknisyen";
-                    if (name && !name.includes("PERSONEL ADI") && !name.includes("SIRA NO")) {
-                      remoteList.push({ id: `p_${remoteList.length + 1}`, adSoyad: name, unvan });
-                    }
-                  }
-                }
-              }
-              if (remoteList.length > 0) {
-                writePersonnelToExcel(remoteList);
-                return remoteList;
-              }
-            }
-          }
-        }
-      } catch (e) {
-        // try next candidate
-      }
-    }
-
-    return [];
-  }
-
-  function writePersonnelToExcel(items: any[]): void {
-    try {
-      const dir = path.dirname(PERSONNEL_EXCEL_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-      const rows = [
-        ["SIRA NO", "PERSONEL ADI SOYADI", "ÜNVANI / GÖREVİ"],
-        ...items.map((p, idx) => [
-          String(idx + 1),
-          typeof p === "string" ? p : (p.adSoyad || ""),
-          typeof p === "string" ? "Teknisyen" : (p.unvan || "Teknisyen")
-        ])
-      ];
-
-      const worksheet = XLSX.utils.aoa_to_sheet(rows);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "AT-802 PERSONEL VERİSİ");
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Personel Listesi");
-      XLSX.writeFile(workbook, PERSONNEL_EXCEL_FILE);
-
-      writeJsonFile(PERSONNEL_FILE, items);
-    } catch (err) {
-      console.warn("writePersonnelToExcel error:", err);
-    }
-  }
-
   // GET /api/yasam-destek/personnel-list (Teknisyenler, Pilotlar & Personel Listesi)
   app.get("/api/yasam-destek/personnel-list", async (req, res) => {
     try {
@@ -4098,9 +4128,11 @@ async function startServer() {
       let { fileName = "at-802_sarf_ve_parca_deposu.xlsx", fileId = "", folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP" } = req.body;
       fileName = String(fileName || "").trim();
 
-      // 0. CHECK LOCAL FILE FIRST (Persistent storage)
+      const isOlayTakip = fileName.toLowerCase().includes("olay_takip");
       const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
-      if (fs.existsSync(localExcelPath)) {
+
+      // If not Olay Takip and not forced live, check local file first
+      if (!isOlayTakip && !req.body.forceLive && fs.existsSync(localExcelPath)) {
         console.log(`[read-excel-from-drive] Using local file for ${fileName}`);
         const buf = fs.readFileSync(localExcelPath);
         return res.json({
@@ -4111,7 +4143,7 @@ async function startServer() {
         });
       }
 
-      // 1. LIVE GOOGLE DRIVE CHECK FIRST: Query real current files in Google Drive folder
+      // 1. LIVE GOOGLE DRIVE CHECK: Query real current files or known ID in Google Drive folder
       try {
         const driveExcels = await getDriveExcelsList(false);
         if (driveExcels && driveExcels.length > 0) {
@@ -4162,10 +4194,22 @@ async function startServer() {
               // Ensure it is a valid ZIP/XLSX or OLE2/XLS file (not an HTML error page from Google Drive)
               const isValidXlsx = buf.length > 2000 && ((buf[0] === 0x50 && buf[1] === 0x4B) || (buf[0] === 0xD0 && buf[1] === 0xCF));
               if (isValidXlsx) {
-                const base64Str = buf.toString("base64");
+                let finalBuf = buf;
+                if (fileName === "olay_takip_cizelgesi_at-802.xlsx") {
+                  try {
+                    const xlsx = await import("xlsx");
+                    const driveWb = xlsx.read(buf, { type: "buffer" });
+                    const updatedBuf = await syncYellowNgIntoOlayTakipExcel(undefined, driveWb);
+                    if (updatedBuf) finalBuf = updatedBuf;
+                  } catch (syncErr) {
+                    console.warn("syncYellowNgIntoOlayTakipExcel on direct buffer error:", syncErr);
+                  }
+                }
+
+                const base64Str = finalBuf.toString("base64");
                 const localMirrorPath = path.resolve(process.cwd(), `public/${fileName}`);
                 try {
-                  fs.writeFileSync(localMirrorPath, buf);
+                  fs.writeFileSync(localMirrorPath, finalBuf);
                 } catch {}
 
                 excelFileCache.set(fileName, {
@@ -4189,7 +4233,6 @@ async function startServer() {
           }
         }
       }
-
 
       // 3. Try Google Apps Script Endpoints with fast timeout (max 4s)
       const scriptUrls = [
@@ -4216,9 +4259,24 @@ async function startServer() {
             try {
               const data = JSON.parse(rawText);
               if (data && data.status === "success" && data.base64) {
+                let finalBuf = Buffer.from(data.base64, "base64");
+                if (fileName === "olay_takip_cizelgesi_at-802.xlsx") {
+                  try {
+                    const xlsx = await import("xlsx");
+                    const driveWb = xlsx.read(finalBuf, { type: "buffer" });
+                    const updatedBuf = await syncYellowNgIntoOlayTakipExcel(undefined, driveWb);
+                    if (updatedBuf) {
+                      finalBuf = updatedBuf;
+                      data.base64 = updatedBuf.toString("base64");
+                    }
+                  } catch (syncErr) {
+                    console.warn("syncYellowNgIntoOlayTakipExcel on GAS buffer error:", syncErr);
+                  }
+                }
+
                 const localMirrorPath = path.resolve(process.cwd(), `public/${fileName}`);
                 try {
-                  fs.writeFileSync(localMirrorPath, Buffer.from(data.base64, "base64"));
+                  fs.writeFileSync(localMirrorPath, finalBuf);
                 } catch {}
                 excelFileCache.set(fileName, {
                   base64: data.base64,
@@ -4234,10 +4292,23 @@ async function startServer() {
         }
       }
 
-      // NO CACHE ALLOWED: If live Drive fetch failed, return strict error
+      // 4. Fallback to local file if Drive is temporarily unreachable
+      if (fs.existsSync(localExcelPath)) {
+        console.log(`[read-excel-from-drive] Live Drive failed, falling back to local file for ${fileName}`);
+        const buf = fs.readFileSync(localExcelPath);
+        return res.json({
+          status: "success",
+          source: "local-fallback",
+          base64: buf.toString("base64"),
+          updated: new Date().toLocaleString("tr-TR"),
+          message: "Google Drive canlı sorgusu yanıt vermedi, yerel yedekten yüklendi."
+        });
+      }
+
+      // If live Drive fetch failed and no local backup, return error
       return res.status(502).json({
         status: "error",
-        message: `Google Drive üzerinden [${fileName}] dosyası canlı olarak çekilemedi. Önbellek veya yapay veri kullanımı kesinlikle yasaklanmıştır.`
+        message: `Google Drive üzerinden [${fileName}] dosyası canlı olarak çekilemedi. Bağlantınızı kontrol ediniz.`
       });
     } catch (err: any) {
       return res.status(500).json({
@@ -4346,12 +4417,13 @@ async function startServer() {
           const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
           fs.writeFileSync(localExcelPath, buffer);
 
-          // 2. MODIFICATION: Inject Shelf Life columns if missing
+          // 2. MODIFICATION: Inject Shelf Life columns ONLY for Depo/Teçhizat files (NEVER for Olay Takip!)
+          const isOlayTakip = fileName.toLowerCase().includes("olay_takip") || String(targetKey || "").toLowerCase().includes("olay_takip");
           const xlsx = await import("xlsx");
           let wb = xlsx.read(buffer, { type: "buffer" });
           let modified = false;
 
-          if (wb && wb.SheetNames) {
+          if (!isOlayTakip && wb && wb.SheetNames) {
             for (const sName of wb.SheetNames) {
               const sheet = wb.Sheets[sName];
               const aoa = xlsx.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
@@ -5880,6 +5952,148 @@ async function startServer() {
     return false;
   }
 
+  // Helper to sync Google E-Tablo Sarı İkaz Ng Takip records into public/olay_takip_cizelgesi_at-802.xlsx
+  async function syncYellowNgIntoOlayTakipExcel(records?: any[], baseWb?: any): Promise<Buffer | null> {
+    try {
+      const xlsx = await import("xlsx");
+      const list = records || await fetchYellowNgFromGoogleSheet();
+      const localExcelPath = path.resolve(process.cwd(), "public/olay_takip_cizelgesi_at-802.xlsx");
+
+      let wb: any = baseWb;
+      if (!wb) {
+        if (fs.existsSync(localExcelPath)) {
+          const fileBuffer = fs.readFileSync(localExcelPath);
+          wb = xlsx.read(fileBuffer, { type: "buffer" });
+        } else {
+          wb = xlsx.utils.book_new();
+        }
+      }
+
+      const headers = ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı", "Belge / Döküman", "EK DOSYA BAĞLANTI LİNKİ"];
+      const aoa: any[][] = [
+        headers,
+        ...list.map((r: any, idx: number) => [
+          String(idx + 1),
+          String(r.tailCode || r["Kuyruk No"] || "").trim(),
+          String(r.motorSn || r["Motor S/N"] || "").trim(),
+          String(r.olayNo || r["Olay Numarası"] || "").trim(),
+          String(r.zamanAraligi || r["Zaman Aralığı (TIME)"] || "").trim(),
+          String(r.olayTepesi || r["Olay Tepesi"] || "").trim(),
+          String(r.satirAraligi || r["Satır Aralığı"] || "").trim(),
+          String(r.sure || r["Süre"] || "").trim(),
+          String(r.sistemKayitTarihi || r["Sisteme Kayıt Tarihi"] || "").trim(),
+          String(r.fileName || r["Dosya Adı"] || "").trim(),
+          "",
+          ""
+        ])
+      ];
+
+      const newWs = xlsx.utils.aoa_to_sheet(aoa);
+      const targetSheetName = "Sarı İkaz Ng Takip";
+
+      const isYellowSheetName = (name: string): boolean => {
+        const norm = String(name || "")
+          .replace(/İ/g, "i")
+          .replace(/I/g, "ı")
+          .toLowerCase()
+          .replace(/[\u0300-\u036f]/g, "");
+        return (norm.includes("sari") || norm.includes("sarı")) && norm.includes("ikaz");
+      };
+
+      // 1. Remove ANY existing yellow ng sheets from wb.Sheets & wb.SheetNames
+      const filteredSheetNames: string[] = [];
+      let insertIdx = -1;
+
+      for (let i = 0; i < wb.SheetNames.length; i++) {
+        const sName = wb.SheetNames[i];
+        if (isYellowSheetName(sName)) {
+          if (insertIdx === -1) insertIdx = filteredSheetNames.length;
+          delete wb.Sheets[sName];
+        } else {
+          filteredSheetNames.push(sName);
+        }
+      }
+
+      // 2. Strict deduplication of all remaining sheets
+      const cleanUniqueNames: string[] = [];
+      const seenNames = new Set<string>();
+      for (const name of filteredSheetNames) {
+        const key = name.trim().toLowerCase();
+        if (!seenNames.has(key)) {
+          seenNames.add(key);
+          cleanUniqueNames.push(name);
+        } else {
+          delete wb.Sheets[name];
+        }
+      }
+
+      // 3. Find optimal insertion point
+      if (insertIdx === -1) {
+        const ngLimitIdx = cleanUniqueNames.findIndex((n: string) => n.toLowerCase().includes("ng limit"));
+        insertIdx = ngLimitIdx >= 0 ? ngLimitIdx + 1 : cleanUniqueNames.length;
+      }
+      if (insertIdx > cleanUniqueNames.length) insertIdx = cleanUniqueNames.length;
+
+      // 4. Insert targetSheetName exactly once
+      cleanUniqueNames.splice(insertIdx, 0, targetSheetName);
+      wb.SheetNames = cleanUniqueNames;
+      wb.Sheets[targetSheetName] = newWs;
+
+      // 5. Ensure all referenced sheets in wb.SheetNames have valid worksheet objects
+      for (const name of wb.SheetNames) {
+        if (!wb.Sheets[name]) {
+          wb.Sheets[name] = xlsx.utils.aoa_to_sheet([["Başlık"]]);
+        }
+      }
+
+      const updatedBuffer = xlsx.write(wb, { bookType: "xlsx", type: "buffer" });
+      fs.writeFileSync(localExcelPath, updatedBuffer);
+
+      const base64Data = updatedBuffer.toString("base64");
+      excelFileCache.set("olay_takip_cizelgesi_at-802.xlsx", {
+        base64: base64Data,
+        updated: new Date().toLocaleString("tr-TR"),
+        fileId: "1S-ktkzrs7p5CIcwUihuQsJDecmLpXmpp"
+      });
+
+      // Background upload to Google Drive
+      (async () => {
+        try {
+          const scriptUrls = [
+            "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+            "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+          ];
+          for (const sUrl of scriptUrls) {
+            try {
+              const res = await fetch(sUrl, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({
+                  action: "uploadTechizatExcel",
+                  fileName: "olay_takip_cizelgesi_at-802.xlsx",
+                  targetKey: "olay_takip_at802",
+                  base64Data: base64Data,
+                  folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
+                }),
+                signal: AbortSignal.timeout(15000)
+              });
+              if (res.ok) break;
+            } catch (err) {
+              // try next
+            }
+          }
+        } catch (e) {
+          console.warn("[syncYellowNgIntoOlayTakipExcel] Drive sync warning:", e);
+        }
+      })();
+
+      return updatedBuffer;
+    } catch (err) {
+      console.error("[syncYellowNgIntoOlayTakipExcel] Error:", err);
+      return null;
+    }
+  }
+
   app.get("/api/yellow-ng", async (req, res) => {
     try {
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -5890,6 +6104,9 @@ async function startServer() {
       records.forEach((r: any) => {
         if (r.tailCode) counts[r.tailCode] = (counts[r.tailCode] || 0) + 1;
       });
+      // Keep olay_takip_cizelgesi_at-802.xlsx in sync in background
+      syncYellowNgIntoOlayTakipExcel(records).catch(() => {});
+
       return res.json({ 
         status: "success", 
         source: "Google E-Tablo (Sarı İkaz Ng Takip Adedi)",
@@ -5925,18 +6142,23 @@ async function startServer() {
         const itemOlay = String(item.olayNo || item["Olay Numarası"] || "").trim();
 
         const isDup = existing.some(ex => {
-          const exTail = String(ex.tailCode || "").trim();
+          const exTail = String(ex.tailCode || ex["Kuyruk No"] || "").trim().toUpperCase();
+          const itemTailUpper = itemTail.toUpperCase();
           const exZaman = String(ex.zamanAraligi || "").trim();
           const exSatir = String(ex.satirAraligi || "").trim();
-          const exFile = String(ex.fileName || "").trim();
-          const exOlay = String(ex.olayNo || "").trim();
+          const exFile = String(ex.fileName || ex["Dosya Adı"] || "").trim();
+          const exOlay = String(ex.olayNo || ex["Olay Numarası"] || "").trim();
 
-          if (exTail !== itemTail) return false;
-          // Exact time interval match
+          // CRITICAL: Farklı hava aracı ise ASLA mükerrer sayılmaz (aynı dosya adı olsa dahi!)
+          if (exTail && itemTailUpper && exTail !== itemTailUpper) return false;
+
+          // Aynı hava aracı için: dosya adı kontrolü (aynı dosya adı mükerrerdir)
+          if (itemFile && exFile && itemFile.toLowerCase() === exFile.toLowerCase()) return true;
+          // Exact time interval match on same aircraft
           if (itemZaman && exZaman === itemZaman) return true;
-          // Same file and same incident #
-          if (itemFile && exFile && itemFile === exFile && itemOlay && exOlay === itemOlay) return true;
-          // Same row range
+          // Same file and same incident # on same aircraft
+          if (itemFile && exFile && itemFile.toLowerCase() === exFile.toLowerCase() && itemOlay && exOlay === itemOlay) return true;
+          // Same row range on same aircraft
           if (itemSatir && exSatir && itemSatir === exSatir) return true;
           return false;
         });
@@ -5972,6 +6194,9 @@ async function startServer() {
         id: String(idx + 1),
         "#": String(idx + 1)
       }));
+
+      // Update olay_takip_cizelgesi_at-802.xlsx with the new rows!
+      await syncYellowNgIntoOlayTakipExcel(updatedRecords);
 
       const counts: Record<string, number> = {};
       updatedRecords.forEach((r: any) => {
@@ -6012,6 +6237,9 @@ async function startServer() {
         id: String(idx + 1),
         "#": String(idx + 1)
       }));
+
+      // Update olay_takip_cizelgesi_at-802.xlsx as well
+      await syncYellowNgIntoOlayTakipExcel(updatedRecords);
 
       const counts: Record<string, number> = {};
       updatedRecords.forEach((r: any) => {

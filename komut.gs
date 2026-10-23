@@ -553,28 +553,49 @@ function doPost(e) {
           }
         }
 
-        if (!targetFile) {
-          var existingFiles = folder.getFilesByName(fileName);
-          if (existingFiles.hasNext()) {
-            targetFile = existingFiles.next();
+        var existingFiles = folder.getFilesByName(fileName);
+        var allMatching = [];
+        while (existingFiles.hasNext()) {
+          allMatching.push(existingFiles.next());
+        }
+
+        if (!targetFile && allMatching.length > 0) {
+          targetFile = allMatching[0];
+          for (var i = 1; i < allMatching.length; i++) {
+            try { allMatching[i].setTrashed(true); } catch(e){}
           }
         }
 
         if (targetFile) {
-          // Update in-place to keep exact same File ID and update online Excel permanently!
           targetFile.setContent(blob);
           targetFile.setName(fileName);
+          // Clean up any extra duplicates with this name
+          var dupes = folder.getFilesByName(fileName);
+          while (dupes.hasNext()) {
+            var f = dupes.next();
+            if (f.getId() !== targetFile.getId()) {
+              try { f.setTrashed(true); } catch(e){}
+            }
+          }
           response.fileId = targetFile.getId();
           response.fileName = targetFile.getName();
           response.downloadUrl = "https://drive.google.com/uc?export=download&id=" + targetFile.getId();
-          response.message = "Excel dosyası '" + fileName + "' Google Drive üzerinde güncellendi (File ID korundu).";
+          response.message = "Excel dosyası '" + fileName + "' Google Drive üzerinde güncellendi ve eski kopyalar temizlendi.";
           response.status = "success";
         } else {
           var newFile = folder.createFile(blob);
+          // Clean up any duplicates
+          var dupes = folder.getFilesByName(fileName);
+          while (dupes.hasNext()) {
+            var f = dupes.next();
+            if (f.getId() !== newFile.getId()) {
+              try { f.setTrashed(true); } catch(e){}
+            }
+          }
           response.fileId = newFile.getId();
           response.fileName = newFile.getName();
           response.downloadUrl = "https://drive.google.com/uc?export=download&id=" + newFile.getId();
-          response.message = "Excel dosyası '" + fileName + "' adıyla Google Drive klasörüne yeni kaydedildi.";
+          response.message = "Excel dosyası '" + fileName + "' adıyla Google Drive klasörüne kaydedildi.";
           response.status = "success";
         }
       } catch (err) {

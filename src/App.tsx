@@ -265,7 +265,7 @@ import { BarkodOkuyucuModal } from './components/BarkodOkuyucuModal';
 import { GunTakipModal } from './components/GunTakipModal';
 import { DepoSlipPrintModal } from './components/DepoSlipPrintModal';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxCKs0JMpW5AMsHb2spwU2DGq_mSOwCkUkOSiokvE8a3SXmLgQMPJrSL6-012pszQfDXA/exec";
+export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
 export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
@@ -5070,11 +5070,7 @@ export default function App() {
 
   // Modal control functions
   const openSystem = (url: string, title: string) => {
-    if (url.includes('netlify.app') || url.includes('github') || url.includes('google.com/spreadsheets')) {
-      window.open(url, '_blank');
-      showNotification(`${title} portalı yeni sekmede güvenli bir şekilde açıldı.`);
-      return;
-    }
+    // Open in full-screen iframe modal inside the app
     setModalTitle(title);
     setIframeLoading(true);
     setModalUrl(url);
@@ -5118,9 +5114,14 @@ export default function App() {
       return;
     }
     if (modalType === 'iframe') {
-      setModalType('category');
-      setSelectedCategory('FORM KAYITLARI');
-      setModalTitle(getCategoryTitle('FORM KAYITLARI'));
+      if (selectedCategory) {
+        setModalType('category');
+        setModalTitle(getCategoryTitle(selectedCategory));
+      } else {
+        setModalOpen(false);
+        setModalType(null);
+        setSelectedCategory(null);
+      }
       setModalUrl('');
       setIframeLoading(false);
       return;
@@ -8596,16 +8597,6 @@ export default function App() {
                     <RefreshCw className="w-3.5 h-3.5 text-emerald-800" />
                     <span className="hidden md:inline">YENİLE</span>
                   </button>
-                  <a
-                    href={modalUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 bg-[#0b3d1d] hover:bg-[#072612] text-white shadow-lg px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-wider transition-all cursor-pointer active:scale-95"
-                    title="Yeni Sekmede Aç"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 text-emerald-300" />
-                    <span>YENİ SEKMEDE AÇ</span>
-                  </a>
                 </div>
               )}
 
@@ -8636,7 +8627,7 @@ export default function App() {
               <div className="flex flex-col items-center gap-3">
                 <div className="loader"></div>
                 <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                  Süreç Yönetim Sistemi Yükleniyor...
+                   Sistem Yükleniyor...
                 </span>
               </div>
             </div>

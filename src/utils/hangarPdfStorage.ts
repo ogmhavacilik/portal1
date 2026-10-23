@@ -669,6 +669,15 @@ export function matchOlayTakipDoc(
   }
 ): boolean {
   if (!doc) return false;
+  // A connection link is NEVER a document!
+  if (
+    doc.fileSize === 'Web Bağlantısı' ||
+    (doc.docType && doc.docType.includes('Bağlantı')) ||
+    doc.id.startsWith('link_') ||
+    (!doc.fileData && !doc.driveFileId)
+  ) {
+    return false;
+  }
 
   const rowKey = `olay_${options.unitKey || ''}_${options.sheetId || ''}_row_${options.rowIndex}`;
   const rowLinks = getRowDocLinks();
@@ -692,21 +701,31 @@ export function matchOlayTakipDoc(
     if (options.unitKey && docKey.toLowerCase().includes(options.unitKey.toLowerCase())) return true;
   }
 
+  // If cellVal is empty, '-', or a URL, do not perform loose token matching
+  const rawCellText = (options.cellVal || '').trim();
+  if (
+    !rawCellText ||
+    rawCellText === '-' ||
+    rawCellText === '--' ||
+    /^https?:\/\//i.test(rawCellText) ||
+    rawCellText.includes('drive.google.com')
+  ) {
+    return false;
+  }
+
   // 4. Name / Text Matching against cellVal (e.g. user typed "kaza_raporu.pdf" or "belge1")
   const normDocName = normalizeDocKey(doc.fileName || '').replace(/\.PDF$/i, '').trim();
   const normRawName = normalizeDocKey(doc.itemKey || '').replace(/\.PDF$/i, '').trim();
 
-  if (options.cellVal && typeof options.cellVal === 'string' && options.cellVal.trim()) {
-    const tokens = options.cellVal
-      .split(/[,;\n+]+/)
-      .map(t => normalizeDocKey(t).replace(/\.PDF$/i, '').trim())
-      .filter(t => t.length >= 2);
+  const tokens = rawCellText
+    .split(/[,;\n+]+/)
+    .map(t => normalizeDocKey(t).replace(/\.PDF$/i, '').trim())
+    .filter(t => t.length >= 2 && !t.startsWith('http') && !t.includes('drive.google.com'));
 
-    for (const token of tokens) {
-      if (token === normDocName || normDocName === token) return true;
-      if (token.length >= 3 && (normDocName.includes(token) || token.includes(normDocName))) return true;
-      if (token.length >= 3 && (normRawName.includes(token) || token.includes(normRawName))) return true;
-    }
+  for (const token of tokens) {
+    if (token === normDocName || normDocName === token) return true;
+    if (token.length >= 3 && (normDocName.includes(token) || token.includes(normDocName))) return true;
+    if (token.length >= 3 && (normRawName.includes(token) || token.includes(normRawName))) return true;
   }
 
   return false;

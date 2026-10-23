@@ -1612,7 +1612,10 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                 setCurrentIndex(targetIdx);
                 // Aynı zamanda görüntülenen pencereyi o bölgeye ortala
                 const halfWin = Math.floor(visibleCount / 2);
-                setViewStart(Math.max(0, Math.min(chartData.length - visibleCount, targetIdx - halfWin)));
+                const newStart = Math.max(0, Math.min(chartData.length - visibleCount, targetIdx - halfWin));
+                if (zoomRange) {
+                  setZoomRange([newStart, newStart + visibleCount - 1]);
+                }
               }}
               title="Tıklanan zaman anına atlamak için tıklayın"
             >

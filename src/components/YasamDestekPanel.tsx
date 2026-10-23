@@ -3,10 +3,12 @@ import {
   ShieldAlert, Plus, Search, RefreshCw, Download, Printer, 
   CheckCircle2, ArrowRightLeft, Building2, User, Calendar, 
   CheckSquare, Square, Trash2, Edit2, X, AlertTriangle, FileSpreadsheet,
-  Layers, ChevronDown, Eye
+  Layers, ChevronDown, Eye, Lock
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { GOOGLE_SCRIPT_URL } from '../App';
+
+export const YASAM_DESTEK_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbybicNS_2sYlB6Fy3vQj3Pryxn8WVw_dBs8_fob-8o641FdEa6ZP1aNjVwOxFFiM1_f_g/exec";
 
 export interface YasamDestekRecord {
   id: string;
@@ -53,8 +55,13 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
       if (onExportComplete) onExportComplete();
     }
   }, [triggerExport]);
-  // Active Sub-Tab
   const [activeSubTab, setActiveSubTab] = useState<'can_yelegi' | 'spare_air' | 'helmet_kit' | 'zimmetler' | 'personnel'>('can_yelegi');
+
+  // Password Protection for Personel Bilgi Çizelgesi (1839)
+  const [isPersonnelUnlocked, setIsPersonnelUnlocked] = useState(false);
+  const [isPersonnelPassModalOpen, setIsPersonnelPassModalOpen] = useState(false);
+  const [personnelPassInput, setPersonnelPassInput] = useState('');
+  const [personnelPassError, setPersonnelPassError] = useState('');
 
   // Stock Lists from Server
   const [canYelegiList, setCanYelegiList] = useState<any[]>([]);
@@ -117,10 +124,11 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
       setIsStockLoading(true);
       // 1. Önce doğrudan Google E-Tablo içindeki sayfalardan GET ile canlı oku (Netlify ile tam uyumlu)
       try {
+        const scriptTarget = YASAM_DESTEK_SCRIPT_URL;
         const [cyRes, saRes, hkRes] = await Promise.all([
-          fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("CAN YELEĞİ")}&t=${Date.now()}`),
-          fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("SPARE AIR")}&t=${Date.now()}`),
-          fetch(`${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("HELMET KIT")}&t=${Date.now()}`)
+          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("CAN YELEĞİ")}&t=${Date.now()}`),
+          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("SPARE AIR")}&t=${Date.now()}`),
+          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("HELMET KIT")}&t=${Date.now()}`)
         ]);
 
         let hasLiveGasData = false;
@@ -241,7 +249,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
 
       // 2. Local proxy'yi dene (yalnızca yerel geliştirme ortamında)
       try {
-        const res = await fetch('/api/yasam-destek/all-stocks');
+        const res = await fetch('/api/yasam-destek/all-stocks', { cache: 'no-store' });
         if (res.ok) {
           const json = await res.json();
           if (json && json.status === 'success') {
@@ -262,7 +270,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
     try {
       let json: any = null;
       try {
-        const res = await fetch('/api/yasam-destek/personnel-list');
+        const res = await fetch('/api/yasam-destek/personnel-list', { cache: 'no-store' });
         if (res.ok) json = await res.json();
       } catch (e) {}
 
@@ -1002,7 +1010,15 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
 
         <button
           type="button"
-          onClick={() => setActiveSubTab('personnel')}
+          onClick={() => {
+            if (!isPersonnelUnlocked) {
+              setPersonnelPassInput('');
+              setPersonnelPassError('');
+              setIsPersonnelPassModalOpen(true);
+            } else {
+              setActiveSubTab('personnel');
+            }
+          }}
           className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
             activeSubTab === 'personnel'
               ? 'bg-indigo-900 text-white shadow-md'
@@ -1200,8 +1216,18 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
         {/* ========================================================================= */}
         {activeSubTab === 'zimmetler' && (
           <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">
-            <div className="p-3 bg-amber-50 border-b border-amber-200 text-center font-black text-sm uppercase text-amber-950 tracking-wider">
-              YAŞAM DESTEK CANLI GÖREV & ZİMMET LİSTESİ
+            <div className="p-3 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
+              <span className="flex-grow text-center font-black text-sm uppercase text-amber-950 tracking-wider">YAŞAM DESTEK CANLI GÖREV & ZİMMET LİSTESİ</span>
+              <button 
+                onClick={async () => { 
+                  await onRefresh(); 
+                  showNotification('✅ Zimmet verileri canlı olarak güncellendi!'); 
+                }}
+                className="p-1.5 bg-amber-200 hover:bg-amber-300 rounded text-amber-950 transition-colors shadow-sm"
+                title="Canlı Veriyi Yenile"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
             </div>
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-[#b0b0b0] sticky top-0 z-20 border-b-2 border-slate-400 text-slate-900 font-black text-[11px] uppercase tracking-wider text-center select-none">
@@ -2405,7 +2431,6 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
                         className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-md cursor-pointer flex items-center gap-1.5 active:scale-95"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>Bu Personele Zimmet Ver</span>
                       </button>
                     </div>
                   </div>
@@ -2415,6 +2440,75 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
           </div>
         );
       })()}
+      {/* PERSONEL BİLGİ ÇİZELGELERİ ŞİFRE MODAL (1839) */}
+      {isPersonnelPassModalOpen && (
+        <div className="fixed inset-0 z-[10005] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white text-slate-800 w-full max-w-sm rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col p-6 space-y-4">
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-900 mx-auto flex items-center justify-center mb-2 border border-indigo-200">
+                <Lock className="w-6 h-6 text-indigo-900" />
+              </div>
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">
+                Personel Bilgi Çizelgesi Koruması
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Personel bilgi çizelgelerini görüntülemek için yetkili şifresini giriniz.
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (personnelPassInput.trim() === '1839') {
+                  setIsPersonnelUnlocked(true);
+                  setIsPersonnelPassModalOpen(false);
+                  setActiveSubTab('personnel');
+                  showNotification('✅ Personel verisi erişimi onaylandı.');
+                } else {
+                  setPersonnelPassError('Hatalı Şifre!');
+                }
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <input
+                  type="password"
+                  autoFocus
+                  value={personnelPassInput}
+                  onChange={(e) => {
+                    setPersonnelPassInput(e.target.value);
+                    setPersonnelPassError('');
+                  }}
+                  placeholder="Şifre Giriniz..."
+                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono tracking-widest text-center focus:outline-none focus:border-indigo-600 focus:bg-white text-slate-900"
+                />
+                {personnelPassError && (
+                  <p className="text-xs text-rose-600 font-bold text-center mt-1.5">{personnelPassError}</p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPersonnelPassModalOpen(false);
+                    setPersonnelPassInput('');
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                >
+                  İptal
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-900 hover:bg-indigo-950 text-white font-black text-xs uppercase tracking-wider cursor-pointer shadow-sm"
+                >
+                  Giriş Yap
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );

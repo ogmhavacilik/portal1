@@ -1832,6 +1832,66 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
         }
       } catch (e) {}
 
+      // Google E-Tablo'dan her bir hava aracının özel "DEPO HAREKET GEÇMİŞİ-..." sayfasını oku
+      try {
+        const aircraftSheets = [
+          { sheetName: 'DEPO HAREKET GEÇMİŞİ-BELL 429', unit: 'bell429', defaultTail: 'BELL 429' },
+          { sheetName: 'DEPO HAREKET GEÇMİŞİ-AT-802', unit: 'at802', defaultTail: 'AT-802' },
+          { sheetName: 'DEPO HAREKET GEÇMİŞİ-T-70', unit: 't70', defaultTail: 'T-70' },
+          { sheetName: 'DEPO HAREKET GEÇMİŞİ-C-650', unit: 'c650', defaultTail: 'C-650' },
+          { sheetName: 'DEPO HAREKET GEÇMİŞİ-B-360', unit: 'b360', defaultTail: 'B-360' },
+          { sheetName: 'DEPO HAREKET GEÇMİŞİ-HANGAR', unit: 'hangar', defaultTail: 'HANGAR' }
+        ];
+
+        await Promise.allSettled(
+          aircraftSheets.map(async (target) => {
+            try {
+              const gvizUrl = `https://docs.google.com/spreadsheets/d/17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(target.sheetName)}&_t=${Date.now()}`;
+              const bRes = await fetch(gvizUrl);
+              if (bRes.ok) {
+                const csvText = await bRes.text();
+                if (!csvText.includes('<!DOCTYPE') && !csvText.includes('<html') && csvText.trim().length > 0) {
+                  const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+                  if (lines.length > 1) {
+                    const delimiter = lines[0].includes(';') ? ';' : ',';
+                    const regex = new RegExp(`${delimiter}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
+                    for (let i = 1; i < lines.length; i++) {
+                      const cols = lines[i].split(regex).map(c => c.replace(/^"|"$/g, '').trim());
+                      if (cols.length > 0 && cols[0]) {
+                        const itemName = cols[0].trim();
+                        if (itemName.toUpperCase().includes('GÖREVLENDİRME') || itemName.toUpperCase().includes('MALZEME ADI')) continue;
+                        transfers.push({
+                          id: `tx_${target.unit}_sheet_${i}`,
+                          itemName: itemName,
+                          name: itemName,
+                          quantity: parseInt(cols[1]) || 1,
+                          qty: parseInt(cols[1]) || 1,
+                          date: cols[2] || "",
+                          timestamp: cols[2] || "",
+                          type: (cols[3] || "TRANSFER").toUpperCase(),
+                          sn: cols[4] || "-",
+                          serialNumber: cols[4] || "-",
+                          tailNo: cols[5] || target.defaultTail,
+                          operator: cols[6] || "-",
+                          receivedBy: cols[7] || "-",
+                          location: cols[8] || "DEPO",
+                          unit: target.unit,
+                          sheetName: target.sheetName
+                        });
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn(`Direct sheet fetch warn (${target.sheetName}):`, err);
+            }
+          })
+        );
+      } catch (sheetErr) {
+        console.warn('Aircraft sheets direct fetch warn:', sheetErr);
+      }
+
       // Netlify / Static fallback - Google E-Tablo'dan DEPO HAREKETLERİ sayfasını oku
       if (transfers.length === 0) {
         try {
@@ -1880,7 +1940,8 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
                   qty: Number(row[qtyCol >= 0 ? qtyCol : 6]) || 1,
                   targetRegion: String(row[destCol >= 0 ? destCol : 8] || 'ANKARA'),
                   operator: String(row[userCol >= 0 ? userCol : 9] || '-'),
-                  unit: assignedUnit
+                  unit: assignedUnit,
+                  sheetName: assignedUnit === 'bell429' ? 'DEPO HAREKET GEÇMİŞİ-BELL 429' : undefined
                 });
               }
             }
@@ -2104,18 +2165,29 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
 
     if (currentUnit && currentUnit !== 'all') {
       const u = currentUnit.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const isAt802 = u.startsWith('at802');
       list = list.filter(t => {
         const txUnit = (t.unit || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const txSheet = (t.sheetName || '').toLowerCase();
-        if (isAt802) {
-          return txUnit === 'at802' || (!txUnit && !txSheet.includes('bell') && !txSheet.includes('t-70') && !txSheet.includes('c-650') && !txSheet.includes('b-360') && !txSheet.includes('hangar'));
+        const txSheet = (t.sheetName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const txTail = (t.tailNo || (t as any).aircraftTail || '').toLowerCase();
+
+        if (u.includes('bell') || u === 'bell429') {
+          return txUnit === 'bell429' || txSheet.includes('bell') || txTail.includes('bell');
         }
-        if (u.includes('bell')) return txUnit === 'bell429' || txSheet.includes('bell');
-        if (u.includes('t70')) return txUnit === 't70' || txSheet.includes('t-70') || txSheet.includes('t70');
-        if (u.includes('c650') || u.includes('650')) return txUnit === 'c650' || txSheet.includes('c-650') || txSheet.includes('c650');
-        if (u.includes('b360') || u.includes('360')) return txUnit === 'b360' || txSheet.includes('b-360') || txSheet.includes('b360');
-        if (u.includes('hangar')) return txUnit === 'hangar' || txSheet.includes('hangar');
+        if (u.includes('t70') || u === 't70') {
+          return txUnit === 't70' || txSheet.includes('t70') || txTail.includes('t70') || txTail.includes('t-70');
+        }
+        if (u.includes('c650') || u === 'c650') {
+          return txUnit === 'c650' || txSheet.includes('c650') || txTail.includes('c650') || txTail.includes('c-650');
+        }
+        if (u.includes('b360') || u === 'b360') {
+          return txUnit === 'b360' || txSheet.includes('b360') || txTail.includes('b360') || txTail.includes('b-360');
+        }
+        if (u.includes('hangar')) {
+          return txUnit === 'hangar' || txSheet.includes('hangar');
+        }
+        if (u.includes('at802') || u === 'at802') {
+          return (txUnit === 'at802' || !txUnit) && !txSheet.includes('bell') && !txSheet.includes('t70') && !txSheet.includes('c650') && !txSheet.includes('b360') && !txSheet.includes('hangar') && !txTail.includes('bell') && !txTail.includes('t70') && !txTail.includes('c650') && !txTail.includes('b360');
+        }
         return txUnit === u;
       });
     }
@@ -6536,11 +6608,6 @@ title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazel
                 {passwordError && (
                   <div className="text-xs text-rose-600 font-bold mt-1 text-center">❌ Hatalı şifre girdiniz!</div>
                 )}
-              </div>
-
-              <div className="bg-slate-50 p-2 rounded-xl border border-slate-200 text-[10px] text-slate-500 space-y-0.5">
-                <div className="flex justify-between"><span>AT-802: <strong>802</strong></span><span>BELL 429: <strong>429</strong></span><span>T-70: <strong>70</strong></span></div>
-                <div className="flex justify-between pt-1 border-t border-slate-200"><span>C-650: <strong>650</strong></span><span>B-360: <strong>360</strong></span><span>Hangar: <strong>1839</strong></span></div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">

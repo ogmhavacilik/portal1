@@ -35,7 +35,9 @@ import {
   TrendingUp,
   ExternalLink,
   Database,
-  Camera
+  Camera,
+  KeyRound,
+  CheckSquare
 } from 'lucide-react';
 import html2canvas from 'html2canvas-pro';
 import { AIRCRAFT_TAILS } from './DepoManagementModal';
@@ -518,6 +520,19 @@ export interface MvpAnalysisResult {
   processingTimeMs: number;
 }
 
+export interface MultiFlightItem {
+  id: string;
+  file: File;
+  fileName: string;
+  content: string;
+  result: MvpAnalysisResult;
+  isVisited: boolean;
+  yellowCount: number;
+  redCount: number;
+  durationExceededCount: number;
+  hasTransferredYellow?: boolean;
+}
+
 export interface MvpFlightDataAnalysisModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -657,6 +672,21 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
   const [parsingProgress, setParsingProgress] = useState(0); // 0 to 100%
   const [parsingStatusText, setParsingStatusText] = useState('');
   const [analysisResult, setAnalysisResult] = useState<MvpAnalysisResult | null>(null);
+
+  // Çoklu Uçuş Analiz Modu (Kullanıcı İsteği: Varsayılan olarak tikli)
+  const [isMultiFlightMode, setIsMultiFlightMode] = useState<boolean>(true);
+  const [multiFlights, setMultiFlights] = useState<MultiFlightItem[]>([]);
+  const [activeFlightIndex, setActiveFlightIndex] = useState<number>(0);
+  const [isFlightDropdownOpen, setIsFlightDropdownOpen] = useState<boolean>(false);
+
+  // Şifre Doğrulama Modal State'leri ("Sarı İkazları Saydır" Butonu İçin Şifre: 802)
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState<boolean>(false);
+  const [passwordInput, setPasswordInput] = useState<string>('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  // Mükerrer Dosya Adı Uyarısı Modal State'leri
+  const [isDuplicateWarningOpen, setIsDuplicateWarningOpen] = useState<boolean>(false);
+  const [duplicateWarningFileName, setDuplicateWarningFileName] = useState<string>('');
 
   // 3 Adımlı Analiz Akışı State'leri:
   // 1. Adım: 7 Parametreden seçilen parametre anahtarı (İlk açılışta null -> SADECE 1. Kısım görünür)
@@ -832,8 +862,8 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     });
   }, [analysisResult]);
 
-  // Sarı ikazları saydır (Mevcut uçuş dosyasındaki NG sarı ikaz adedi kadar kayıt/satır açar ve Google E-Tabloya yazar)
-  const handleCountYellowNg = async () => {
+  // Sarı İkazları Saydır Butonuna basıldığında şifre sorma modalını aç
+  const handleInitiateCountYellowNg = () => {
     if (isSyncingYellowNg) return;
 
     if (!analysisResult) {
@@ -846,10 +876,52 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
       return;
     }
 
+    setPasswordInput('');
+    setPasswordError(null);
+    setIsPasswordModalOpen(true);
+  };
+
+  // Şifre Doğrulandıktan sonra Mükerrer Kontrolü yap ve Aktarımı Gerçekleştir
+  const handleVerifyPasswordAndTransfer = async () => {
+    if (passwordInput.trim() !== '802') {
+      setPasswordError('Hatalı yetkili şifresi! Doğru şifre: 802');
+      return;
+    }
+
+    // Şifre doğru -> modalı kapat
+    setIsPasswordModalOpen(false);
+    setPasswordInput('');
+    setPasswordError(null);
+
+    // MÜKERRER ARAMASI (Aynı Hava Aracı ve Aynı Dosya Adı kontrolü)
+    const currentFileName = (analysisResult?.fileName || '').trim().toLowerCase();
+    const currentTail = (selectedTail?.code || '').trim().toUpperCase();
+    const isDuplicate = yellowNgRecords.some(r => {
+      const fn = String(r.fileName || r["Dosya Adı"] || "").trim().toLowerCase();
+      const tail = String(r.tailCode || r["Kuyruk No"] || "").trim().toUpperCase();
+      // Farklı hava aracı ise mükerrer sayılmaz!
+      return fn && fn === currentFileName && tail === currentTail;
+    });
+
+    if (isDuplicate) {
+      setDuplicateWarningFileName(analysisResult?.fileName || 'Uçuş Dosyası');
+      setIsDuplicateWarningOpen(true);
+      return;
+    }
+
+    // Mükerrer yok -> Aktarımı Başlat
+    await executeActualCountYellowNg();
+  };
+
+  // Gerçek Google E-Tabloya Sarı İkaz Aktarımı
+  const executeActualCountYellowNg = async () => {
+    if (!analysisResult) return;
+    setIsSyncingYellowNg(true);
+
     const now = new Date();
     const dateFormatted = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 
-    // Her bir sarı ikaz için bir satır (kuyruk no, motor seri no, zaman aralığı, olay tepesi, satır aralığı, olay numarası, sisteme kayıt tarihi)
+    // Her bir sarı ikaz için bir satır
     const newRows = currentNgYellowEpisodes.map((ep, idx) => ({
       olayNo: `Olay #${idx + 1} (${ep.id})`,
       tailCode: selectedTail.code,
@@ -863,7 +935,6 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
       fileName: analysisResult.fileName
     }));
 
-    setIsSyncingYellowNg(true);
     let success = false;
     const fallbackScriptUrls = [
       'https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec',
@@ -887,18 +958,28 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
         if (res.status === 409 || data?.status === 'duplicate') {
           if (data?.data?.counts) setYellowNgCounts(data.data.counts);
           if (data?.data?.records) setYellowNgRecords(data.data.records);
-          showNotification(data?.message || 'Bu uçuş kaydındaki sarı ikaz satırları daha önce Google E-Tabloya aktarılmıştır!', 'info');
-          success = true;
+          setDuplicateWarningFileName(analysisResult.fileName);
+          setIsDuplicateWarningOpen(true);
+          setIsSyncingYellowNg(false);
           return;
         }
         if (data?.status === 'success') {
           if (data.data?.counts) setYellowNgCounts(data.data.counts);
           if (data.data?.records) setYellowNgRecords(data.data.records);
           const updatedTotal = data.data?.counts?.[selectedTail.code] || 0;
-          showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya başarıyla aktarıldı! (Toplam: ${updatedTotal})`, 'success');
+          showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya ("${sheetName}") başarıyla aktarıldı! (Toplam: ${updatedTotal})`, 'success');
+          
+          // Çoklu uçuş listesinde aktarıldı olarak işaretle
+          setMultiFlights(prev => prev.map(f => f.fileName === analysisResult.fileName ? { ...f, hasTransferredYellow: true } : f));
           success = true;
+          setIsSyncingYellowNg(false);
           return;
         }
+      } else if (res.status === 409) {
+        setDuplicateWarningFileName(analysisResult.fileName);
+        setIsDuplicateWarningOpen(true);
+        setIsSyncingYellowNg(false);
+        return;
       }
     } catch (apiErr) {
       console.warn('API proxy error, falling back to direct Google Apps Script:', apiErr);
@@ -912,6 +993,22 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
           if (rRes.ok) {
             const rJson = await rRes.json();
             const existing = Array.isArray(rJson.data) ? rJson.data : [];
+
+            // Direct check for duplicate filename on the same aircraft
+            const currentTail = (selectedTail?.code || '').trim().toUpperCase();
+            const hasDuplicateInSheet = existing.some((r: any) => {
+              const fn = String(r.fileName || r["Dosya Adı"] || r[9] || "").trim().toLowerCase();
+              const tail = String(r.tailCode || r["Kuyruk No"] || r[1] || "").trim().toUpperCase();
+              return fn && fn === analysisResult.fileName.trim().toLowerCase() && tail === currentTail;
+            });
+
+            if (hasDuplicateInSheet) {
+              setDuplicateWarningFileName(analysisResult.fileName);
+              setIsDuplicateWarningOpen(true);
+              setIsSyncingYellowNg(false);
+              return;
+            }
+
             const combined = [...existing, ...newRows];
             const headers = ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı"];
             const rows = [
@@ -945,6 +1042,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               if (pJson && pJson.status === 'success') {
                 await fetchLiveYellowNg(false);
                 showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya doğrudan aktarıldı!`, 'success');
+                setMultiFlights(prev => prev.map(f => f.fileName === analysisResult.fileName ? { ...f, hasTransferredYellow: true } : f));
                 success = true;
                 break;
               }
@@ -1181,12 +1279,10 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     }
   };
 
-  // Dosya seçildiğinde doğrudan ve otomatik analiz başlat
+  // Dosya seçildiğinde doğrudan ve otomatik analiz başlat (Tekli veya Çoklu Uçuş)
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setSelectedFile(file);
-      handleRunAnalysis(file);
+    if (e.target.files && e.target.files.length > 0) {
+      processIncomingFiles(e.target.files);
     }
   };
 
@@ -1203,17 +1299,20 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      setSelectedFile(file);
-      handleRunAnalysis(file);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processIncomingFiles(e.dataTransfer.files);
     }
   };
 
   /**
    * Ultra-Hızlı ve Virgül Ayırma Hatalarını Tamamen Çözen Asenkron Analiz Motoru
    */
-  const executeFastAnalysis = async (content: string, fileName: string, currentTailInfo: At802AircraftInfo) => {
+  const executeFastAnalysis = async (
+    content: string,
+    fileName: string,
+    currentTailInfo: At802AircraftInfo,
+    isBatch = false
+  ): Promise<MvpAnalysisResult | null> => {
     const startTime = performance.now();
     setIsAnalyzing(true);
     setParsingProgress(5);
@@ -1914,34 +2013,41 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
       defaultParca = 'Gözlem Altında Faal';
     }
 
-    setIntegrateForm({
-      kuyrukNo: currentTailInfo.code,
-      tarih: detectedDate,
-      motorSeriNo: currentTailInfo.motorSn,
-      olayTuru: defaultOlayTuru,
-      tepeNg: peakNg ? `%${peakNg.toFixed(1).replace('.', ',')}` : '%104,0',
-      daaRefNo: '',
-      verilenSart: '',
-      pilot: '',
-      teknikDegerlendirme: defaultTeknik,
-      parcaDurumu: defaultParca
-    });
+    if (!isBatch) {
+      setAnalysisResult(result);
+      setParsingProgress(100);
 
-    if (redCount > 0 || yellowCount > 0) {
-      setFilterMode('VIOLATIONS_ONLY');
-    } else {
-      setFilterMode('ALL');
+      setIntegrateForm({
+        kuyrukNo: currentTailInfo.code,
+        tarih: detectedDate,
+        motorSeriNo: currentTailInfo.motorSn,
+        olayTuru: defaultOlayTuru,
+        tepeNg: peakNg ? `%${peakNg.toFixed(1).replace('.', ',')}` : '%104,0',
+        daaRefNo: '',
+        verilenSart: '',
+        pilot: '',
+        teknikDegerlendirme: defaultTeknik,
+        parcaDurumu: defaultParca
+      });
+
+      if (redCount > 0 || yellowCount > 0) {
+        setFilterMode('VIOLATIONS_ONLY');
+      } else {
+        setFilterMode('ALL');
+      }
+
+      // 3 Adımlı Akış: İlk açılışta yalnızca 1. kısım (en yüksek değerler) görünür
+      setSelectedParamKey(null);
+      setSelectedEpisodeId(null);
+
+      setIsAnalyzing(false);
+      showNotification(
+        `Yüksek Hızlı Tarama Tamamlandı (${elapsed} ms): ${currentTailInfo.fullLabel} için ${totalLines.toLocaleString('tr-TR')} satır incelendi. (${redCount} Kırmızı Aşım, ${yellowCount} Sarı Uyarı${durationExceededCount > 0 ? `, ${durationExceededCount} Süre Aşımı` : ''})`,
+        redCount > 0 ? 'info' : 'success'
+      );
     }
 
-    // 3 Adımlı Akış: İlk açılışta yalnızca 1. kısım (en yüksek değerler) görünür
-    setSelectedParamKey(null);
-    setSelectedEpisodeId(null);
-
-    setIsAnalyzing(false);
-    showNotification(
-      `Yüksek Hızlı Tarama Tamamlandı (${elapsed} ms): ${currentTailInfo.fullLabel} için ${totalLines.toLocaleString('tr-TR')} satır incelendi. (${redCount} Kırmızı Aşım, ${yellowCount} Sarı Uyarı${durationExceededCount > 0 ? `, ${durationExceededCount} Süre Aşımı` : ''})`,
-      redCount > 0 ? 'info' : 'success'
-    );
+    return result;
   };
 
   // Doğrudan dosya analizi çalıştırma
@@ -1965,6 +2071,139 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
       console.error('Fast Analysis Error:', err);
       showNotification('Dosya analiz edilirken hata oluştu: ' + (err?.message || err), 'error');
       setIsAnalyzing(false);
+    }
+  };
+
+  // Çoklu Dosya Toplu Tarama & Analiz Motoru
+  const handleBatchFlightFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setIsAnalyzing(true);
+    setParsingProgress(5);
+    setParsingStatusText(`Toplam ${files.length} uçuş dosyası taranıyor...`);
+
+    const items: MultiFlightItem[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setParsingProgress(Math.round(((i + 1) / files.length) * 90));
+      setParsingStatusText(`(${i + 1}/${files.length}) "${file.name}" taranıyor...`);
+      await new Promise(r => setTimeout(r, 10));
+
+      try {
+        const text = await file.text();
+        const res = await executeFastAnalysis(text, file.name, selectedTail, true);
+        if (res) {
+          items.push({
+            id: `flight_${i}_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            file,
+            fileName: file.name,
+            content: text,
+            result: res,
+            isVisited: i === 0, // İlk uçuş açılışta tıklandı/incelendi olarak yeşil işaretlenir
+            yellowCount: res.yellowCount,
+            redCount: res.redCount,
+            durationExceededCount: res.durationExceededCount
+          });
+        }
+      } catch (err) {
+        console.warn(`File scan error for ${file.name}:`, err);
+      }
+    }
+
+    setIsAnalyzing(false);
+    setParsingProgress(100);
+
+    if (items.length > 0) {
+      setMultiFlights(items);
+      setActiveFlightIndex(0);
+      setSelectedFile(items[0].file);
+      setAnalysisResult(items[0].result);
+      applyAnalysisToForm(items[0].result, selectedTail);
+      showNotification(`✅ ${items.length} adet uçuş kaydı başarıyla tarandı. 1. uçuş seçildi.`, 'success');
+    } else {
+      showNotification('Seçilen uçuş dosyaları taranırken hata oluştu.', 'error');
+    }
+  };
+
+  // Açılır listeden veya adımdan başka uçuşa geçiş (Her tıklanan yeşil dolgu ve tikli kalır)
+  const handleSelectMultiFlight = (index: number) => {
+    if (index < 0 || index >= multiFlights.length) return;
+    const target = multiFlights[index];
+    if (!target || !target.result) return;
+
+    // Tıklanan kaydı yeşil dolgu ve tikli (isVisited: true) olarak güncelle
+    setMultiFlights(prev => prev.map((f, i) => i === index ? { ...f, isVisited: true } : f));
+    setActiveFlightIndex(index);
+    setSelectedFile(target.file);
+    setAnalysisResult(target.result);
+    applyAnalysisToForm(target.result, selectedTail);
+    setIsFlightDropdownOpen(false);
+    showNotification(`✈️ ${index + 1}. Uçuş yüklendi: ${target.fileName}`, 'info');
+  };
+
+  const applyAnalysisToForm = (res: MvpAnalysisResult, currentTailInfo: At802AircraftInfo) => {
+    const detectedPilot = res.parsedMetadata['PILOT_NAME'] || 'Sorumlu Pilot';
+    const detectedDate = res.parsedMetadata['DATE_UTC'] || new Date().toLocaleDateString('tr-TR');
+
+    let defaultOlayTuru = 'Normal Uçuş Analizi';
+    let defaultTeknik = 'Tüm sarı odak uçuş parametreleri referans limitleri dahilinde.';
+    let defaultParca = 'Faal';
+
+    if (res.redCount > 0) {
+      defaultOlayTuru = `KIRMIZI LİMİT AŞIMI (${res.peakNg ? `Ng %${res.peakNg.toFixed(1).replace('.', ',')}` : 'Limit Aşımı'})`;
+      defaultTeknik = `MVP uçuş kaydında kritik limit aşımı tespit edildi: Tepe Ng: %${res.peakNg ? res.peakNg.toFixed(1).replace('.', ',') : '-'}, Tepe ITT: ${res.peakItt ? res.peakItt.toFixed(1).replace('.', ',') : '-'}°C, TQ: ${res.peakTq ? res.peakTq.toFixed(0) : '-'} LB/FT. ${res.durationExceededCount > 0 ? `(${res.durationExceededCount} süre sınırı aşımı tespit edildi).` : ''} P&WC motor kılavuzuna göre DAA ve boroskop muayenesi başlatılmalıdır.`;
+      defaultParca = 'Bakım / Kontrol Gerekli';
+    } else if (res.yellowCount > 0) {
+      defaultOlayTuru = `SARI UYARI SINIRI AŞIMI (${res.peakNg ? `Ng %${res.peakNg.toFixed(1).replace('.', ',')}` : 'Uyarı'})`;
+      defaultTeknik = `MVP uçuş kaydı analizi: Sarı uyarı sınırlarında çalışma tespit edildi. Tepe Ng: %${res.peakNg ? res.peakNg.toFixed(1).replace('.', ',') : '-'}, Tepe ITT: ${res.peakItt ? res.peakItt.toFixed(1).replace('.', ',') : '-'}°C. 20 sn kuralı ve motor parametre trend takibi gerekmektedir.`;
+      defaultParca = 'Gözlem Altında Faal';
+    }
+
+    setIntegrateForm({
+      kuyrukNo: currentTailInfo.code,
+      tarih: detectedDate,
+      motorSeriNo: currentTailInfo.motorSn,
+      olayTuru: defaultOlayTuru,
+      tepeNg: res.peakNg ? `%${res.peakNg.toFixed(1).replace('.', ',')}` : '%104,0',
+      daaRefNo: '',
+      verilenSart: '',
+      pilot: '',
+      teknikDegerlendirme: defaultTeknik,
+      parcaDurumu: defaultParca
+    });
+
+    if (res.redCount > 0 || res.yellowCount > 0) {
+      setFilterMode('VIOLATIONS_ONLY');
+    } else {
+      setFilterMode('ALL');
+    }
+    setSelectedParamKey(null);
+    setSelectedEpisodeId(null);
+  };
+
+  // Çoklu veya Tekli Dosya Yükleme Karar Motoru
+  const processIncomingFiles = (fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    if (isMultiFlightMode && files.length > 1) {
+      handleBatchFlightFiles(files);
+    } else {
+      const file = files[0];
+      setSelectedFile(file);
+      setMultiFlights([{
+        id: `flight_single_${Date.now()}`,
+        file,
+        fileName: file.name,
+        content: '',
+        result: null as any,
+        isVisited: true,
+        yellowCount: 0,
+        redCount: 0,
+        durationExceededCount: 0
+      }]);
+      setActiveFlightIndex(0);
+      handleRunAnalysis(file);
     }
   };
 
@@ -2187,6 +2426,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                 <input
                   ref={fileInputRef}
                   type="file"
+                  multiple={isMultiFlightMode}
                   accept=".csv,.mvp,.txt"
                   onChange={handleFileChange}
                   className="hidden"
@@ -2208,6 +2448,132 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                     ))}
                   </select>
                 </div>
+
+                {/* Çoklu Uçuş Seçici (Farklı Uçuş Seç Dropdown) */}
+                {multiFlights.length > 1 && (
+                  <div className="relative">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setIsFlightDropdownOpen(!isFlightDropdownOpen)}
+                        className={`px-3 py-1.5 rounded-xl font-black text-xs border-2 shadow-xs flex items-center gap-2 cursor-pointer transition-all active:scale-95 ${
+                          multiFlights[activeFlightIndex]?.isVisited
+                            ? 'bg-emerald-50 border-emerald-500 text-emerald-950'
+                            : 'bg-white border-slate-300 text-slate-800 hover:bg-slate-50'
+                        }`}
+                        title="Taranan çoklu uçuşlar arasından farklı uçuş seç"
+                      >
+                        <div className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-pulse" />
+                        <span className="font-extrabold uppercase tracking-wide">Farklı Uçuş Seç:</span>
+                        <span className="max-w-[130px] truncate font-mono text-[11px]">
+                          {multiFlights[activeFlightIndex]?.fileName || analysisResult.fileName}
+                        </span>
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 bg-emerald-200 text-emerald-900 rounded font-black flex items-center gap-1">
+                          <Check className="w-3 h-3 stroke-[3]" />
+                          <span>{activeFlightIndex + 1}/{multiFlights.length}</span>
+                        </span>
+                        <ChevronDown className={`w-3.5 h-3.5 text-slate-600 transition-transform ${isFlightDropdownOpen ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {/* Hızlı Uçuş Değiştirme Butonları (Önceki / Sonraki) */}
+                      <button
+                        type="button"
+                        disabled={activeFlightIndex === 0}
+                        onClick={() => handleSelectMultiFlight(activeFlightIndex - 1)}
+                        className="p-1.5 rounded-xl bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed border border-slate-300 text-slate-700 cursor-pointer shadow-2xs"
+                        title="Önceki Uçuş"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={activeFlightIndex === multiFlights.length - 1}
+                        onClick={() => handleSelectMultiFlight(activeFlightIndex + 1)}
+                        className="p-1.5 rounded-xl bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed border border-slate-300 text-slate-700 cursor-pointer shadow-2xs"
+                        title="Sonraki Uçuş"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Alta Doğru Açılır Uçuş Listesi (Dropdown Menü) */}
+                    {isFlightDropdownOpen && (
+                      <div className="absolute left-0 top-full mt-2 w-96 max-h-[380px] overflow-y-auto bg-white rounded-2xl shadow-2xl border-2 border-emerald-500/40 z-50 p-2.5 animate-in fade-in slide-in-from-top-2">
+                        <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between text-[11px] font-black text-slate-600 uppercase tracking-wider">
+                          <span className="flex items-center gap-1.5 text-emerald-900">
+                            <Plane className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>Taranan Uçuşlar ({multiFlights.length})</span>
+                          </span>
+                          <span className="text-emerald-700 font-mono text-[10px] bg-emerald-100 px-2 py-0.5 rounded-full">
+                            {multiFlights.filter(f => f.isVisited).length} / {multiFlights.length} İncelendi
+                          </span>
+                        </div>
+                        <div className="py-1.5 space-y-1.5">
+                          {multiFlights.map((item, idx) => {
+                            const isCurrent = activeFlightIndex === idx;
+                            const isVisited = item.isVisited;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => handleSelectMultiFlight(idx)}
+                                className={`w-full text-left p-3 rounded-xl text-xs transition-all flex items-center justify-between gap-2.5 cursor-pointer border ${
+                                  isCurrent
+                                    ? 'bg-emerald-100/90 border-emerald-500 ring-2 ring-emerald-500 text-emerald-950 font-black shadow-xs'
+                                    : isVisited
+                                      ? 'bg-emerald-50/90 hover:bg-emerald-100/70 border-emerald-300 text-emerald-900 font-bold'
+                                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-mono font-black shrink-0 ${
+                                    isVisited ? 'bg-emerald-200 text-emerald-900 border border-emerald-300' : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                  }`}>
+                                    #{idx + 1}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="truncate font-mono font-bold text-xs">{item.fileName}</p>
+                                    <div className="flex items-center gap-2 text-[10px] font-mono mt-0.5">
+                                      {item.yellowCount > 0 ? (
+                                        <span className="text-amber-800 font-bold bg-amber-100 px-1.5 py-0.2 rounded">
+                                          {item.yellowCount} Sarı İkaz
+                                        </span>
+                                      ) : (
+                                        <span className="text-emerald-700">0 İkaz</span>
+                                      )}
+                                      {item.redCount > 0 && (
+                                        <span className="text-rose-700 font-bold bg-rose-100 px-1.5 py-0.2 rounded">
+                                          {item.redCount} Kırmızı
+                                        </span>
+                                      )}
+                                      {item.hasTransferredYellow && (
+                                        <span className="text-emerald-800 font-black bg-emerald-200/90 px-1.5 py-0.2 rounded">
+                                          Aktarıldı
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Yeşil Dolgu ve Tikli Rozet */}
+                                {isVisited ? (
+                                  <span className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-600 text-white shadow-2xs">
+                                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                    <span>İncelendi</span>
+                                  </span>
+                                ) : (
+                                  <span className="shrink-0 text-[10px] text-slate-500 font-semibold px-2 py-0.5 bg-slate-100 rounded-full border border-slate-200">
+                                    Bekliyor
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Dosya Değiştir Butonu */}
                 <button
@@ -2379,6 +2745,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple={isMultiFlightMode}
                 accept=".csv,.mvp,.txt"
                 onChange={handleFileChange}
                 className="hidden"
@@ -2428,10 +2795,22 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
 
                   {/* 2. ADIM: DOSYA YÜKLEME ALANI (SÜRÜKLE & BIRAK YA DA TIKLA) */}
                   <div>
-                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-black flex items-center justify-center">2</span>
-                      <span>Uçuş Kayıt Dosyası (.csv / .mvp / .txt)</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-black flex items-center justify-center">2</span>
+                        <span>Uçuş Kayıt Dosyası (.csv / .mvp / .txt)</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold text-xs cursor-pointer select-none hover:bg-emerald-100 transition shadow-2xs">
+                        <input
+                          type="checkbox"
+                          checked={isMultiFlightMode}
+                          onChange={(e) => setIsMultiFlightMode(e.target.checked)}
+                          className="w-4 h-4 text-emerald-700 rounded focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+                        />
+                        <span>Birden fazla uçuş analiz et</span>
+                        <span className="text-[10px] bg-emerald-200/90 text-emerald-950 font-black px-1.5 py-0.2 rounded font-mono">ÇOKLU</span>
+                      </label>
+                    </div>
 
                     <div
                       onDragOver={handleDragOver}
@@ -2448,14 +2827,18 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                         <UploadCloud className="w-7 h-7 text-emerald-700" />
                       </div>
                       <h4 className="text-sm font-black text-slate-800 mb-1">
-                        MVP / CSV Uçuş Dosyası Seçin veya Buraya Sürükleyin
+                        {isMultiFlightMode
+                          ? 'Birden Fazla MVP / CSV Dosyası Seçin veya Sürükleyin'
+                          : 'MVP / CSV Uçuş Dosyası Seçin veya Buraya Sürükleyin'}
                       </h4>
                       <p className="text-xs text-slate-500 max-w-sm mb-3">
-                        Dosya seçildiği anda otomatik olarak 7 sarı odak sütunu taranacak ve limit aşımları listelenecektir.
+                        {isMultiFlightMode
+                          ? 'Çoklu dosya seçimi aktif: Seçilen tüm uçuşlar taranacak, ardından açılır listeden yeşil tikli olarak sırayla incelenebilecektir.'
+                          : 'Dosya seçildiği anda otomatik olarak 7 sarı odak sütunu taranacak ve limit aşımları listelenecektir.'}
                       </p>
                       <span className="px-5 py-2.5 rounded-xl bg-emerald-700 text-white font-black text-xs uppercase tracking-wider shadow-sm group-hover:bg-emerald-800 transition-colors flex items-center gap-2">
                         <UploadCloud className="w-4 h-4" />
-                        <span>Dosya Seç & Yükle</span>
+                        <span>{isMultiFlightMode ? 'Çoklu Uçuş Dosyaları Seç & Yükle' : 'Dosya Seç & Yükle'}</span>
                       </span>
                     </div>
                   </div>
@@ -2540,7 +2923,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                       <button
                         type="button"
                         disabled={isSyncingYellowNg}
-                        onClick={handleCountYellowNg}
+                        onClick={handleInitiateCountYellowNg}
                         className={`px-3.5 py-1.5 ${
                           isSyncingYellowNg 
                             ? 'bg-amber-400 text-white cursor-not-allowed opacity-90' 
@@ -3834,26 +4217,6 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => fetchLiveYellowNg(true)}
-                  disabled={isLoadingYellowNg}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-bold text-xs cursor-pointer transition-all active:scale-95 disabled:opacity-50 border border-white/20"
-                  title="Google E-Tablodan canlı verileri tekrar çek"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingYellowNg ? 'animate-spin' : ''}`} />
-                  <span>{isLoadingYellowNg ? 'E-Tablodan Çekiliyor...' : 'E-Tablodan Yenile'}</span>
-                </button>
-                <a
-                  href="https://docs.google.com/spreadsheets/d/17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0/edit"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-600 text-white font-bold text-xs cursor-pointer transition-all active:scale-95 border border-emerald-400/50 shadow-xs"
-                  title="Google E-Tabloyu Yeni Sekmede Canlı Aç"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">E-Tabloyu Aç ↗</span>
-                </a>
-                <button
-                  type="button"
                   onClick={() => setIsYellowNgHistoryModalOpen(false)}
                   className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center cursor-pointer transition-colors"
                 >
@@ -3880,25 +4243,6 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                       <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
                         Uçuş kaydı yüklendiğinde "Sarı İkazları Saydır" butonuna basarak dosyadaki sarı ikaz adedi kadar satır açabilir ve adedi otomatik işletebilirsiniz.
                       </p>
-                      <div className="mt-4 flex items-center justify-center gap-3">
-                        <button
-                          type="button"
-                          onClick={() => fetchLiveYellowNg(true)}
-                          className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs cursor-pointer shadow-xs transition-transform active:scale-95 flex items-center gap-1.5"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          <span>Google E-Tabloyu Tekrar Kontrol Et</span>
-                        </button>
-                        <a
-                          href="https://docs.google.com/spreadsheets/d/17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0/edit"
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer border border-slate-200 flex items-center gap-1.5"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                          <span>E-Tabloyu Aç ↗</span>
-                        </a>
-                      </div>
                     </div>
                   );
                 }
@@ -4015,6 +4359,141 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
           tailLabel={selectedTail.fullLabel}
           motorSn={analysisResult?.motorSn || selectedTail.motorSn || 'PT6A-67AG'}
         />
+      )}
+
+      {/* ─── ŞİFRE DOĞRULAMA MODALI (ŞİFRE: 802) ─── */}
+      {isPasswordModalOpen && (
+        <div className="fixed inset-0 z-[10020] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95">
+            <div className="px-6 py-4 bg-gradient-to-r from-amber-600 to-amber-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <KeyRound className="w-5 h-5 text-amber-200" />
+                <h4 className="text-sm font-black uppercase tracking-wider">Yetkili Şifresi Doğrulama</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPasswordModalOpen(false);
+                  setPasswordInput('');
+                  setPasswordError(null);
+                }}
+                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-slate-600 leading-relaxed font-sans">
+                <strong>Sarı İkaz Ng Takip Adedi</strong> Google E-Tablo aktarımı yetkili şifresi gerektirmektedir. Lütfen devam etmek için yetkili şifresini giriniz:
+              </p>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleVerifyPasswordAndTransfer();
+                }}
+                className="space-y-3"
+              >
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 uppercase mb-1">
+                    Yetki Şifresi
+                  </label>
+                  <input
+                    type="password"
+                    autoFocus
+                    value={passwordInput}
+                    onChange={(e) => {
+                      setPasswordInput(e.target.value);
+                      setPasswordError(null);
+                    }}
+                    placeholder="Şifre giriniz"
+                    className="w-full px-4 py-2.5 rounded-xl border-2 border-slate-300 text-sm font-mono tracking-widest focus:border-amber-600 focus:outline-none transition-colors"
+                  />
+                  {passwordError && (
+                    <p className="text-xs font-bold text-rose-600 mt-1.5 flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{passwordError}</span>
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPasswordModalOpen(false);
+                      setPasswordInput('');
+                      setPasswordError(null);
+                    }}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs uppercase tracking-wider shadow-sm cursor-pointer active:scale-95 transition-all"
+                  >
+                    Doğrula ve Aktar
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MÜKERRER KAYIT UYARISI MODALI ─── */}
+      {isDuplicateWarningOpen && (
+        <div className="fixed inset-0 z-[10030] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border-2 border-rose-400 overflow-hidden animate-in zoom-in-95">
+            <div className="px-6 py-4 bg-gradient-to-r from-rose-600 to-rose-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle className="w-5 h-5 text-amber-300" />
+                <h4 className="text-sm font-black uppercase tracking-wider">Mükerrer Kayıt Uyarısı</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDuplicateWarningOpen(false)}
+                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="p-4 bg-rose-50 rounded-2xl border border-rose-200 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 mt-0.5">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div className="text-xs text-rose-950 space-y-1">
+                  <p className="font-black text-sm">{selectedTail.code} için bu uçuş dosyası daha önce aktarılmıştır!</p>
+                  <p className="leading-relaxed">
+                    <strong>{selectedTail.fullLabel} ({selectedTail.code})</strong> hava aracı için{' '}
+                    <strong className="font-mono text-rose-900 bg-rose-100 px-1.5 py-0.5 rounded">
+                      "{duplicateWarningFileName}"
+                    </strong>{' '}
+                    adlı uçuş dosyası daha önce sisteme ve <strong>"Sarı İkaz Ng Takip Adedi"</strong> Google E-Tablo sayfasına aktarılmıştır.
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed font-sans">
+                Sistemde aynı hava aracı için mükerrer kayıt oluşmasını engellemek amacıyla aktarım durdurulmuştur. (Farklı hava araçları için aynı dosya adı aktarılabilir; ancak aynı hava aracı için mükerrer aktarım engellenir.)
+              </p>
+
+              <div className="flex items-center justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDuplicateWarningOpen(false)}
+                  className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase tracking-wider shadow-md cursor-pointer active:scale-95 transition-all"
+                >
+                  Anladım, Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
