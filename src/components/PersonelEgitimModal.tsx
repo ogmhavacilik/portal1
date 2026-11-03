@@ -139,28 +139,12 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
         }
       }
 
-      // Check static fallback
-      const staticRes = await fetch(`/${DRIVE_FILE_NAME}`);
-      if (staticRes.ok) {
-        const ab = await staticRes.arrayBuffer();
-        const bytes = new Uint8Array(ab);
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        parseExcelAndSetPeople(btoa(binary), false);
-        if (showNotification && isManual) {
-          showNotification("✅ Yerel bellekten Personel Eğitim Listesi yüklendi.");
-        }
-      } else if (isManual && showNotification) {
-        showNotification("ℹ️ Google Drive'da henüz yüklenmiş bir Personel Eğitim Excel dosyası bulunamadı. Lütfen 'VERİ EKLE' butonu ile Excel yükleyiniz.");
+      } catch (err) {
+        console.warn("Drive Excel fetch failed:", err);
+      } finally {
+        setIsLoadingDrive(false);
+        setSyncStatusMessage('');
       }
-    } catch (err) {
-      console.warn("Drive Excel fetch failed:", err);
-    } finally {
-      setIsLoadingDrive(false);
-      setSyncStatusMessage('');
-    }
   };
 
   useEffect(() => {
@@ -249,6 +233,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
         let person: PersonelEgitimPerson | null = null;
         
         if (rawAd && adUpper !== 'ADI SOYADI' && adUpper !== 'PERSONEL' && adUpper !== 'ADI' && !adUpper.includes('ORMAN GENEL') && !adUpper.includes('PERSONEL EĞİTİM') && !adUpper.includes('PERSONEL EGITIM')) {
+          console.log("Searching for:", adUpper, "in parsedPeople count:", parsedPeople.length);
           person = parsedPeople.find(p => p.adiSoyadi.toUpperCase() === adUpper) || null;
           if (!person) {
             const numSira = parseInt(rawSira) || (parsedPeople.length + 1);

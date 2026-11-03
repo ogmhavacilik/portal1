@@ -4492,9 +4492,8 @@ async function startServer() {
 
                 const base64Str = finalBuf.toString("base64");
                 const localMirrorPath = path.resolve(process.cwd(), `public/${fileName}`);
-                try {
-                  fs.writeFileSync(localMirrorPath, finalBuf);
-                } catch {}
+                // Local mirror write removed
+
 
                 excelFileCache.set(fileName, {
                   base64: base64Str,
@@ -4559,9 +4558,8 @@ async function startServer() {
                 }
 
                 const localMirrorPath = path.resolve(process.cwd(), `public/${fileName}`);
-                try {
-                  fs.writeFileSync(localMirrorPath, finalBuf);
-                } catch {}
+                // Local mirror write removed
+
                 excelFileCache.set(fileName, {
                   base64: data.base64,
                   updated: new Date().toLocaleString("tr-TR"),
@@ -4695,11 +4693,8 @@ async function startServer() {
       if (fileName && cleanBase64) {
         excelFileCache.set(fileName, { base64: cleanBase64, updated: nowStr, fileId: fileId });
 
-        // 1. Write Excel file buffer to public disk
-        try {
-          const buffer = Buffer.from(cleanBase64, "base64");
-          const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
-          fs.writeFileSync(localExcelPath, buffer);
+        // Write to public disk removed
+
 
           // 2. MODIFICATION: Inject Shelf Life columns ONLY for Depo/Teçhizat files (NEVER for Olay Takip or Personel Egitim!)
           const safeFileName = String(fileName || "").toLowerCase();
@@ -4827,10 +4822,12 @@ async function startServer() {
               fs.writeFileSync(jsonPath, JSON.stringify(parsedItems, null, 2), 'utf-8');
             }
           }
-        } catch (diskErr) {
-          console.warn("Disk save in upload-techizat-excel warn:", diskErr);
-        }
+
+        // (Disk save block removed)
       }
+
+
+
 
       if (targetKey && cleanBase64) {
         excelFileCache.set(targetKey, { base64: cleanBase64, updated: nowStr });
