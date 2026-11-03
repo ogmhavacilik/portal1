@@ -79,6 +79,17 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
   const [inlineTrainingDate, setInlineTrainingDate] = useState(() => new Date().toLocaleDateString('tr-TR'));
   const [inlineTrainingProvider, setInlineTrainingProvider] = useState('');
 
+  // Edit Training Modal State
+  const [editingTrainingInfo, setEditingTrainingInfo] = useState<{ personId: string; training: TrainingItem } | null>(null);
+  const [editTrainingName, setEditTrainingName] = useState('');
+  const [editTrainingDate, setEditTrainingDate] = useState('');
+  const [editTrainingProvider, setEditTrainingProvider] = useState('');
+
+  // Edit Person Modal State
+  const [editingPersonInfo, setEditingPersonInfo] = useState<{ personId: string; siraNo: number; adiSoyadi: string } | null>(null);
+  const [editPersonSiraNo, setEditPersonSiraNo] = useState<number>(1);
+  const [editPersonName, setEditPersonName] = useState('');
+
   // Prompt state for "PDF Yüklediniz mi?" with checkbox & EVET button
   const [promptPersonId, setPromptPersonId] = useState<string | null>(null);
   const [isPdfConfirmedChecked, setIsPdfConfirmedChecked] = useState<boolean>(true);
@@ -197,7 +208,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && people.length === 0) {
       fetchLiveExcelFromDrive(false);
     }
   }, [isOpen]);
@@ -390,7 +401,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
         console.warn("Backend upload failed, falling back to direct GAS upload:", apiErr);
       }
 
-      // 2. Fallback direct upload to Google Apps Script
+      // 2. Direct upload to Google Apps Script (Works on Netlify & All Environments)
       const directGasUrls = [
         "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
         "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
@@ -402,11 +413,14 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({
-              action: 'uploadTechizatExcelToDrive',
+              action: 'uploadTechizatExcel',
               fileName: DRIVE_FILE_NAME,
-              fileId: '10zl7Cl81lzlkN1MJB56TfHAGxZaRhEeR',
               folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP',
               base64Data: b64,
+              base64: b64,
+              targetKey: 'personel_egitim_listesi',
+              overwrite: true,
+              replaceExisting: true,
               deleteDuplicates: true,
               updateIfExists: true,
               cleanDuplicates: true
@@ -416,9 +430,6 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
           console.warn("GAS direct upload warning:", gasErr);
         }
       }
-
-      // Immediately re-fetch to ensure UI matches the actual Drive file content and wait until complete
-      await fetchLiveExcelFromDrive(false, actionMsg + " (Güncel Veri Çekiliyor)");
     } catch (e) {
       console.warn("Drive sync failed:", e);
     } finally {
@@ -574,6 +585,90 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
     const updated = people.filter(p => p.id !== personId);
     setPeople(updated);
     uploadExcelToGoogleDrive(buildExcelBase64FromPeople(updated), "Personel Kaydı Siliniyor ve Excel Güncelleniyor...");
+  };
+
+  // Open Edit Training Modal
+  const handleOpenEditTrainingModal = (personId: string, training: TrainingItem) => {
+    setEditingTrainingInfo({ personId, training });
+    setEditTrainingName(training.egitimAdi);
+    setEditTrainingDate(training.egitimTarihi);
+    setEditTrainingProvider(training.egitimVeren);
+  };
+
+  // Save Edited Training
+  const handleSaveEditedTraining = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTrainingInfo) return;
+    if (!editTrainingName.trim()) {
+      alert("Lütfen eğitim adını giriniz.");
+      return;
+    }
+
+    const updatedPeople = people.map(p => {
+      if (p.id === editingTrainingInfo.personId) {
+        return {
+          ...p,
+          trainings: p.trainings.map(t => {
+            if (t.id === editingTrainingInfo.training.id) {
+              return {
+                ...t,
+                egitimAdi: editTrainingName.trim().toUpperCase(),
+                egitimTarihi: editTrainingDate.trim() || new Date().toLocaleDateString('tr-TR'),
+                egitimVeren: (editTrainingProvider.trim() || 'OGM HAVACILIK').toUpperCase()
+              };
+            }
+            return t;
+          })
+        };
+      }
+      return p;
+    });
+
+    setPeople(updatedPeople);
+    setEditingTrainingInfo(null);
+
+    uploadExcelToGoogleDrive(buildExcelBase64FromPeople(updatedPeople), "Eğitim Bilgisi Güncelleniyor ve Drive'a Yazılıyor...");
+
+    if (showNotification) {
+      showNotification("✅ Eğitim bilgisi güncellendi ve Google Drive'a kaydedildi.");
+    }
+  };
+
+  // Open Edit Person Modal
+  const handleOpenEditPersonModal = (person: PersonelEgitimPerson) => {
+    setEditingPersonInfo({ personId: person.id, siraNo: person.siraNo, adiSoyadi: person.adiSoyadi });
+    setEditPersonSiraNo(person.siraNo);
+    setEditPersonName(person.adiSoyadi);
+  };
+
+  // Save Edited Person
+  const handleSaveEditedPerson = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPersonInfo) return;
+    if (!editPersonName.trim()) {
+      alert("Lütfen personel adını giriniz.");
+      return;
+    }
+
+    const updatedPeople = people.map(p => {
+      if (p.id === editingPersonInfo.personId) {
+        return {
+          ...p,
+          siraNo: editPersonSiraNo || p.siraNo,
+          adiSoyadi: editPersonName.trim().toUpperCase()
+        };
+      }
+      return p;
+    });
+
+    setPeople(updatedPeople);
+    setEditingPersonInfo(null);
+
+    uploadExcelToGoogleDrive(buildExcelBase64FromPeople(updatedPeople), "Personel Bilgileri Güncelleniyor ve Drive'a Yazılıyor...");
+
+    if (showNotification) {
+      showNotification("✅ Personel bilgisi güncellendi ve Google Drive'a kaydedildi.");
+    }
   };
 
   // Handle "Belge Ekle" click:
@@ -1050,15 +1145,27 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                                 <span className="font-mono text-slate-600 bg-blue-100/80 px-2 py-0.5 rounded-md font-semibold">
                                   {trainingsCount} Eğitim
                                 </span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeletePerson(person.id)}
-                                  className="text-red-600 hover:text-red-800 hover:underline flex items-center gap-0.5 cursor-pointer"
-                                  title="Personeli Sil"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                  <span>Sil</span>
-                                </button>
+                                <div className="flex items-center gap-1.5 ml-auto">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditPersonModal(person)}
+                                    className="text-blue-700 hover:text-blue-900 hover:underline flex items-center gap-0.5 cursor-pointer font-bold"
+                                    title="Personel Adı ve Sıra No Düzenle"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                    <span>Düzenle</span>
+                                  </button>
+                                  <span className="text-slate-300">|</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeletePerson(person.id)}
+                                    className="text-red-600 hover:text-red-800 hover:underline flex items-center gap-0.5 cursor-pointer font-bold"
+                                    title="Personeli Sil"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    <span>Sil</span>
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -1069,14 +1176,24 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                               <div className="flex flex-col gap-1.5">
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="font-bold text-slate-900 text-xs">{primaryTraining.egitimAdi}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteTraining(person.id, primaryTraining.id)}
-                                    className="text-slate-300 hover:text-red-500 opacity-80 hover:opacity-100 transition-opacity p-0.5 cursor-pointer shrink-0"
-                                    title="Bu Eğitimi Sil"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditTrainingModal(person.id, primaryTraining)}
+                                      className="text-slate-400 hover:text-blue-600 transition-colors p-1 cursor-pointer rounded hover:bg-blue-50"
+                                      title="Bu Eğitimi Düzenle"
+                                    >
+                                      <Edit2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteTraining(person.id, primaryTraining.id)}
+                                      className="text-slate-400 hover:text-red-600 transition-colors p-1 cursor-pointer rounded hover:bg-red-50"
+                                      title="Bu Eğitimi Sil"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                 </div>
 
                                 {trainingsCount > 1 && (
@@ -1284,14 +1401,24 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                                             </div>
                                           </td>
                                           <td className="p-2.5 text-center">
-                                            <button
-                                              type="button"
-                                              onClick={() => handleDeleteTraining(person.id, t.id)}
-                                              className="p-1 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50 transition cursor-pointer"
-                                              title="Bu eğitimi sil"
-                                            >
-                                              <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
+                                            <div className="flex items-center justify-center gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenEditTrainingModal(person.id, t)}
+                                                className="p-1 text-slate-400 hover:text-blue-600 rounded-md hover:bg-blue-50 transition cursor-pointer"
+                                                title="Bu eğitimi düzenle"
+                                              >
+                                                <Edit2 className="w-3.5 h-3.5" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeleteTraining(person.id, t.id)}
+                                                className="p-1 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50 transition cursor-pointer"
+                                                title="Bu eğitimi sil"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            </div>
                                           </td>
                                         </tr>
                                       ))}
@@ -1496,6 +1623,157 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
               </div>
             </form>
 
+          </div>
+        </div>
+      )}
+
+      {/* 4. EĞİTİM DÜZENLEME MODALI */}
+      {editingTrainingInfo && (
+        <div className="fixed inset-0 z-[750] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-scale-up">
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Edit2 className="w-5 h-5 text-blue-400" />
+                <h3 className="font-black text-sm uppercase tracking-wider font-mono">
+                  Eğitim Kaydını Düzenle
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingTrainingInfo(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditedTraining} className="p-6 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase font-mono mb-1">
+                  Eğitimin Adı *
+                </label>
+                <input
+                  type="text"
+                  required
+                  list="training-list"
+                  placeholder="Eğitimin Tam Adını Yazınız..."
+                  value={editTrainingName}
+                  onChange={(e) => setEditTrainingName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold uppercase text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase font-mono mb-1">
+                    Eğitim Tarihi
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="GG.AA.YYYY"
+                    value={editTrainingDate}
+                    onChange={(e) => setEditTrainingDate(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase font-mono mb-1">
+                    Eğitim Veren Kurum / Personel
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Eğitim Veren Kurum veya Personel"
+                    value={editTrainingProvider}
+                    onChange={(e) => setEditTrainingProvider(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold uppercase text-slate-800 outline-none focus:ring-2 focus:ring-blue-500/30"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingTrainingInfo(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-xl shadow cursor-pointer active:scale-95"
+                >
+                  Güncelle & Drive&apos;a Kaydet
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5. PERSONEL BİLGİLERİ DÜZENLEME MODALI */}
+      {editingPersonInfo && (
+        <div className="fixed inset-0 z-[750] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-scale-up">
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <User className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-black text-sm uppercase tracking-wider font-mono">
+                  Personel Bilgilerini Düzenle
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingPersonInfo(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditedPerson} className="p-6 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 uppercase font-mono mb-1">
+                  Sıra No
+                </label>
+                <input
+                  type="number"
+                  value={editPersonSiraNo}
+                  onChange={(e) => setEditPersonSiraNo(parseInt(e.target.value) || 1)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold font-mono text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 uppercase font-mono mb-1">
+                  Personel Adı Soyadı *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Personel Adı Soyadı..."
+                  value={editPersonName}
+                  onChange={(e) => setEditPersonName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold uppercase text-slate-800 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingPersonInfo(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl shadow cursor-pointer active:scale-95"
+                >
+                  Güncelle & Drive&apos;a Kaydet
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
