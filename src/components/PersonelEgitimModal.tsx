@@ -122,30 +122,78 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
     }
 
     try {
-      const res = await fetch('/api/read-excel-from-drive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName: DRIVE_FILE_NAME })
-      });
+      // 1. Try server proxy API endpoint
+      try {
+        const res = await fetch('/api/read-excel-from-drive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: DRIVE_FILE_NAME })
+        });
 
-      if (res.ok) {
-        const json = await res.json();
-        console.log("DEBUG [Frontend]: Backend response received:", json);
-        if (json && json.status === 'success' && json.base64) {
-          parseExcelAndSetPeople(json.base64, false);
-          if (showNotification) {
-            showNotification("✅ Google Drive'dan Personel Eğitim Listesi başarıyla yüklendi.");
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.status === 'success' && json.base64) {
+            const success = parseExcelAndSetPeople(json.base64, false);
+            if (success) {
+              if (showNotification) {
+                showNotification("✅ Google Drive'dan Personel Eğitim Listesi başarıyla yüklendi.");
+              }
+              return;
+            }
           }
-          return;
+        }
+      } catch (backendErr) {
+        console.warn("Backend /api/read-excel-from-drive unavailable, falling back to direct Google Apps Script:", backendErr);
+      }
+
+      // 2. Direct Fallback to Google Apps Script (Works on Netlify & Static Deployments)
+      const directGasUrls = [
+        "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+      ];
+
+      const targets = [
+        { name: DRIVE_FILE_NAME, id: "10zl7Cl81lzlkN1MJB56TfHAGxZaRhEeR" },
+        { name: "personel_egitim_listesi_at-802.xlsx", id: "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7" }
+      ];
+
+      for (const gasUrl of directGasUrls) {
+        for (const target of targets) {
+          try {
+            const gasRes = await fetch(gasUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({
+                action: 'readExcelFromDrive',
+                fileName: target.name,
+                fileId: target.id,
+                folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
+              })
+            });
+
+            if (gasRes.ok) {
+              const gasJson = await gasRes.json();
+              if (gasJson && gasJson.status === 'success' && gasJson.base64) {
+                const parsed = parseExcelAndSetPeople(gasJson.base64, false);
+                if (parsed) {
+                  if (showNotification) {
+                    showNotification("✅ Google Drive'dan Personel Eğitim Listesi canlı olarak yüklendi.");
+                  }
+                  return;
+                }
+              }
+            }
+          } catch (gasErr) {
+            console.warn("Direct GAS fetch warning:", gasErr);
+          }
         }
       }
-
-      } catch (err) {
-        console.warn("Drive Excel fetch failed:", err);
-      } finally {
-        setIsLoadingDrive(false);
-        setSyncStatusMessage('');
-      }
+    } catch (err) {
+      console.warn("Drive Excel fetch failed:", err);
+    } finally {
+      setIsLoadingDrive(false);
+      setSyncStatusMessage('');
+    }
   };
 
   useEffect(() => {
@@ -275,12 +323,15 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
         if (syncToDrive) {
           uploadExcelToGoogleDrive(base64);
         }
+        return true;
       } else {
         alert("Yüklenen Excel dosyasında geçerli personel eğitimi verisi okunamadı. Lütfen sütun başlıklarını kontrol ediniz.");
+        return false;
       }
     } catch (err) {
       console.error("Excel parse error:", err);
       alert("Excel dosyası okunurken hata oluştu: " + err);
+      return false;
     }
   };
 
@@ -324,16 +375,47 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
         b64 = buildExcelBase64FromPeople(people);
       }
 
-      // Save to primary personel_egitim_listesi.xlsx
-      await fetch('/api/upload-techizat-excel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: DRIVE_FILE_NAME,
-          base64Data: b64,
-          targetKey: 'personel_egitim_listesi'
-        })
-      });
+      // 1. Save via server API
+      try {
+        await fetch('/api/upload-techizat-excel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileName: DRIVE_FILE_NAME,
+            base64Data: b64,
+            targetKey: 'personel_egitim_listesi'
+          })
+        });
+      } catch (apiErr) {
+        console.warn("Backend upload failed, falling back to direct GAS upload:", apiErr);
+      }
+
+      // 2. Fallback direct upload to Google Apps Script
+      const directGasUrls = [
+        "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+      ];
+
+      for (const gasUrl of directGasUrls) {
+        try {
+          await fetch(gasUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'uploadTechizatExcelToDrive',
+              fileName: DRIVE_FILE_NAME,
+              fileId: '10zl7Cl81lzlkN1MJB56TfHAGxZaRhEeR',
+              folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP',
+              base64Data: b64,
+              deleteDuplicates: true,
+              updateIfExists: true,
+              cleanDuplicates: true
+            })
+          });
+        } catch (gasErr) {
+          console.warn("GAS direct upload warning:", gasErr);
+        }
+      }
 
       // Immediately re-fetch to ensure UI matches the actual Drive file content and wait until complete
       await fetchLiveExcelFromDrive(false, actionMsg + " (Güncel Veri Çekiliyor)");
