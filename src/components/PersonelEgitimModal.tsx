@@ -164,20 +164,19 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
       ];
 
       const targets = [
-        { name: DRIVE_FILE_NAME, id: "10zl7Cl81lzlkN1MJB56TfHAGxZaRhEeR" },
-        { name: "personel_egitim_listesi_at-802.xlsx", id: "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7" }
+        DRIVE_FILE_NAME,
+        "personel_egitim_listesi_at-802.xlsx"
       ];
 
       for (const gasUrl of directGasUrls) {
-        for (const target of targets) {
+        for (const targetName of targets) {
           try {
             const gasRes = await fetch(gasUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'text/plain;charset=utf-8' },
               body: JSON.stringify({
                 action: 'readExcelFromDrive',
-                fileName: target.name,
-                fileId: target.id,
+                fileName: targetName,
                 folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
               })
             });
