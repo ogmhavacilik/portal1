@@ -4421,6 +4421,7 @@ async function startServer() {
 
   // API Route: Read Excel live from Google Drive (Zero Cache & Resilient Auto-Match)
   app.post("/api/read-excel-from-drive", async (req, res) => {
+    console.log("DEBUG [Backend]: Request received for:", req.body);
     try {
       let { fileName = "at-802_sarf_ve_parca_deposu.xlsx", fileId = "", folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP" } = req.body;
       fileName = String(fileName || "").trim();
@@ -4430,6 +4431,7 @@ async function startServer() {
       // 1. LIVE GOOGLE DRIVE CHECK: Query real current files or known ID in Google Drive folder
       try {
         const driveExcels = await getDriveExcelsList(false);
+        console.log("DEBUG [Backend]: driveExcels count:", driveExcels?.length);
         if (driveExcels && driveExcels.length > 0) {
           const match = driveExcels.find((d: any) => {
             const dName = d.name || d.fileName || "";
@@ -4437,6 +4439,7 @@ async function startServer() {
           });
           if (match && match.id) {
             fileId = match.id;
+            console.log("DEBUG [Backend]: Found file match in drive:", fileId);
           }
         }
       } catch (e) {

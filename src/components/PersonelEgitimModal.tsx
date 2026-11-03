@@ -130,6 +130,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
 
       if (res.ok) {
         const json = await res.json();
+        console.log("DEBUG [Frontend]: Backend response received:", json);
         if (json && json.status === 'success' && json.base64) {
           parseExcelAndSetPeople(json.base64, false);
           if (showNotification) {
