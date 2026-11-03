@@ -70,7 +70,8 @@ export const getStandardDriveFileName = (targetKey: string, originalName?: strin
     'olay_takip_t70': 'olay_takip_cizelgesi_t-70.xlsx',
     'olay_takip_c650': 'olay_takip_cizelgesi_c-650.xlsx',
     'olay_takip_b360': 'olay_takip_cizelgesi_b-360.xlsx',
-    'olay_takip_hangar': 'olay_takip_cizelgesi_hangar.xlsx',
+    // Personel Bilgi Çizelgesi
+    '5': 'personel_bilgi_cizelgesi.xlsx',
   };
 
   if (targetMap[targetKey]) {
@@ -147,6 +148,7 @@ interface DataSyncModalProps {
   activeUnit?: string;
   activeSection?: string;
   onUpdateUnitData?: (unit: string, newCols: string[], newRows: string[][]) => void;
+  onUpdatePersonnelData?: (rows: string[][]) => void;
   onUploadMasterPdf?: (file: File) => void;
   onApplyDriveSync?: () => Promise<void> | void;
   onApplyUploadedData?: (detectedUnit: string, rows: string[][]) => void;
@@ -162,6 +164,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   activeUnit,
   activeSection,
   onUpdateUnitData,
+  onUpdatePersonnelData,
   onUploadMasterPdf,
   onApplyDriveSync,
   onApplyUploadedData,
@@ -190,7 +193,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
   if (!isOpen) return null;
 
-  const TARGET_LABELS: Record<string, { title: string; subtitle: string; isPdf?: boolean }> = {
+  const TARGET_LABELS: Record<string, { title: string; subtitle: string; isPdf?: boolean; isPersonnel?: boolean }> = {
     // Planlama & Personel Çizelgeleri
     '1': { title: '1. GÖREVLENDİRME ÇİZELGELERİ (1-GOREVLENDIRME)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL ÇİZELGELERİ', isPdf: true },
     '21': { title: '2. YAZ DÖNEMİ PLANLAMASI - BELL 429 (2-YAZ_DONEMI-BELL_429)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL ÇİZELGELERİ', isPdf: true },
@@ -199,7 +202,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     '24': { title: '2. YAZ DÖNEMİ PLANLAMASI - ANKARA BEKLEME (BELL-429)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL ÇİZELGELERİ', isPdf: true },
     '25': { title: '2. YAZ DÖNEMİ PLANLAMASI - ANKARA BEKLEME (C-650/B-360)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL ÇİZELGELERİ', isPdf: true },
     '3': { title: '3. BAKIM YETKİ ÇİZELGELERİ (3-BAKIM_YETKI)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL ÇİZELGELERİ', isPdf: true },
-    '5': { title: '5. PERSONEL BİLGİ ÇİZELGELERİ (5-PERSONEL_BILGI)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL ÇİZELGELERİ', isPdf: true },
+    '5': { title: '5. PERSONEL BİLGİ ÇİZELGELERİ (5-PERSONEL_BILGI)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL (PDF VEYA EXCEL)', isPersonnel: true },
     '6': { title: '6. PERSONEL UÇUŞ-HİZMET YILLARI (6-PERSONEL_UCUS_HIZMET)', subtitle: 'Hedef Sayfa Adresi: PLANLAMA VE PERSONEL ÇİZELGELERİ', isPdf: true },
 
     // AT-802F
@@ -273,6 +276,180 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setIsProcessing(true);
     setProgressPercent(10);
     setProgressStage('Dosya yükleniyor ve format taranıyor...');
+
+    // ÖZEL HEDEF: Form 5 (Personel Bilgi Çizelgeleri) - Hem PDF hem Excel kabul edilir
+    if (selectedTarget === '5') {
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        if (onUploadMasterPdf) {
+          onUploadMasterPdf(file);
+        }
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          let binary = '';
+          const bytes = new Uint8Array(arrayBuffer);
+          for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64Data = btoa(binary);
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "uploadPdfToDrive",
+              fileName: "personel_bilgi_cizelgesi.pdf",
+              base64Data: base64Data,
+              formId: 5,
+              month: "Genel Plan",
+              folderId: "1_fIGvuPVpC9N5on1irOfGG8OsD1KSXD0"
+            })
+          });
+        } catch (e) {
+          console.warn("Form 5 PDF Drive upload warning:", e);
+        }
+        setProgressPercent(100);
+        setProgressStage("Tamamlandı!");
+        setTimeout(() => {
+          setIsProcessing(false);
+          showNotification(`"personel_bilgi_cizelgesi.pdf" Google Drive'a başarıyla yüklendi!`);
+          onClose();
+        }, 500);
+        return;
+      }
+
+      // Excel olarak yüklenirse: dosya adı farketmeksizin oku, Google Drive'a kaydet ve E-Tabloyu güncelle
+      try {
+        setProgressPercent(30);
+        setProgressStage('Personel Excel belgesi çözümleniyor...');
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        unmergeAndFillWorksheet(sheet);
+        const rawRows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: "" });
+
+        // Header detection
+        let headerRowIdx = 0;
+        for (let r = 0; r < Math.min(15, rawRows.length); r++) {
+          const rowStr = (rawRows[r] || []).join(" ").toLowerCase();
+          if (rowStr.includes("adı") || rowStr.includes("adi") || rowStr.includes("sicil") || rowStr.includes("soyad") || rowStr.includes("personel")) {
+            headerRowIdx = r;
+            break;
+          }
+        }
+        const headers = (rawRows[headerRowIdx] || []).map(h => String(h || "").trim().toUpperCase());
+        const findCol = (keys: string[], exclude: string[] = []) => headers.findIndex(h => keys.some(k => h.includes(k)) && !exclude.some(ex => h.includes(ex)));
+
+        let cSira = findCol(["SIRA", "NO."], ["TC", "SICIL"]);
+        let cName = findCol(["ADI", "SOYADI", "PERSONEL"], ["YAKIN", "ES", "EŞ"]);
+        let cTC = findCol(["TC", "T.C.", "KİMLİK", "KIMLIK"]);
+        let cSicil = findCol(["SİCİL", "SICIL"]);
+        let cKadro = findCol(["KADRO", "UNVAN", "GÖREV", "GOREV"], ["YERI", "YERİ"]);
+        let cDogum = findCol(["DOĞUM", "DOGUM"]);
+        let cYer = findCol(["GÖREV YERİ", "GOREV YERI", "YERİ", "YERI", "BÖLGE", "BOLGE"]);
+        let cTel = findCol(["TELEFON", "TEL", "GSM"], ["EŞ", "ES", "YAKIN"]);
+        let cKan = findCol(["KAN", "GRUBU", "GRUP"]);
+        let cAdres = findCol(["ADRES", "İKAMET", "IKAMET"]);
+        let cYakin = findCol(["YAKIN", "EŞİ", "ESI", "BİRİNCİ DERECE"], ["TELEFON", "TEL"]);
+        let cEsTel = findCol(["EŞ TELEFON", "ES TELEFON", "YAKIN TELEFON", "EŞ TEL", "ES TEL", "YAKIN TEL"]);
+
+        if (cSira === -1) cSira = 0;
+        if (cName === -1) cName = 1;
+        if (cTC === -1) cTC = 2;
+        if (cSicil === -1) cSicil = 3;
+        if (cKadro === -1) cKadro = 4;
+        if (cDogum === -1) cDogum = 5;
+        if (cYer === -1) cYer = 6;
+        if (cTel === -1) cTel = 7;
+        if (cKan === -1) cKan = 8;
+        if (cAdres === -1) cAdres = 9;
+        if (cYakin === -1) cYakin = 10;
+        if (cEsTel === -1) cEsTel = 11;
+
+        const parsedPersonnelRows: string[][] = [];
+        for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+          const row = rawRows[r] || [];
+          const nameVal = String(row[cName] || "").trim();
+          const sicilVal = String(row[cSicil] || "").trim();
+          if (!nameVal && !sicilVal) continue;
+          if (nameVal.toUpperCase().includes("ADI") && nameVal.toUpperCase().includes("SOYADI")) continue;
+
+          parsedPersonnelRows.push([
+            String(parsedPersonnelRows.length + 1),
+            nameVal,
+            String(row[cTC] || "").trim(),
+            sicilVal,
+            String(row[cKadro] || "").trim(),
+            cleanAndFormatDateString(row[cDogum] || ""),
+            String(row[cYer] || "").trim(),
+            String(row[cTel] || "").trim(),
+            String(row[cKan] || "").trim(),
+            String(row[cAdres] || "").trim(),
+            String(row[cYakin] || "").trim(),
+            String(row[cEsTel] || "").trim()
+          ]);
+        }
+
+        setProgressPercent(65);
+        setProgressStage('Drive ve E-Tablo güncelleniyor...');
+
+        // Convert arrayBuffer to base64
+        let binary = '';
+        const bytes = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const base64Data = btoa(binary);
+
+        // Upload to Drive with duplicate replacement
+        const driveFileName = 'personel_bilgi_cizelgesi.xlsx';
+        try {
+          await fetch('/api/upload-techizat-excel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: driveFileName,
+              targetKey: '5',
+              base64Data: base64Data,
+              folderId: DRIVE_FOLDER_ID
+            })
+          });
+        } catch (e) {}
+
+        // Upload to Google Sheet 5-Personel_Bilgi
+        const standardHeaders = ['Sıra No', 'Adı Soyadı', 'T.C. Kimlik', 'Sicil No', 'Kadro Unvanı / Görevi', 'Doğum Tarihi', 'Görev Yeri', 'Telefon No', 'Kan Grubu', 'Adres Bilgisi', 'Yakının Adı-Soyadı', 'Eş Telefon Numaraları'];
+        try {
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'updateSheet',
+              sheetName: '5-Personel_Bilgi',
+              data: [standardHeaders, ...parsedPersonnelRows]
+            })
+          });
+        } catch (e) {}
+
+        if (onUpdatePersonnelData) {
+          onUpdatePersonnelData(parsedPersonnelRows);
+        }
+        try {
+          localStorage.setItem('excel_form_5_data', JSON.stringify(parsedPersonnelRows));
+        } catch (e) {}
+
+        setProgressPercent(100);
+        setProgressStage('Tamamlandı!');
+        setTimeout(() => {
+          setIsProcessing(false);
+          showNotification(`✅ "${file.name}" Personel Bilgi Çizelgesi başarıyla yüklendi (${parsedPersonnelRows.length} personel kaydı), Google Drive'a yedeklendi ve E-Tablo senkronize edildi!`);
+          onClose();
+        }, 500);
+        return;
+      } catch (err: any) {
+        setIsProcessing(false);
+        alert(`Personel Excel yükleme hatası: ${err?.message || err}`);
+        return;
+      }
+    }
 
     if (file.name.endsWith('.pdf')) {
       if (onUploadMasterPdf) {
@@ -608,7 +785,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               
               {/* Document Icon */}
               <div className="w-16 h-16 rounded-3xl bg-emerald-50 text-emerald-800 border border-emerald-200/60 flex items-center justify-center shadow-inner">
-                {currentMeta.isPdf ? (
+                {selectedTarget === '5' ? (
+                  <Database className="w-8 h-8 text-emerald-700" />
+                ) : currentMeta.isPdf ? (
                   <FileText className="w-8 h-8 text-emerald-700" />
                 ) : (
                   <FileSpreadsheet className="w-8 h-8 text-emerald-700" />
@@ -617,10 +796,14 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
               <div>
                 <h4 className="text-base font-black text-slate-900 uppercase tracking-wider">
-                  {currentMeta.isPdf ? 'PLANLAMA PDF BELGESİ YÜKLE' : 'TEÇHİZAT ENVANTER BELGESİ YÜKLE (EXCEL)'}
+                  {selectedTarget === '5'
+                    ? 'PERSONEL BİLGİ ÇİZELGESİ YÜKLE (PDF VEYA EXCEL)'
+                    : currentMeta.isPdf ? 'PLANLAMA PDF BELGESİ YÜKLE' : 'TEÇHİZAT ENVANTER BELGESİ YÜKLE (EXCEL)'}
                 </h4>
                 <p className="text-xs text-slate-500 font-medium mt-0.5">
-                  {currentMeta.isPdf ? 'İlgili görevlendirme veya planlama PDF dosyasını yükleyin.' : 'İlgili hava aracı grubu için Excel (.xlsx, .xls) dosyasını yükleyin.'}
+                  {selectedTarget === '5'
+                    ? 'Personel bilgi çizelgesi için hem PDF hem de Excel (.xlsx, .xls) yükleyebilirsiniz. Dosya adı fark etmeksizin sistem tarafından çözümlenir.'
+                    : currentMeta.isPdf ? 'İlgili görevlendirme veya planlama PDF dosyasını yükleyin.' : 'İlgili hava aracı grubu için Excel (.xlsx, .xls) dosyasını yükleyin.'}
                 </p>
               </div>
 
@@ -643,7 +826,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                   • MATRİS EXCEL VERİ GÜNCELLEME VE DRİVE KAYDI
                 </span>
                 <p className="text-[11px] text-slate-600 leading-relaxed font-sans">
-                  Yüklenen Excel belgesi hem <strong>Merkezi Drive'a (1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP)</strong> doğru ve standart isimle kaydedilir hem de varsa eski versiyonu otomatik silinerek yenisi ile güncellenir.
+                  {selectedTarget === '5'
+                    ? 'Yüklenen Personel Bilgi dosyası (PDF veya Excel) otomatik olarak Google Drive\'a yedeklenir, Google E-Tablo 5-Personel_Bilgi sayfasına işlenir ve eski kopyası silinerek güncellenir.'
+                    : 'Yüklenen Excel belgesi hem Merkezi Drive\'a (1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP) doğru ve standart isimle kaydedilir hem de varsa eski versiyonu otomatik silinerek yenisi ile güncellenir.'}
                 </p>
               </div>
 
@@ -651,7 +836,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept={currentMeta.isPdf ? ".pdf" : ".xlsx, .xls, .csv, .pdf"}
+                accept={selectedTarget === '5' ? ".xlsx, .xls, .pdf" : (currentMeta.isPdf ? ".pdf" : ".xlsx, .xls, .csv, .pdf")}
                 onChange={handleFileUpload}
                 className="hidden"
               />

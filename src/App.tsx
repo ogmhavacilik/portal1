@@ -238,7 +238,8 @@ import {
   Barcode,
   Image as ImageIcon,
   Gauge,
-  Flame
+  Flame,
+  GraduationCap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -264,6 +265,7 @@ import { OlayTakipCizelgesiModal } from './components/OlayTakipCizelgesiModal';
 import { BarkodOkuyucuModal } from './components/BarkodOkuyucuModal';
 import { GunTakipModal } from './components/GunTakipModal';
 import { DepoSlipPrintModal } from './components/DepoSlipPrintModal';
+import { PersonelEgitimModal } from './components/PersonelEgitimModal';
 
 export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
@@ -657,6 +659,7 @@ export type CategoryType =
   | 'T70_DETAY' 
   | 'KARA_ARACLARI_MENU'
   | 'FORM KAYITLARI' 
+  | 'EGITIM'
   | null;
 
 // Table Configuration Interfaces
@@ -2101,6 +2104,7 @@ export default function App() {
   const [olayTakipAutoOpenMvp, setOlayTakipAutoOpenMvp] = useState<boolean>(false);
   const [isBarkodOkuyucuOpen, setIsBarkodOkuyucuOpen] = useState<boolean>(false);
   const [barkodOkuyucuInitialUnit, setBarkodOkuyucuInitialUnit] = useState<string>('at802');
+  const [isPersonelEgitimModalOpen, setIsPersonelEgitimModalOpen] = useState<boolean>(false);
 
   // Akıllı Teçhizat Görsel Eşleştirici: AT-802, Hangar ve tüm birimler için seri no, parça no veya isimle tam uyumlu görseli bulur
   const findRowImageUrl = (techType: string, row: string[], images: Record<string, string>): string | null => {
@@ -4605,7 +4609,7 @@ export default function App() {
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
-  const [passwordActionType, setPasswordActionType] = useState<'global_sync' | 'filter_sync' | 'new_product' | 'depo_management' | 'gun_takip'>('global_sync');
+  const [passwordActionType, setPasswordActionType] = useState<'global_sync' | 'filter_sync' | 'new_product' | 'depo_management' | 'gun_takip' | 'personel_bilgi'>('global_sync');
   const [syncInitialStep, setSyncInitialStep] = useState<1 | 2>(1);
   const [syncInitialTarget, setSyncInitialTarget] = useState<string>('1');
 
@@ -5064,6 +5068,7 @@ export default function App() {
       case 'T70_DETAY': return 'T-70 TEÇHİZAT ALTBİRİMLERİ';
       case 'KARA_ARACLARI_MENU': return 'KARA ARAÇLARI TAKİP SİSTEMİ';
       case 'FORM KAYITLARI': return 'FORM KAYITLARI';
+      case 'EGITIM': return 'EĞİTİM';
       default: return 'SİSTEM';
     }
   };
@@ -6954,6 +6959,14 @@ export default function App() {
       setPasswordInput('');
       setPasswordError(false);
 
+      if (passwordActionType === 'personel_bilgi') {
+        setSelectedFormId(5);
+        setModalType('form_table');
+        setModalTitle(TABLE_CONFIGS[5].title);
+        setSearchQuery('');
+        return;
+      }
+
       if (passwordActionType === 'gun_takip') {
         setIsSorumluModalOpen(true);
         return;
@@ -8470,7 +8483,7 @@ export default function App() {
           </header>
 
           {/* Navigation Grid (Immersive Rounded-[2rem] Grid styling) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6 w-full px-4 mb-20 max-w-7xl">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 w-full px-4 mb-20 max-w-7xl">
             
             {/* HAVA ARAÇLARI DURUM */}
             <button
@@ -8535,6 +8548,19 @@ export default function App() {
               </div>
               <span className="font-bold tracking-widest text-sm mb-2 text-white uppercase">FORM KAYITLARI</span>
               <span className="text-[10px] opacity-60 uppercase tracking-widest font-semibold">Çizelge ve Planlar</span>
+            </button>
+
+            {/* EĞİTİM */}
+            <button
+              id="btn-egitim"
+              onClick={() => openCategory('EGITIM')}
+              className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-[2rem] flex flex-col items-center text-center hover:bg-white/25 hover:scale-[1.03] active:scale-[0.98] transition-all duration-300 cursor-pointer group focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
+            >
+              <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-white/15 transition-all shadow-md">
+                <GraduationCap className="w-8 h-8 text-white" />
+              </div>
+              <span className="font-bold tracking-widest text-sm mb-2 text-white uppercase">EĞİTİM</span>
+              <span className="text-[10px] opacity-60 uppercase tracking-widest font-semibold">Personel Eğitim Listesi</span>
             </button>
 
           </div>
@@ -9266,10 +9292,10 @@ export default function App() {
  
                     <button
                       onClick={() => {
-                        setSelectedFormId(5);
-                        setModalType('form_table');
-                        setModalTitle(TABLE_CONFIGS[5].title);
-                        setSearchQuery('');
+                        setPasswordActionType('personel_bilgi');
+                        setPasswordInput('');
+                        setPasswordError(false);
+                        setIsPasswordModalOpen(true);
                       }}
                       className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
                     >
@@ -9423,6 +9449,33 @@ export default function App() {
                       <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold font-mono text-center">
                         Mobil Barkod & Karekod Okuma, Stok ve Depo Sayım Terminali
                       </span>
+                    </button>
+                  </>
+                )}
+
+                {/* EĞİTİM Alt Butonları */}
+                {selectedCategory === 'EGITIM' && (
+                  <>
+                    <button
+                      id="btn-sub-personel-egitim"
+                      onClick={() => setIsPersonelEgitimModalOpen(true)}
+                      className="bg-white hover:bg-white/80 border border-gray-200 shadow-sm rounded-[2rem] p-8 flex flex-col items-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group"
+                    >
+                      <div className="w-16 h-16 bg-[#0b3d1d]/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-[#0b3d1d]/20 transition-all shadow-sm">
+                        <GraduationCap className="w-8 h-8 text-[#0b3d1d]" />
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">
+                        Personel Eğitim Listesi
+                      </span>
+                      <span className="text-[10px] text-gray-500 uppercase tracking-widest font-mono mb-2">
+                        Eğitim ve Sertifikasyon Çizelgesi
+                      </span>
+
+                      <div className="mt-auto pt-4 border-t border-gray-100 w-full text-center">
+                        <span className="text-[10px] text-emerald-800 font-extrabold uppercase tracking-widest font-mono bg-emerald-50 px-3 py-1 rounded-full">
+                          AÇMAK İÇİN TIKLAYINIZ ➜
+                        </span>
+                      </div>
                     </button>
                   </>
                 )}
@@ -14320,6 +14373,14 @@ export default function App() {
           onDownloadLatestExcel={(unit) => {
             exportTechizatToExcel(unit as any, [], [], `${unit.toUpperCase()} ENVANTERİ`);
           }}
+          onUpdatePersonnelData={(newRows) => {
+            setExcelForm5Data(newRows);
+            try { localStorage.setItem('excel_form_5_data', JSON.stringify(newRows)); } catch(e){}
+            const now = new Date();
+            const dateStr = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
+            setFormUpdateDates(prev => ({ ...prev, 5: dateStr }));
+            try { localStorage.setItem('form_update_dates', JSON.stringify({ ...formUpdateDates, 5: dateStr })); } catch(e){}
+          }}
           showNotification={(msg) => showNotification(msg)}
         />
       )}
@@ -14413,6 +14474,15 @@ export default function App() {
           mode="techizat"
           techizatList={techizatModalList}
           inventory={[]}
+          showNotification={(msg) => showNotification(msg)}
+        />
+      )}
+
+      {/* PERSONEL EĞİTİM LİSTESİ MODALI */}
+      {isPersonelEgitimModalOpen && (
+        <PersonelEgitimModal
+          isOpen={isPersonelEgitimModalOpen}
+          onClose={() => setIsPersonelEgitimModalOpen(false)}
           showNotification={(msg) => showNotification(msg)}
         />
       )}

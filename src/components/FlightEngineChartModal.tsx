@@ -1524,27 +1524,25 @@ export const FlightEngineChartModal: React.FC<FlightEngineChartModalProps> = ({
                   </g>
                 )}
 
-                {/* 7. ANLIK OYNATMA ZAMAN ÇİZGİSİ */}
-                <line
-                  x1={currentPlaneX}
-                  y1={padding.top}
-                  x2={currentPlaneX}
-                  y2={padding.top + plotHeight}
-                  stroke="#ea580c"
-                  strokeWidth="1.5"
-                  strokeDasharray="2 2"
-                  opacity="0.85"
-                />
-
-                {/* 8. GRAFİK İMLECİ: AT-802F UÇAK İKONU */}
-                <g
-                  transform={`translate(${currentPlaneX - 20}, ${currentPlaneY - 20})`}
-                  className="transition-transform duration-75"
-                >
-                  <circle cx="20" cy="20" r="16" fill="rgba(245, 158, 11, 0.2)" stroke="#ea580c" strokeWidth="1" className="animate-ping" />
-                  <foreignObject width="40" height="40">
-                    <At802fPlaneIcon className="w-10 h-10 drop-shadow-md" heading={currentHeading} />
-                  </foreignObject>
+                {/* 7. ANLIK OYNATMA ZAMAN ÇİZGİSİ VE UÇAK İKONU (BİRBİRİNE KESİNLİKLE KİLİTLİ, GECİKMESİZ) */}
+                <g className="pointer-events-none">
+                  <line
+                    x1={currentPlaneX}
+                    y1={padding.top}
+                    x2={currentPlaneX}
+                    y2={padding.top + plotHeight}
+                    stroke="#ea580c"
+                    strokeWidth="2"
+                    strokeDasharray="3 3"
+                    opacity="0.9"
+                  />
+                  {/* Uçak İkonu (Çizgi ile tam aynı X ve veri Y koordinatında kilitli) */}
+                  <g transform={`translate(${currentPlaneX - 20}, ${currentPlaneY - 20})`}>
+                    <circle cx="20" cy="20" r="14" fill="rgba(245, 158, 11, 0.3)" stroke="#ea580c" strokeWidth="1.5" />
+                    <foreignObject width="40" height="40">
+                      <At802fPlaneIcon className="w-10 h-10 drop-shadow-md" heading={currentHeading} />
+                    </foreignObject>
+                  </g>
                 </g>
               </g>
 

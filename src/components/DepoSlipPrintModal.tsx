@@ -1859,11 +1859,9 @@ ${LINE}`;
                       onChange={(e) => setBulkSelectedDepo(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white font-bold text-xs focus:border-amber-500 focus:outline-none cursor-pointer"
                     >
-                      <option value="ANKARA DEPO">🏢 Ankara Depo</option>
-                      <option value="ESKİŞEHİR DEPO">🏬 Eskişehir Depo</option>
-                      <option value="İZMİR DEPO">🏬 İzmir Depo</option>
-                      <option value="GÜVERCİNLİK DEPO">🏬 Güvercinlik Depo</option>
-                      <option value="TÜM DEPOLAR">🌐 Tüm Depolar</option>
+                      {uniqueExcelDepotNames.map((dName, idx) => (
+                        <option key={idx} value={dName}>🏢 {dName}</option>
+                      ))}
                     </select>
                   </div>
 

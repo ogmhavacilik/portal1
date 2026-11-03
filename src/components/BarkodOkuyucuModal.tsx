@@ -109,6 +109,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     category: 'sarf' | 'kimyasal';
     quantity: number;
     depot: string;
+    originUnit?: string;
     isAutoFilled?: boolean;
   }>>([]);
   const [isAddTalepItemOpen, setIsAddTalepItemOpen] = useState<boolean>(false);
@@ -116,6 +117,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
   const [talepDate, setTalepDate] = useState<string>('');
   const [talepTailNo, setTalepTailNo] = useState<string>((AIRCRAFT_TAILS.at802 && AIRCRAFT_TAILS.at802[0]) || 'ORMAN 21 (OR-2021) - AT-802');
   const [talepTailNoOther, setTalepTailNoOther] = useState<string>('');
+  const [talepWorkOrderOrCrs, setTalepWorkOrderOrCrs] = useState<string>('');
   const [talepRequestedBy, setTalepRequestedBy] = useState<string>('');
   const [talepNotes, setTalepNotes] = useState<string>('');
   const [isTalepSubmitting, setIsTalepSubmitting] = useState<boolean>(false);
@@ -142,6 +144,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
       category: 'sarf' | 'kimyasal';
       quantity: number;
       depot: string;
+      originUnit?: string;
       isAutoFilled?: boolean;
     }> = [];
 
@@ -153,11 +156,15 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
       const itemName = target.description || target.name || (target as any).MALZEME_ADI || '';
       const category = target.category === 'kimyasal' ? 'kimyasal' : 'sarf';
       const locUpper = (target.lokasyonNo || target.location || '').toUpperCase();
-      let depot = 'ANKARA';
-      if (locUpper.includes('KARAİN') || locUpper.includes('KARAIN')) depot = 'KARAİN';
-      else if (locUpper.includes('ÇANAKKALE')) depot = 'ÇANAKKALE';
-      else if (locUpper.includes('MİLAS')) depot = 'MİLAS';
-      else if (locUpper.includes('BURSA')) depot = 'BURSA';
+      const targetUnitRaw = String(target.unit || (target as any).depo || '').toLowerCase();
+      const isBellItem = targetUnitRaw.includes('bell') || locUpper.includes('BELL');
+      let depot = isBellItem ? 'ANKARA (BELL 429)' : 'ANKARA';
+      if (!isBellItem) {
+        if (locUpper.includes('KARAİN') || locUpper.includes('KARAIN')) depot = 'KARAİN';
+        else if (locUpper.includes('ÇANAKKALE')) depot = 'ÇANAKKALE';
+        else if (locUpper.includes('MİLAS')) depot = 'MİLAS';
+        else if (locUpper.includes('BURSA')) depot = 'BURSA';
+      }
 
       initialList.push({
         id: `item_${Date.now()}_0`,
@@ -167,6 +174,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
         category,
         quantity: 1,
         depot,
+        originUnit: isBellItem ? 'bell429' : (targetUnitRaw || selectedUnit || 'at802'),
         isAutoFilled: true
       });
     } else if (manualCodeInput.trim()) {
@@ -202,11 +210,17 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     const itemName = item.description || item.name || (item as any).MALZEME_ADI || '';
     const category = item.category === 'kimyasal' ? 'kimyasal' : 'sarf';
     const locUpper = (item.lokasyonNo || item.location || '').toUpperCase();
-    let depot = 'ANKARA';
-    if (locUpper.includes('KARAİN') || locUpper.includes('KARAIN')) depot = 'KARAİN';
-    else if (locUpper.includes('ÇANAKKALE')) depot = 'ÇANAKKALE';
-    else if (locUpper.includes('MİLAS')) depot = 'MİLAS';
-    else if (locUpper.includes('BURSA')) depot = 'BURSA';
+    const itemUnitRaw = String(item.unit || (item as any).depo || '').toLowerCase();
+    const isBellItem = itemUnitRaw.includes('bell') || locUpper.includes('BELL');
+    const detectedOriginUnit = isBellItem ? 'bell429' : (itemUnitRaw || selectedUnit || 'at802');
+
+    let depot = isBellItem ? 'ANKARA (BELL 429)' : 'ANKARA';
+    if (!isBellItem) {
+      if (locUpper.includes('KARAİN') || locUpper.includes('KARAIN')) depot = 'KARAİN';
+      else if (locUpper.includes('ÇANAKKALE')) depot = 'ÇANAKKALE';
+      else if (locUpper.includes('MİLAS')) depot = 'MİLAS';
+      else if (locUpper.includes('BURSA')) depot = 'BURSA';
+    }
 
     setTalepItemList(prev => [...prev, {
       id: `item_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
@@ -216,6 +230,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
       category,
       quantity: 1,
       depot,
+      originUnit: detectedOriginUnit,
       isAutoFilled: true
     }]);
     setIsAddTalepItemOpen(false);
@@ -245,19 +260,28 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     try {
       const finalTailNo = talepTailNo === 'Diğer' ? (talepTailNoOther.trim() || '-') : talepTailNo;
       const payload = {
-        items: talepItemList.map(it => ({
-          pn: it.pn.trim(),
-          sn: it.sn.trim() || '-',
-          itemName: it.itemName.trim() || it.pn.trim(),
-          category: it.category,
-          quantity: Number(it.quantity) || 1,
-          date: talepDate.trim(),
-          depot: it.depot.trim().toUpperCase(),
-          tailNo: finalTailNo,
-          requestedBy: talepRequestedBy.trim(),
-          notes: talepNotes.trim(),
-          unit: initialUnit || 'at802'
-        }))
+        items: talepItemList.map(it => {
+          const isBellItem = (it.originUnit === 'bell429') ||
+            (it.depot && it.depot.toUpperCase().includes('BELL'));
+          const targetUnit = isBellItem ? 'bell429' : (it.originUnit || selectedUnit || initialUnit || 'at802');
+          const isCrossDepot = targetUnit !== (selectedUnit || initialUnit || 'at802');
+
+          return {
+            pn: it.pn.trim(),
+            sn: it.sn.trim() || '-',
+            itemName: it.itemName.trim() || it.pn.trim(),
+            category: it.category,
+            quantity: Number(it.quantity) || 1,
+            date: talepDate.trim(),
+            depot: it.depot.trim().toUpperCase(),
+            tailNo: finalTailNo,
+            workOrderOrCrs: talepWorkOrderOrCrs.trim(),
+            workOrderNo: talepWorkOrderOrCrs.trim(),
+            requestedBy: talepRequestedBy.trim(),
+            notes: talepNotes.trim() + (isCrossDepot ? ` [DİKKAT: Ürün ${targetUnit.toUpperCase()} deposuna aittir. Kuyruk: ${finalTailNo}. ${targetUnit.toUpperCase()} onayına iletildi.]` : ''),
+            unit: targetUnit
+          };
+        })
       };
 
       const res = await fetch('/api/onay-bekleyenler', {
@@ -1366,11 +1390,34 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                           <h4 className="text-base sm:text-lg font-black text-white mt-0.5">
                             {matchedItem.description || matchedItem.name}
                           </h4>
-                          <div className="flex items-center gap-3 text-xs font-mono text-slate-300 mt-1 flex-wrap">
+                          {Boolean(
+                            (matchedItem.unit && String(matchedItem.unit).toLowerCase().includes('bell')) ||
+                            (matchedItem.lokasyonNo && String(matchedItem.lokasyonNo).toUpperCase().includes('BELL')) ||
+                            (matchedItem.location && String(matchedItem.location).toUpperCase().includes('BELL'))
+                          ) && selectedUnit !== 'bell429' && (
+                            <div className="mt-2 p-2.5 bg-amber-950/70 border border-amber-500/60 rounded-xl text-amber-200 text-xs flex items-center gap-2">
+                              <span className="text-base shrink-0">⚠️</span>
+                              <div>
+                                <span className="font-black text-amber-300">FARKLI DEPO UYARISI (BELL 429):</span> Bu malzeme Bell 429 deposuna aittir. {selectedUnit.toUpperCase()} kuyruğu için çıkış yapıldığında doğrudan stoktan düşmez; <strong>Bell-429 Depo Onayına</strong> talep olarak iletilir.
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2.5 text-xs font-mono text-slate-300 mt-2 flex-wrap">
+                            <span className="px-2.5 py-1 rounded-lg bg-indigo-950/90 text-indigo-300 border border-indigo-500/60 font-black text-[11px] flex items-center gap-1.5 shadow-xs">
+                              ✈ HAVA ARACI DEPOSU: {
+                                ((matchedItem.unit && String(matchedItem.unit).toLowerCase().includes('bell')) ||
+                                 (matchedItem.lokasyonNo && String(matchedItem.lokasyonNo).toUpperCase().includes('BELL')) ||
+                                 (matchedItem.location && String(matchedItem.location).toUpperCase().includes('BELL')) ||
+                                 (matchedItem.partNumber && String(matchedItem.partNumber).toUpperCase() === 'AS3209-236') ||
+                                 (matchedItem.pn && String(matchedItem.pn).toUpperCase() === 'AS3209-236'))
+                                  ? 'BELL 429 DEPOSU'
+                                  : (matchedItem.unit ? `${String(matchedItem.unit).toUpperCase()} DEPOSU` : 'AT-802F DEPOSU')
+                              }
+                            </span>
                             <span>P/N: <strong className="text-emerald-300">{matchedItem.partNumber || matchedItem.pn || '-'}</strong></span>
                             <span>S/N: <strong>{matchedItem.serialAndNotes || matchedItem.sn || '-'}</strong></span>
-                            <span className="px-2 py-0.5 rounded bg-yellow-400 text-black font-black text-[10px]">
-                              RAF: {matchedItem.lokasyonNo || matchedItem.location || 'ANKARA DEPO'}
+                            <span className="px-2.5 py-1 rounded-lg bg-amber-400 text-slate-950 font-black text-[11px] shadow-sm">
+                              📍 RAF / LOKASYON: {matchedItem.lokasyonNo || matchedItem.location || 'A-1 (ANKARA)'}
                             </span>
                           </div>
                         </div>
@@ -1388,59 +1435,108 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
                       {/* Regional Stock Distribution Cards */}
                       <div>
-                        <div className="text-[10px] font-bold text-slate-400 uppercase font-mono mb-2">
-                          GÜNCEL DEPO BÖLGE MEVCUTLARI (CANLI STOK)
+                        <div className="text-[10px] font-bold text-slate-400 uppercase font-mono mb-2 flex items-center justify-between">
+                          <span>GÜNCEL DEPO BÖLGE MEVCUTLARI (CANLI STOK)</span>
+                          {Boolean(
+                            (matchedItem.unit && String(matchedItem.unit).toLowerCase().includes('bell')) ||
+                            (matchedItem.lokasyonNo && String(matchedItem.lokasyonNo).toUpperCase().includes('BELL')) ||
+                            (matchedItem.location && String(matchedItem.location).toUpperCase().includes('BELL')) ||
+                            (matchedItem.partNumber && String(matchedItem.partNumber).toUpperCase() === 'AS3209-236') ||
+                            (matchedItem.pn && String(matchedItem.pn).toUpperCase() === 'AS3209-236')
+                          ) && (
+                            <span className="text-[10px] text-amber-400 font-bold bg-amber-950/80 px-2.5 py-0.5 rounded-full border border-amber-500/50">
+                              BELL 429: Yalnızca Ankara Merkez Deposu Mevcuttur
+                            </span>
+                          )}
                         </div>
 
-                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
-                          {/* Ankara */}
-                          <div className="p-2.5 bg-slate-900 border border-[#ff9900] rounded-xl text-center">
-                            <div className="text-[9px] font-bold text-slate-400 uppercase">ANKARA</div>
-                            <div className="text-lg font-black text-white font-mono mt-0.5">
-                              {matchedItem.ankaraMevcut || 0}
+                        {Boolean(
+                          (matchedItem.unit && String(matchedItem.unit).toLowerCase().includes('bell')) ||
+                          (matchedItem.lokasyonNo && String(matchedItem.lokasyonNo).toUpperCase().includes('BELL')) ||
+                          (matchedItem.location && String(matchedItem.location).toUpperCase().includes('BELL')) ||
+                          (matchedItem.partNumber && String(matchedItem.partNumber).toUpperCase() === 'AS3209-236') ||
+                          (matchedItem.pn && String(matchedItem.pn).toUpperCase() === 'AS3209-236')
+                        ) ? (
+                          /* Bell 429: Sadece Ankara ve Toplam Stok */
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                            {/* Ankara */}
+                            <div className="p-3 bg-slate-900 border-2 border-[#ff9900] rounded-xl text-center shadow-md">
+                              <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">ANKARA (BELL MERKEZ DEPO)</div>
+                              <div className="text-2xl font-black text-white font-mono mt-1">
+                                {matchedItem.ankaraMevcut || 0}
+                              </div>
                             </div>
-                          </div>
 
-                          {/* Milas */}
-                          <div className="p-2.5 bg-slate-900 border border-[#ff9900] rounded-xl text-center">
-                            <div className="text-[9px] font-bold text-slate-400 uppercase">MİLAS</div>
-                            <div className="text-lg font-black text-white font-mono mt-0.5">
-                              {matchedItem.milasMevcut || 0}
-                            </div>
-                          </div>
+                            {/* Muayenede varsa */}
+                            {(matchedItem.muayeneToplam || matchedItem.muayeneGiden || 0) > 0 && (
+                              <div className="p-3 bg-slate-900 border border-purple-500 rounded-xl text-center">
+                                <div className="text-[10px] font-bold text-purple-300 uppercase tracking-wider">MUAYENEDE / BAKIMDA</div>
+                                <div className="text-2xl font-black text-purple-300 font-mono mt-1">
+                                  {matchedItem.muayeneToplam || matchedItem.muayeneGiden || 0}
+                                </div>
+                              </div>
+                            )}
 
-                          {/* Karain */}
-                          <div className="p-2.5 bg-slate-900 border border-[#ffff00] rounded-xl text-center">
-                            <div className="text-[9px] font-bold text-slate-400 uppercase">KARAİN</div>
-                            <div className="text-lg font-black text-white font-mono mt-0.5">
-                              {matchedItem.karainMevcut || 0}
+                            {/* Toplam */}
+                            <div className="p-3 bg-slate-900 border-2 border-cyan-400 rounded-xl text-center shadow-lg">
+                              <div className="text-[10px] font-black text-cyan-300 uppercase tracking-wider">TOPLAM STOK</div>
+                              <div className="text-2xl font-black text-cyan-300 font-mono mt-1">
+                                {matchedItem.toplamStok || matchedItem.ankaraMevcut || 0}
+                              </div>
                             </div>
                           </div>
+                        ) : (
+                          /* AT-802 vb.: Tüm bölgeler */
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                            {/* Ankara */}
+                            <div className="p-2.5 bg-slate-900 border border-[#ff9900] rounded-xl text-center">
+                              <div className="text-[9px] font-bold text-slate-400 uppercase">ANKARA</div>
+                              <div className="text-lg font-black text-white font-mono mt-0.5">
+                                {matchedItem.ankaraMevcut || 0}
+                              </div>
+                            </div>
 
-                          {/* Çanakkale */}
-                          <div className="p-2.5 bg-slate-900 border border-[#92d050] rounded-xl text-center">
-                            <div className="text-[9px] font-bold text-slate-400 uppercase">ÇANAKKALE</div>
-                            <div className="text-lg font-black text-white font-mono mt-0.5">
-                              {matchedItem.canakkaleMevcut || 0}
+                            {/* Milas */}
+                            <div className="p-2.5 bg-slate-900 border border-[#ff9900] rounded-xl text-center">
+                              <div className="text-[9px] font-bold text-slate-400 uppercase">MİLAS</div>
+                              <div className="text-lg font-black text-white font-mono mt-0.5">
+                                {matchedItem.milasMevcut || 0}
+                              </div>
                             </div>
-                          </div>
 
-                          {/* Bursa */}
-                          <div className="p-2.5 bg-slate-900 border border-[#ff00ff] rounded-xl text-center">
-                            <div className="text-[9px] font-bold text-slate-400 uppercase">BURSA</div>
-                            <div className="text-lg font-black text-white font-mono mt-0.5">
-                              {matchedItem.bursaMevcut || 0}
+                            {/* Karain */}
+                            <div className="p-2.5 bg-slate-900 border border-[#ffff00] rounded-xl text-center">
+                              <div className="text-[9px] font-bold text-slate-400 uppercase">KARAİN</div>
+                              <div className="text-lg font-black text-white font-mono mt-0.5">
+                                {matchedItem.karainMevcut || 0}
+                              </div>
                             </div>
-                          </div>
 
-                          {/* Toplam */}
-                          <div className="p-2.5 bg-slate-900 border-2 border-cyan-400 rounded-xl text-center shadow-md">
-                            <div className="text-[9px] font-black text-cyan-300 uppercase">TOPLAM STOK</div>
-                            <div className="text-lg font-black text-cyan-300 font-mono mt-0.5">
-                              {matchedItem.toplamStok || 0}
+                            {/* Çanakkale */}
+                            <div className="p-2.5 bg-slate-900 border border-[#92d050] rounded-xl text-center">
+                              <div className="text-[9px] font-bold text-slate-400 uppercase">ÇANAKKALE</div>
+                              <div className="text-lg font-black text-white font-mono mt-0.5">
+                                {matchedItem.canakkaleMevcut || 0}
+                              </div>
+                            </div>
+
+                            {/* Bursa */}
+                            <div className="p-2.5 bg-slate-900 border border-[#ff00ff] rounded-xl text-center">
+                              <div className="text-[9px] font-bold text-slate-400 uppercase">BURSA</div>
+                              <div className="text-lg font-black text-white font-mono mt-0.5">
+                                {matchedItem.bursaMevcut || 0}
+                              </div>
+                            </div>
+
+                            {/* Toplam */}
+                            <div className="p-2.5 bg-slate-900 border-2 border-cyan-400 rounded-xl text-center shadow-md">
+                              <div className="text-[9px] font-black text-cyan-300 uppercase">TOPLAM STOK</div>
+                              <div className="text-lg font-black text-cyan-300 font-mono mt-0.5">
+                                {matchedItem.toplamStok || 0}
+                              </div>
                             </div>
                           </div>
-                        </div>
+                        )}
                       </div>
 
                       {/* FORM ONE SORGULA & ÜRÜN TALEBİ BUTTONS & RESULTS */}
@@ -2224,6 +2320,21 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                       className="w-full mt-1.5 px-3 py-1.5 bg-amber-950/40 border border-amber-500/50 rounded-lg text-amber-200 font-mono text-xs focus:outline-none focus:border-amber-500 font-bold"
                     />
                   )}
+                  {/* İŞ EMRİ / CRS NO */}
+                  <div className="mt-2">
+                    <label className="block text-[9.5px] font-black text-amber-300 uppercase font-mono mb-1 flex items-center justify-between">
+                      <span>İŞ EMRİ (WORK ORDER) / CRS NO *</span>
+                      <span className="text-[9px] text-amber-400 font-normal">Zorunlu</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={talepWorkOrderOrCrs}
+                      onChange={(e) => setTalepWorkOrderOrCrs(e.target.value)}
+                      placeholder="Örn: WO-2024-092 veya CRS-802-044"
+                      required
+                      className="w-full px-3 py-2 bg-amber-950/40 border border-amber-500/50 rounded-xl text-amber-100 font-mono text-xs focus:outline-none focus:border-amber-400 font-bold"
+                    />
+                  </div>
                 </div>
 
                 {/* Tarih */}

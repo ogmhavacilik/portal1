@@ -518,7 +518,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
       return;
     }
 
-    // Background download: Keep screen blurred with high-speed download message until blob is ready
+    // Background download without blocking UI with blurred screen
     setDownloadedBlobUrl('');
     setLoadingActivePdf(true);
 
@@ -1507,9 +1507,15 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
             </div>
           </div>
 
-          {/* Main Area: Native PDF Viewer via iframe (Background loaded only) */}
+          {/* Main Area: Direct Native PDF Viewer via Blob URL (Never Drive preview iframe) */}
           <div className="flex-1 bg-slate-950 overflow-hidden relative flex flex-col">
-            {activePdfBlobUrl && !loadingActivePdf ? (
+            {loadingActivePdf ? (
+              <div className="h-full w-full flex flex-col items-center justify-center p-8 text-center bg-slate-950 text-slate-300 select-none">
+                <RefreshCw className="w-10 h-10 mb-3 text-emerald-400 animate-spin" />
+                <p className="text-sm font-bold text-white mb-1 font-sans">PDF Dökümanı Arka Planda İndiriliyor...</p>
+                <p className="text-xs text-slate-400 font-sans max-w-md">Metin seçimi ve parça no kopyalama için doğrudan tarayıcı PDF görüntüleyicisine aktarılıyor.</p>
+              </div>
+            ) : activePdfBlobUrl ? (
               <iframe
                 src={`${activePdfBlobUrl}#toolbar=1&view=FitH`}
                 className="w-full h-full border-0 bg-slate-950"
@@ -1517,31 +1523,9 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                 id="tech-pub-iframe"
               />
             ) : (
-              /* Ekran Flu (Blurred) & Drive'dan Yüksek Hızla İndiriliyor Bildirimi */
-              <div className="h-full w-full flex flex-col items-center justify-center p-8 text-center bg-slate-950/80 backdrop-blur-md z-20 select-none">
-                <div className="relative mb-6">
-                  <div className="w-20 h-20 rounded-full border-4 border-emerald-500/20 border-t-emerald-400 animate-spin flex items-center justify-center" />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <FileText className="w-8 h-8 text-emerald-400 animate-pulse" />
-                  </div>
-                </div>
-
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-mono font-black mb-3 uppercase tracking-wider">
-                  <span>⏳ BEKLEYİNİZ...</span>
-                </div>
-
-                <h3 className="text-emerald-400 font-black text-base sm:text-lg tracking-wider uppercase mb-2">
-                  BEKLEYİNİZ...
-                </h3>
-                
-                <p className="text-xs text-slate-300 max-w-md leading-relaxed font-medium">
-                  Belge hazırlanıyor, bekleyiniz.
-                </p>
-
-                <div className="mt-5 flex items-center gap-2 text-[11px] font-mono text-slate-400 bg-slate-900/80 border border-slate-800 px-4 py-2 rounded-xl">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                  <span>{activePub.title || activePub.fileName}</span>
-                </div>
+              <div className="h-full w-full flex flex-col items-center justify-center p-8 text-center bg-slate-950 text-slate-400 select-none">
+                <FileText className="w-12 h-12 mb-3 text-slate-600" />
+                <p className="text-xs font-mono text-slate-300">Döküman indirilemedi veya erişim sağlanamadı.</p>
               </div>
             )}
           </div>

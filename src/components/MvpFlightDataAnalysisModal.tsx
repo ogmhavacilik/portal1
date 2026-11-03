@@ -676,6 +676,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
   // Çoklu Uçuş Analiz Modu (Kullanıcı İsteği: Varsayılan olarak tikli)
   const [isMultiFlightMode, setIsMultiFlightMode] = useState<boolean>(true);
   const [multiFlights, setMultiFlights] = useState<MultiFlightItem[]>([]);
+  const [totalScannedFilesCount, setTotalScannedFilesCount] = useState<number>(0);
   const [activeFlightIndex, setActiveFlightIndex] = useState<number>(0);
   const [isFlightDropdownOpen, setIsFlightDropdownOpen] = useState<boolean>(false);
 
@@ -2080,6 +2081,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     setIsAnalyzing(true);
     setParsingProgress(5);
     setParsingStatusText(`Toplam ${files.length} uçuş dosyası taranıyor...`);
+    setTotalScannedFilesCount(files.length);
 
     const items: MultiFlightItem[] = [];
 
@@ -2099,7 +2101,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
             fileName: file.name,
             content: text,
             result: res,
-            isVisited: i === 0, // İlk uçuş açılışta tıklandı/incelendi olarak yeşil işaretlenir
+            isVisited: false,
             yellowCount: res.yellowCount,
             redCount: res.redCount,
             durationExceededCount: res.durationExceededCount
@@ -2113,13 +2115,29 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     setIsAnalyzing(false);
     setParsingProgress(100);
 
-    if (items.length > 0) {
-      setMultiFlights(items);
+    // KULLANICI İSTEĞİ 5: Yalnızca Ng limit ikazı (sarı veya kırmızı) olan uçuşları filtrele
+    const ngOnlyItems = items.filter(it => {
+      if (!it.result) return false;
+      const hasNgEpisode = it.result.episodes.some(ep => ep.colKey === 'ng' || ep.colName.toUpperCase().includes('NG'));
+      const hasNgPeakExceedance = it.result.peakNg !== null && it.result.peakNg >= 104.0;
+      return hasNgEpisode || hasNgPeakExceedance;
+    });
+
+    const displayItems = ngOnlyItems.length > 0 ? ngOnlyItems : items;
+    displayItems[0] = { ...displayItems[0], isVisited: true };
+
+    if (displayItems.length > 0) {
+      setMultiFlights(displayItems);
       setActiveFlightIndex(0);
-      setSelectedFile(items[0].file);
-      setAnalysisResult(items[0].result);
-      applyAnalysisToForm(items[0].result, selectedTail);
-      showNotification(`✅ ${items.length} adet uçuş kaydı başarıyla tarandı. 1. uçuş seçildi.`, 'success');
+      setSelectedFile(displayItems[0].file);
+      setAnalysisResult(displayItems[0].result);
+      applyAnalysisToForm(displayItems[0].result, selectedTail);
+
+      if (ngOnlyItems.length > 0) {
+        showNotification(`✅ Toplam ${files.length} uçuş tarandı. Ng limit ikazı saptanan ${ngOnlyItems.length} uçuş listelendi.`, 'success');
+      } else {
+        showNotification(`ℹ️ Toplam ${files.length} uçuş tarandı. Ng ikazı saptanan uçuş bulunamadı (Tüm uçuşlar listelendi).`, 'info');
+      }
     } else {
       showNotification('Seçilen uçuş dosyaları taranırken hata oluştu.', 'error');
     }
@@ -2502,7 +2520,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                         <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between text-[11px] font-black text-slate-600 uppercase tracking-wider">
                           <span className="flex items-center gap-1.5 text-emerald-900">
                             <Plane className="w-3.5 h-3.5 text-emerald-700" />
-                            <span>Taranan Uçuşlar ({multiFlights.length})</span>
+                            <span>Taranan Uçuşlar ({multiFlights.length} Ng İkazlı {totalScannedFilesCount > 0 ? `/ ${totalScannedFilesCount} Taranan` : ''})</span>
                           </span>
                           <span className="text-emerald-700 font-mono text-[10px] bg-emerald-100 px-2 py-0.5 rounded-full">
                             {multiFlights.filter(f => f.isVisited).length} / {multiFlights.length} İncelendi

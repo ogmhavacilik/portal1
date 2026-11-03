@@ -122,13 +122,36 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
   const fetchAllStocks = async () => {
     try {
       setIsStockLoading(true);
-      // 1. Önce doğrudan Google E-Tablo içindeki sayfalardan GET ile canlı oku (Netlify ile tam uyumlu)
+
+      // 1. Önce doğrudan sunucu API'sini çağır (Canlı Google E-Tablo ve Drive ile senkron)
+      try {
+        const res = await fetch('/api/yasam-destek/all-stocks', { cache: 'no-store' });
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.status === 'success') {
+            const cy = Array.isArray(json.canYelegi) ? json.canYelegi : [];
+            const sa = Array.isArray(json.spareAir) ? json.spareAir : [];
+            const hk = Array.isArray(json.helmetKit) ? json.helmetKit : [];
+
+            if (cy.length > 0 || sa.length > 0 || hk.length > 0) {
+              setCanYelegiList(cy);
+              setSpareAirList(sa);
+              setHelmetKitList(hk);
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('API all-stocks fetch error:', e);
+      }
+
+      // 2. Yedek: Google Apps Script doğrudan E-Tablo sorgusu
       try {
         const scriptTarget = YASAM_DESTEK_SCRIPT_URL;
         const [cyRes, saRes, hkRes] = await Promise.all([
-          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("CAN YELEĞİ")}&t=${Date.now()}`),
-          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("SPARE AIR")}&t=${Date.now()}`),
-          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("HELMET KIT")}&t=${Date.now()}`)
+          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("CAN YELEĞİ STOK")}&t=${Date.now()}`),
+          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("SPARE AIR STOK")}&t=${Date.now()}`),
+          fetch(`${scriptTarget}?action=readSheet&sheetName=${encodeURIComponent("HELMET KIT VE DAVID CLARK KULAK VE DOLGU")}&t=${Date.now()}`)
         ]);
 
         let hasLiveGasData = false;
@@ -138,14 +161,15 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
           if (cyData && Array.isArray(cyData.data) && cyData.data.length > 0) {
             hasLiveGasData = true;
             setCanYelegiList(cyData.data.map((r: any, i: number) => ({
-              sNo: r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
-              malzemeAdi: r['MALZEME ADI'] || 'CAN YELEĞİ',
-              parcaNo: r['PARÇA NO'] || r['PARÇA NO (P/N)'] || r['P/N'] || '-',
-              seriNo: r['SERİ NO'] || r['SERİ NO (S/N)'] || r['S/N'] || '-',
+              sNo: r['S. NO'] || r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
+              malzemeAdi: r['MALZEME ADI'] || 'LIFE WEST - CAN YELEĞİ',
+              parcaNo: r['PARÇA NO'] || r['P/N'] || 'S-7200-511',
+              seriNo: r['SERİ NO'] || r['S/N'] || '-',
               disNo: r['DIŞ NO'] || '-',
               durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
               aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
-              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-',
+              tarih: r['TARİH'] || r['TARİH / BİTİŞ'] || '-'
             })));
           }
         }
@@ -155,13 +179,14 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
           if (saData && Array.isArray(saData.data) && saData.data.length > 0) {
             hasLiveGasData = true;
             setSpareAirList(saData.data.map((r: any, i: number) => ({
-              sNo: r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
-              malzemeAdi: r['MALZEME ADI'] || 'SPARE AIR',
-              parcaNo: r['PARÇA NO'] || r['PARÇA NO (P/N)'] || r['P/N'] || '-',
-              seriNo: r['SERİ NO'] || r['SERİ NO (S/N)'] || r['S/N'] || '-',
+              sNo: r['S. NO'] || r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
+              malzemeAdi: r['MALZEME ADI'] || 'SPARE AIR (HEED 3)',
+              parcaNo: r['PARÇA NO'] || r['P/N'] || '175-001-CE',
+              seriNo: r['SERİ NO'] || r['S/N'] || '-',
               durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
               aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
-              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-',
+              tarih: r['TARİH'] || r['TARİH / BİTİŞ'] || '-'
             })));
           }
         }
@@ -171,22 +196,23 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
           if (hkData && Array.isArray(hkData.data) && hkData.data.length > 0) {
             hasLiveGasData = true;
             setHelmetKitList(hkData.data.map((r: any, i: number) => ({
-              sNo: r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
-              malzemeAdi1: r['MALZEME ADI 1'] || r['MALZEME ADI'] || 'KASK',
-              parcaNo1: r['PARÇA NO 1'] || r['PARÇA NO'] || '-',
-              seriNo1: r['SERİ NO 1'] || r['SERİ NO'] || '-',
-              malzemeAdi2: r['MALZEME ADI 2'] || 'KULAKLIK',
-              parcaNo2: r['PARÇA NO 2'] || '-',
-              seriNo2: r['SERİ NO 2'] || '-',
+              sNo: r['S. NO'] || r['SIRA NO'] || r['S.NO'] || r['SIRA'] || i + 1,
+              malzemeAdi1: r['MALZEME ADI 1'] || 'HELMET KIT',
+              parcaNo1: r['PARÇA NO 1'] || '18852G-01',
+              seriNo1: r['SERİ NO 1'] || '-',
+              malzemeAdi2: r['MALZEME ADI 2'] || 'DAVID CLARK',
+              parcaNo2: r['PARÇA NO 2'] || 'H-10-13X',
+              seriNo2: r['KULAKLIK S/N'] || r['SERİ NO 2'] || '-',
               durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
               aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
-              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+              notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-',
+              tarih: r['TARİH'] || r['TARİH / BİTİŞ'] || '-'
             })));
           }
         }
 
         if (!hasLiveGasData) {
-          const driveRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileName=${encodeURIComponent('hava_araçları_yer_destek_at-802.xlsx')}&folderId=1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP&t=${Date.now()}`);
+          const driveRes = await fetch(`${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileName=${encodeURIComponent('at-802_yasam_destek_ekipmanlari.xlsx')}&folderId=1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP&t=${Date.now()}`);
           if (driveRes.ok) {
             const driveResult = await driveRes.json();
             if (driveResult && driveResult.status === 'success' && driveResult.base64) {
@@ -196,48 +222,51 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
               for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
               const workbook = XLSX.read(bytes, { type: 'array' });
 
-              const cySheet = workbook.Sheets['CAN YELEĞİ'] || workbook.Sheets['CAN YELEGI'];
-              const saSheet = workbook.Sheets['SPARE AIR'];
-              const hkSheet = workbook.Sheets['HELMET KIT'] || workbook.Sheets['KASK KİTİ'];
+              const cySheet = workbook.Sheets['CAN YELEĞİ STOK'] || workbook.Sheets['CAN YELEĞİ'] || workbook.Sheets['CAN YELEGI'];
+              const saSheet = workbook.Sheets['SPARE AIR STOK'] || workbook.Sheets['SPARE AIR'];
+              const hkSheet = workbook.Sheets['HELMET KIT VE DAVID CLARK'] || workbook.Sheets['HELMET KIT VE DAVID CLARK KULAK VE DOLGU'] || workbook.Sheets['HELMET KIT'];
 
               if (cySheet) {
                 const cyRows: any[] = XLSX.utils.sheet_to_json(cySheet);
                 setCanYelegiList(cyRows.map((r, i) => ({
-                  sNo: r['SIRA NO'] || r['S.NO'] || i + 1,
-                  malzemeAdi: r['MALZEME ADI'] || 'CAN YELEĞİ',
-                  parcaNo: r['PARÇA NO'] || r['P/N'] || '-',
+                  sNo: r['S. NO'] || r['SIRA NO'] || r['S.NO'] || i + 1,
+                  malzemeAdi: r['MALZEME ADI'] || 'LIFE WEST - CAN YELEĞİ',
+                  parcaNo: r['PARÇA NO'] || r['P/N'] || 'S-7200-511',
                   seriNo: r['SERİ NO'] || r['S/N'] || '-',
                   disNo: r['DIŞ NO'] || '-',
                   durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
                   aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
-                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-',
+                  tarih: r['TARİH'] || r['TARİH / BİTİŞ'] || '-'
                 })));
               }
               if (saSheet) {
                 const saRows: any[] = XLSX.utils.sheet_to_json(saSheet);
                 setSpareAirList(saRows.map((r, i) => ({
-                  sNo: r['SIRA NO'] || r['S.NO'] || i + 1,
-                  malzemeAdi: r['MALZEME ADI'] || 'SPARE AIR',
-                  parcaNo: r['PARÇA NO'] || r['P/N'] || '-',
+                  sNo: r['S. NO'] || r['SIRA NO'] || r['S.NO'] || i + 1,
+                  malzemeAdi: r['MALZEME ADI'] || 'SPARE AIR (HEED 3)',
+                  parcaNo: r['PARÇA NO'] || r['P/N'] || '175-001-CE',
                   seriNo: r['SERİ NO'] || r['S/N'] || '-',
                   durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
                   aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
-                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-',
+                  tarih: r['TARİH'] || r['TARİH / BİTİŞ'] || '-'
                 })));
               }
               if (hkSheet) {
                 const hkRows: any[] = XLSX.utils.sheet_to_json(hkSheet);
                 setHelmetKitList(hkRows.map((r, i) => ({
-                  sNo: r['SIRA NO'] || r['S.NO'] || i + 1,
-                  malzemeAdi1: r['MALZEME ADI 1'] || 'KASK',
-                  parcaNo1: r['PARÇA NO 1'] || '-',
+                  sNo: r['S. NO'] || r['SIRA NO'] || r['S.NO'] || i + 1,
+                  malzemeAdi1: r['MALZEME ADI 1'] || 'HELMET KIT',
+                  parcaNo1: r['PARÇA NO 1'] || '18852G-01',
                   seriNo1: r['SERİ NO 1'] || '-',
-                  malzemeAdi2: r['MALZEME ADI 2'] || 'KULAKLIK',
-                  parcaNo2: r['PARÇA NO 2'] || '-',
-                  seriNo2: r['SERİ NO 2'] || '-',
+                  malzemeAdi2: r['MALZEME ADI 2'] || 'DAVID CLARK',
+                  parcaNo2: r['PARÇA NO 2'] || 'H-10-13X',
+                  seriNo2: r['KULAKLIK S/N'] || r['SERİ NO 2'] || '-',
                   durum: r['DURUMU'] || r['DURUM'] || 'DEPODA',
                   aciklamalar: r['TESLİM EDİLEN PERSONEL/BÖLGE'] || r['AÇIKLAMALAR'] || 'DEPODA',
-                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-'
+                  notlar: r['NOTLAR'] || r['AÇIKLAMA'] || '-',
+                  tarih: r['TARİH'] || r['TARİH / BİTİŞ'] || '-'
                 })));
               }
             }
@@ -246,19 +275,6 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
       } catch (gasErr) {
         console.warn("GAS direct sheet read error:", gasErr);
       }
-
-      // 2. Local proxy'yi dene (yalnızca yerel geliştirme ortamında)
-      try {
-        const res = await fetch('/api/yasam-destek/all-stocks', { cache: 'no-store' });
-        if (res.ok) {
-          const json = await res.json();
-          if (json && json.status === 'success') {
-            setCanYelegiList(json.canYelegi || []);
-            setSpareAirList(json.spareAir || []);
-            setHelmetKitList(json.helmetKit || []);
-          }
-        }
-      } catch (e) {}
     } catch (e) {
       console.warn('Stock fetch error:', e);
     } finally {
@@ -316,15 +332,44 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
     }
   };
 
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+
+  const handleManualRefresh = async () => {
+    try {
+      setIsManualRefreshing(true);
+      await Promise.all([
+        onRefresh(),
+        fetchAllStocks(),
+        fetchPersonnel()
+      ]);
+      showNotification('✅ Yaşam Destek verileri ve görev zimmetleri en güncel haliyle senkronize edildi.');
+    } catch (err: any) {
+      showNotification('❌ Güncelleme hatası: ' + (err.message || 'Bilinmeyen hata'));
+    } finally {
+      setIsManualRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     fetchAllStocks();
     fetchPersonnel();
-    // Auto refresh every 10 minutes
+    
+    // Auto refresh every 20 seconds for continuous live data tracking
     const interval = setInterval(() => {
       fetchAllStocks();
-      fetchPersonnel();
-    }, 10 * 60 * 1000);
-    return () => clearInterval(interval);
+      onRefresh();
+    }, 20 * 1000);
+
+    const handleFocus = () => {
+      fetchAllStocks();
+      onRefresh();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
   // Stock Row Edit Modal State
@@ -469,6 +514,187 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
     }
   };
 
+  // =========================================================================
+  // GÖREV VE ZİMMETLER SATIRLARINI SÜREKLİ TAKİP ETME VE OTOMATİK DOLGULAMA
+  // =========================================================================
+  const activeZimmetRecords = useMemo(() => {
+    return records.filter(r => (r.durum || '').trim().toUpperCase() === 'GÖREVDE');
+  }, [records]);
+
+  // Aktif görevdeki seri numaralarının haritalandırılması
+  const activeLVMap = useMemo(() => {
+    const map = new Map<string, { person: string; date: string; gorevYeri: string }>();
+    activeZimmetRecords.forEach(r => {
+      const sn = (r.lifeVestSn || '').trim().toUpperCase();
+      if (sn && sn !== '-') {
+        map.set(sn, {
+          person: r.personelAdi,
+          date: r.baslangicTarihi,
+          gorevYeri: r.gorevYeri
+        });
+      }
+    });
+    return map;
+  }, [activeZimmetRecords]);
+
+  const activeSAMap = useMemo(() => {
+    const map = new Map<string, { person: string; date: string; gorevYeri: string }>();
+    activeZimmetRecords.forEach(r => {
+      const sn = (r.spareAirSn || '').trim().toUpperCase();
+      if (sn && sn !== '-') {
+        map.set(sn, {
+          person: r.personelAdi,
+          date: r.baslangicTarihi,
+          gorevYeri: r.gorevYeri
+        });
+      }
+    });
+    return map;
+  }, [activeZimmetRecords]);
+
+  const activeHKMap = useMemo(() => {
+    const map = new Map<string, { person: string; date: string; gorevYeri: string }>();
+    activeZimmetRecords.forEach(r => {
+      const sn = (r.helmetKitSn || '').trim().toUpperCase();
+      if (sn && sn !== '-') {
+        map.set(sn, {
+          person: r.personelAdi,
+          date: r.baslangicTarihi,
+          gorevYeri: r.gorevYeri
+        });
+      }
+    });
+    return map;
+  }, [activeZimmetRecords]);
+
+  // CAN YELEĞİ STOK: Görev zimmetleri satırlarını sürekli takip eder, devirde yeni personeli yazar, depoya teslimde DEPODA yazar ve dolguyu ayarlar
+  const trackedCanYelegi = useMemo(() => {
+    return canYelegiList.map(item => {
+      const status = (item.durum || '').toUpperCase().trim();
+      if (status === 'ONARIMDA' || status === 'BAKIMA GİDECEK' || status === 'KAYIT SİLME') {
+        return item;
+      }
+
+      const sn = (item.seriNo || '').trim().toUpperCase();
+      let assigned = activeLVMap.get(sn);
+      if (!assigned) {
+        for (const [k, v] of activeLVMap.entries()) {
+          if (sn === k || (sn && k.includes(sn)) || (k && sn.includes(k))) {
+            assigned = v;
+            break;
+          }
+        }
+      }
+
+      if (assigned) {
+        return {
+          ...item,
+          durum: 'GÖREV BÖLGESİNDE',
+          aciklamalar: assigned.person,
+          gorevYeri: assigned.gorevYeri,
+          color: '#92d050',
+          tarih: assigned.date || item.tarih || 'DEVAM EDİYOR'
+        };
+      }
+
+      return {
+        ...item,
+        durum: 'DEPODA',
+        aciklamalar: 'DEPODA',
+        color: '#ffffff',
+        tarih: '-'
+      };
+    });
+  }, [canYelegiList, activeLVMap]);
+
+  // SPARE AIR STOK: Görev zimmetlerini sürekli takip eder
+  const trackedSpareAir = useMemo(() => {
+    return spareAirList.map(item => {
+      const status = (item.durum || '').toUpperCase().trim();
+      if (status === 'ONARIMDA' || status === 'BAKIMA GİDECEK' || status === 'KAYIT SİLME') {
+        return item;
+      }
+
+      const sn = (item.seriNo || '').trim().toUpperCase();
+      let assigned = activeSAMap.get(sn);
+      if (!assigned) {
+        for (const [k, v] of activeSAMap.entries()) {
+          if (sn === k || (sn && k.includes(sn)) || (k && sn.includes(k))) {
+            assigned = v;
+            break;
+          }
+        }
+      }
+
+      if (assigned) {
+        return {
+          ...item,
+          durum: 'GÖREV BÖLGESİNDE',
+          aciklamalar: assigned.person,
+          gorevYeri: assigned.gorevYeri,
+          color: '#92d050',
+          tarih: assigned.date || item.tarih || 'DEVAM EDİYOR'
+        };
+      }
+
+      return {
+        ...item,
+        durum: 'DEPODA',
+        aciklamalar: 'DEPODA',
+        color: '#ffffff',
+        tarih: '-'
+      };
+    });
+  }, [spareAirList, activeSAMap]);
+
+  // HELMET KIT VE DAVID CLARK: Görev zimmetlerini sürekli takip eder
+  const trackedHelmetKit = useMemo(() => {
+    return helmetKitList.map(item => {
+      const status = (item.durum || '').toUpperCase().trim();
+      if (status === 'ONARIMDA' || status === 'BAKIMA GİDECEK' || status === 'KAYIT SİLME') {
+        return item;
+      }
+
+      const sn1 = (item.seriNo1 || '').trim().toUpperCase();
+      const sn2 = (item.seriNo2 || '').trim().toUpperCase();
+      let assigned = (sn2 ? activeHKMap.get(sn2) : null) || (sn1 ? activeHKMap.get(sn1) : null);
+      if (!assigned) {
+        for (const [k, v] of activeHKMap.entries()) {
+          const pureK = k.split(' (')[0].trim().toUpperCase();
+          if (
+            (sn2 && (sn2 === pureK || sn2.includes(pureK) || pureK.includes(sn2))) ||
+            (sn1 && (sn1 === pureK || sn1.includes(pureK) || pureK.includes(sn1))) ||
+            (sn1 && k.includes(sn1)) ||
+            (sn2 && k.includes(sn2)) ||
+            (item.aciklamalar && item.aciklamalar.toUpperCase() === pureK)
+          ) {
+            assigned = v;
+            break;
+          }
+        }
+      }
+
+      if (assigned) {
+        return {
+          ...item,
+          durum: 'GÖREV BÖLGESİNDE',
+          aciklamalar: assigned.person,
+          gorevYeri: assigned.gorevYeri,
+          color: '#92d050',
+          tarih: assigned.date || item.tarih || 'DEVAM EDİYOR'
+        };
+      }
+
+      return {
+        ...item,
+        durum: 'DEPODA',
+        aciklamalar: 'DEPODA',
+        color: '#ffffff',
+        tarih: '-'
+      };
+    });
+  }, [helmetKitList, activeHKMap]);
+
   // Search Filtered Lists
   const filterItemByStatus = (item: any) => {
     if (!filterStatus || filterStatus === 'ALL') return true;
@@ -484,7 +710,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
   };
 
   const filteredCanYelegi = useMemo(() => {
-    const statusFiltered = canYelegiList.filter(filterItemByStatus);
+    const statusFiltered = trackedCanYelegi.filter(filterItemByStatus);
     if (!searchQuery.trim()) return statusFiltered;
     const q = searchQuery.toLowerCase();
     return statusFiltered.filter(item => 
@@ -494,10 +720,10 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
       (item.durum || '').toLowerCase().includes(q) ||
       (item.tarih || '').toLowerCase().includes(q)
     );
-  }, [canYelegiList, searchQuery, filterStatus]);
+  }, [trackedCanYelegi, searchQuery, filterStatus]);
 
   const filteredSpareAir = useMemo(() => {
-    const statusFiltered = spareAirList.filter(filterItemByStatus);
+    const statusFiltered = trackedSpareAir.filter(filterItemByStatus);
     if (!searchQuery.trim()) return statusFiltered;
     const q = searchQuery.toLowerCase();
     return statusFiltered.filter(item => 
@@ -506,10 +732,10 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
       (item.durum || '').toLowerCase().includes(q) ||
       (item.tarih || '').toLowerCase().includes(q)
     );
-  }, [spareAirList, searchQuery, filterStatus]);
+  }, [trackedSpareAir, searchQuery, filterStatus]);
 
   const filteredHelmetKit = useMemo(() => {
-    const statusFiltered = helmetKitList.filter(filterItemByStatus);
+    const statusFiltered = trackedHelmetKit.filter(filterItemByStatus);
     if (!searchQuery.trim()) return statusFiltered;
     const q = searchQuery.toLowerCase();
     return statusFiltered.filter(item => 
@@ -519,10 +745,10 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
       (item.durum || '').toLowerCase().includes(q) ||
       (item.tarih || '').toLowerCase().includes(q)
     );
-  }, [helmetKitList, searchQuery, filterStatus]);
+  }, [trackedHelmetKit, searchQuery, filterStatus]);
 
   const filteredZimmetler = useMemo(() => {
-    const activeRecords = records; // Filtreyi kaldırarak tüm kayıtları (ANKARA DEPO TESLİM dahil) gösteriyoruz.
+    const activeRecords = records;
     const statusFiltered = activeRecords.filter(r => {
       if (!filterStatus || filterStatus === 'ALL') return true;
       const d = (r.durum || '').toUpperCase().trim();
@@ -544,6 +770,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
       (r.notlar || '').toLowerCase().includes(q)
     );
   }, [records, searchQuery, filterStatus]);
+
   const STATUS_LEGEND = [
     { label: 'BOŞTA', bg: 'bg-white', text: 'text-slate-800', border: 'border-slate-300' },
     { label: 'ONARIMDA', bg: 'bg-[#ffff00]', text: 'text-slate-900', border: 'border-amber-400' },
@@ -555,11 +782,11 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
   // Helper function to resolve row color
   const getRowColorClass = (item: any) => {
     // 1. Status based coloring (Priority)
-    const status = (item.durum || '').toUpperCase();
+    const status = (item.durum || '').toUpperCase().trim();
     
-    if (status === 'KAYIT SİLME') return 'bg-[#ff0000] text-white font-bold';
-    if (status === 'BAKIMA GİDECEK') return 'bg-[#00b0f0] text-slate-900 font-bold';
-    if (status === 'ONARIMDA') return 'bg-[#ffff00] text-slate-900 font-bold';
+    if (status === 'KAYIT SİLME') return 'bg-[#ff0000] text-white font-black';
+    if (status === 'BAKIMA GİDECEK') return 'bg-[#00b0f0] text-slate-900 font-black';
+    if (status === 'ONARIMDA') return 'bg-[#ffff00] text-slate-900 font-black';
     
     // Check if it's explicitly in Depot status, regardless of aciklamalar
     if (status === 'DEPODA' || status === 'BOŞTA') {
@@ -567,15 +794,15 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
     }
 
     // 2. Assignment status check
-    const assigned = (item.aciklamalar || '').trim();
-    const isDepot = !assigned || assigned === '-' || assigned.toUpperCase() === 'DEPODA' || assigned.toUpperCase() === 'BOŞTA';
+    const assigned = (item.aciklamalar || '').trim().toUpperCase();
+    const isDepot = !assigned || assigned === '-' || assigned === 'DEPODA' || assigned === 'BOŞTA';
 
     if (isDepot) {
       return 'bg-white hover:bg-slate-50 text-slate-800'; // Dolgusuz
     }
     
-    // Default assigned row color
-    return 'bg-[#92d050]/80 text-slate-900 font-bold hover:bg-[#92d050]';
+    // Default assigned row color (Yeşil Dolgu #92d050)
+    return 'bg-[#92d050] text-slate-900 font-bold hover:brightness-95';
   };
 
   // Open New Zimmet Form
@@ -948,7 +1175,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
         </div>
       </div>
 
-      {/* SEARCH BAR (KAYIT ARA) */}
+      {/* SEARCH BAR & CANLI VERİ YENİLEME / AKSİYON ÇUBUĞU */}
       <div className="bg-white rounded-2xl p-3 border border-slate-200 shadow-xs flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[240px]">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -968,6 +1195,39 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
             Temizle
           </button>
         )}
+
+        {/* 🔄 VERİLERİ YENİLE BUTONU (Kullanıcı Talebi: Canlı en güncel veriyi çeker) */}
+        <button
+          type="button"
+          onClick={handleManualRefresh}
+          disabled={isManualRefreshing || isStockLoading}
+          className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-md transition-all disabled:opacity-50 shrink-0"
+          title="Google E-Tablo ve depodaki en güncel canlı verileri anında çek ve yenile"
+        >
+          <RefreshCw className={`w-4 h-4 ${isManualRefreshing || isStockLoading ? 'animate-spin' : ''}`} />
+          <span>{isManualRefreshing || isStockLoading ? 'GÜNCELLENİYOR...' : '🔄 VERİLERİ YENİLE'}</span>
+        </button>
+
+        {/* 🚀 YENİ ZİMMET VER BUTONU */}
+        <button
+          type="button"
+          onClick={openNewModal}
+          className="px-4 py-2 bg-[#0b3d1d] hover:bg-[#072713] active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-md transition-all shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          <span>YENİ ZİMMET VER</span>
+        </button>
+
+        {/* 📥 EXCEL İNDİR BUTONU */}
+        <button
+          type="button"
+          onClick={handleExportMasterExcel}
+          className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-950 border border-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs transition shrink-0"
+          title="Yaşam Destek Excel Dosyasını Renkli Formatıyla İndir"
+        >
+          <Download className="w-3.5 h-3.5 text-emerald-700" />
+          <span>Excel İndir</span>
+        </button>
       </div>
 
       {/* 2. EXCEL SAYFA SEKMELERİ (Sheet Tabs) */}
@@ -981,7 +1241,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
               : 'bg-white text-slate-700 hover:bg-slate-50'
           }`}
         >
-          <span>🦺 CAN YELEĞİ STOK ({canYelegiList.length})</span>
+          <span>🦺 CAN YELEĞİ STOK ({trackedCanYelegi.length})</span>
         </button>
 
         <button
@@ -993,7 +1253,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
               : 'bg-white text-slate-700 hover:bg-slate-50'
           }`}
         >
-          <span>💨 SPARE AIR STOK ({spareAirList.length})</span>
+          <span>💨 SPARE AIR STOK ({trackedSpareAir.length})</span>
         </button>
 
         <button
@@ -1005,7 +1265,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
               : 'bg-white text-slate-700 hover:bg-slate-50'
           }`}
         >
-          <span>🪖 HELMET KIT VE DAVID CLARK KULAK VE DOLGU ({helmetKitList.length})</span>
+          <span>🪖 HELMET KIT VE DAVID CLARK KULAK VE DOLGU ({trackedHelmetKit.length})</span>
         </button>
 
         <button
@@ -1075,7 +1335,23 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
                     <td className="py-2 px-3 border-r border-slate-300 font-mono font-black">{item.seriNo}</td>
                     <td className="py-2 px-3 border-r border-slate-300 font-mono font-black">{item.disNo || '-'}</td>
                     <td className="py-2 px-4 border-r border-slate-300 text-left font-sans text-slate-700 font-medium">{item.notlar || item.aciklama || '-'}</td>
-                    <td className="py-2 px-4 border-r border-slate-300 text-left font-sans font-black text-slate-900">{item.aciklamalar || '-'}</td>
+                    <td className="py-2 px-4 border-r border-slate-300 text-left font-sans font-black">
+                      {item.aciklamalar === 'DEPODA' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-black bg-slate-100 text-slate-700 border border-slate-300">
+                          🏢 DEPODA
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-slate-950 font-black text-xs">
+                          <span>👤</span>
+                          <span>{item.aciklamalar}</span>
+                          {item.gorevYeri && item.gorevYeri !== '-' && (
+                            <span className="text-[10px] font-bold text-slate-700 bg-emerald-100/90 px-1.5 py-0.2 rounded border border-emerald-300">
+                              📍 {item.gorevYeri}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 px-3 border-r border-slate-300 font-mono">{item.tarih || (item.durum === 'DEPODA' || item.durum === 'BOŞTA' ? '-' : 'DEVAM EDİYOR')}</td>
                     <td className="py-2 px-2">
                       <div className="flex flex-wrap items-center justify-center gap-1">
@@ -1128,7 +1404,23 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
                     <td className="py-2 px-3 border-r border-slate-300 font-mono">{item.parcaNo}</td>
                     <td className="py-2 px-3 border-r border-slate-300 font-mono font-black">{item.seriNo}</td>
                     <td className="py-2 px-4 border-r border-slate-300 text-left font-sans text-slate-700 font-medium">{item.notlar || item.aciklama || '-'}</td>
-                    <td className="py-2 px-4 border-r border-slate-300 text-left font-sans font-black text-slate-900">{item.aciklamalar || '-'}</td>
+                    <td className="py-2 px-4 border-r border-slate-300 text-left font-sans font-black">
+                      {item.aciklamalar === 'DEPODA' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-black bg-slate-100 text-slate-700 border border-slate-300">
+                          🏢 DEPODA
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-slate-950 font-black text-xs">
+                          <span>👤</span>
+                          <span>{item.aciklamalar}</span>
+                          {item.gorevYeri && item.gorevYeri !== '-' && (
+                            <span className="text-[10px] font-bold text-slate-700 bg-cyan-100/90 px-1.5 py-0.2 rounded border border-cyan-300">
+                              📍 {item.gorevYeri}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 px-3 border-r border-slate-300 font-mono">{item.tarih || (item.durum === 'DEPODA' || item.durum === 'BOŞTA' ? '-' : 'DEVAM EDİYOR')}</td>
                     <td className="py-2 px-2">
                       <div className="flex flex-wrap items-center justify-center gap-1">
@@ -1187,7 +1479,23 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
                     <td className="py-2 px-3 border-r border-slate-300 font-mono">{item.parcaNo2}</td>
                     <td className="py-2 px-3 border-r border-slate-300 font-mono font-black text-indigo-950">{item.seriNo2 || '-'}</td>
                     <td className="py-2 px-4 border-r border-slate-300 text-left font-sans text-slate-700 font-medium">{item.notlar || item.aciklama || '-'}</td>
-                    <td className="py-2 px-4 border-r border-slate-300 text-left font-sans font-black text-slate-900">{item.aciklamalar || '-'}</td>
+                    <td className="py-2 px-4 border-r border-slate-300 text-left font-sans font-black">
+                      {item.aciklamalar === 'DEPODA' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-black bg-slate-100 text-slate-700 border border-slate-300">
+                          🏢 DEPODA
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-slate-950 font-black text-xs">
+                          <span>👤</span>
+                          <span>{item.aciklamalar}</span>
+                          {item.gorevYeri && item.gorevYeri !== '-' && (
+                            <span className="text-[10px] font-bold text-slate-700 bg-purple-100/90 px-1.5 py-0.2 rounded border border-purple-300">
+                              📍 {item.gorevYeri}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 px-3 border-r border-slate-300 font-mono">{item.tarih || (item.durum === 'DEPODA' || item.durum === 'BOŞTA' ? '-' : 'DEVAM EDİYOR')}</td>
                     <td className="py-2 px-2">
                       <div className="flex flex-wrap items-center justify-center gap-1">

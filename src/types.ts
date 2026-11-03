@@ -38,6 +38,8 @@ export interface DepoTransaction {
   destinationLoc?: string;
   tailNo?: string;
   workOrderNo?: string;
+  workOrderOrCrs?: string;
+  crsNo?: string;
   quantity: number;
   unit?: string;
   operator?: string; // TESLİM ALAN

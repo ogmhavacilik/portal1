@@ -540,6 +540,7 @@ export const deduplicateSheets = (sheets: OlayTakipSheet[]): OlayTakipSheet[] =>
     const isYellow =
       norm.includes('sari ikaz') ||
       norm.includes('sarı ikaz') ||
+      (norm.includes('ikaz') && (norm.includes('sari') || norm.includes('ng') || norm.includes('takip'))) ||
       (sheet.id && sheet.id.includes('sari_ikaz'));
 
     if (isYellow) {
@@ -547,6 +548,7 @@ export const deduplicateSheets = (sheets: OlayTakipSheet[]): OlayTakipSheet[] =>
         yellowSheetAdded = true;
         result.push({
           ...sheet,
+          id: 'sheet_at802_sari_ikaz',
           sheetName: 'Sarı İkaz Ng Takip',
           title: sheet.title || 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI GOOGLE E-TABLO & EXCEL)'
         });
@@ -2597,7 +2599,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                                   >
                                     {rawLinkVal ? (
                                       <div className="flex items-center gap-1.5 flex-wrap">
-                                        {rawLinkVal.split('\n').map((lnk, lIdx) => {
+                                        {rawLinkVal.split(/[\r\n|,]+/).map((lnk, lIdx) => {
                                           const u = lnk.trim();
                                           if (!u) return null;
                                           return (

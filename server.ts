@@ -1012,6 +1012,125 @@ async function startServer() {
     }
   });
 
+  // API Route: Update single inventory row directly in warehouse Excel file on disk and in Google Drive
+  app.post("/api/update-depo-excel-item", async (req, res) => {
+    try {
+      const { fileName, unit, category, oldItem, newItem, action, folderId } = req.body;
+      if (!fileName || !newItem) {
+        return res.status(400).json({ status: "error", message: "Eksik parametre." });
+      }
+
+      const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
+      let fileBuf: Buffer | null = null;
+      if (fs.existsSync(localExcelPath)) {
+        fileBuf = fs.readFileSync(localExcelPath);
+      }
+
+      const xlsxModule = await import("xlsx");
+      const xlsx = (xlsxModule as any).default || xlsxModule;
+
+      let wb: any;
+      if (fileBuf) {
+        wb = xlsx.read(fileBuf, { type: "buffer" });
+      } else {
+        wb = xlsx.utils.book_new();
+      }
+
+      const sheetName = wb.SheetNames[0] || "LİSTE";
+      const sheet = wb.Sheets[sheetName];
+
+      if (sheet) {
+        const rawRows: any[][] = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+        if (rawRows && rawRows.length > 0) {
+          let headerRowIdx = 0;
+          for (let r = 0; r < Math.min(15, rawRows.length); r++) {
+            const rowStr = (rawRows[r] || []).map((c: any) => String(c || "").toUpperCase().trim()).join(" ");
+            if (rowStr.includes("DESCRIPTION") || rowStr.includes("MALZEME") || rowStr.includes("PARÇA") || rowStr.includes("P/N")) {
+              headerRowIdx = r;
+              break;
+            }
+          }
+
+          const targetPn = (oldItem?.partNumber || oldItem?.pn || newItem?.partNumber || newItem?.pn || "").trim().toLowerCase();
+          const targetDesc = (oldItem?.description || oldItem?.name || newItem?.description || newItem?.name || "").trim().toLowerCase();
+
+          let targetRowIdx = -1;
+          for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+            const row = rawRows[r];
+            if (!row || row.length === 0) continue;
+            const rDesc = String(row[1] || row[0] || "").trim().toLowerCase();
+            const rPn = String(row[2] || row[1] || "").trim().toLowerCase();
+            if ((targetPn && rPn === targetPn) || (targetDesc && rDesc === targetDesc)) {
+              targetRowIdx = r;
+              break;
+            }
+          }
+
+          if (targetRowIdx >= 0) {
+            const row = rawRows[targetRowIdx];
+            if (row[1] !== undefined) row[1] = newItem.description || newItem.name || row[1];
+            if (row[2] !== undefined) row[2] = newItem.partNumber || newItem.pn || row[2];
+            if (row[3] !== undefined) row[3] = newItem.serialAndNotes || newItem.sn || row[3];
+            if (row[4] !== undefined) row[4] = newItem.lokasyonNo || newItem.location || row[4];
+            if (newItem.gelen !== undefined && row[5] !== undefined) row[5] = newItem.gelen;
+            if (newItem.toplamStok !== undefined && row[6] !== undefined) row[6] = newItem.toplamStok;
+            if (newItem.ankaraMevcut !== undefined && row[8] !== undefined) row[8] = newItem.ankaraMevcut;
+            if (newItem.karainMevcut !== undefined && row[11] !== undefined) row[11] = newItem.karainMevcut;
+            if (newItem.canakkaleMevcut !== undefined && row[14] !== undefined) row[14] = newItem.canakkaleMevcut;
+            if (newItem.milasMevcut !== undefined && row[17] !== undefined) row[17] = newItem.milasMevcut;
+            if (newItem.bursaMevcut !== undefined && row[20] !== undefined) row[20] = newItem.bursaMevcut;
+          }
+
+          const newSheet = xlsx.utils.aoa_to_sheet(rawRows);
+          wb.Sheets[sheetName] = newSheet;
+        }
+      }
+
+      const updatedBuffer = xlsx.write(wb, { bookType: "xlsx", type: "buffer" });
+      fs.writeFileSync(localExcelPath, updatedBuffer);
+
+      const base64Data = updatedBuffer.toString("base64");
+      excelFileCache.set(fileName, {
+        base64: base64Data,
+        updated: new Date().toLocaleString("tr-TR"),
+        fileId: ""
+      });
+
+      (async () => {
+        try {
+          const scriptUrls = [
+            "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+            "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+          ];
+          for (const sUrl of scriptUrls) {
+            try {
+              await fetch(sUrl, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({
+                  action: "uploadTechizatExcel",
+                  fileName: fileName,
+                  base64Data: base64Data,
+                  folderId: folderId || "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP",
+                  unitName: `${unit ? String(unit).toUpperCase() : "DEPO"} Excel Güncelleme`,
+                  overwrite: true,
+                  replaceExisting: true,
+                  updateIfExists: true
+                })
+              });
+              break;
+            } catch (e) {}
+          }
+        } catch (e) {}
+      })();
+
+      return res.json({ status: "success", message: `"${fileName}" Excel dosyası güncellendi ve Google Drive'a kaydedildi!` });
+    } catch (err: any) {
+      console.error("update-depo-excel-item error:", err);
+      return res.status(500).json({ status: "error", message: err.message });
+    }
+  });
+
   // API Route: Depo Transfers & Bulk Excel Sync
   function getDepoSheetNameForUnit(unit?: string): string {
     if (!unit) return "DEPO HAREKET GEÇMİŞİ-AT-802";
@@ -1048,6 +1167,7 @@ async function startServer() {
             String(singleNewTx.quantity !== undefined ? singleNewTx.quantity : (singleNewTx.adet || 1)),
             singleNewTx.date || singleNewTx.timestamp || "",
             String(singleNewTx.islemTuru || singleNewTx.type || "TRANSFER").toUpperCase(),
+            singleNewTx.workOrderOrCrs || singleNewTx.workOrderNo || singleNewTx.crsNo || "-",
             singleNewTx.sn || singleNewTx.serialNumber || "-",
             singleNewTx.tailNo || singleNewTx.kuyrukKodu || singleNewTx.kuyrukNo || "-",
             singleNewTx.operator || singleNewTx.teslimAlan || "-",
@@ -1082,7 +1202,7 @@ async function startServer() {
           return tSheet === sName || tSheet === targetSheetName || !t.sheetName || tSheet.includes("AT-802");
         });
 
-        const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
+        const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
         const rows = [
           headers,
           ...sheetSpecificTransfers.map((t: any) => {
@@ -1092,6 +1212,7 @@ async function startServer() {
               String(t.quantity !== undefined ? t.quantity : (t.adet || 1)),
               t.date || t.timestamp || "",
               String(t.islemTuru || t.type || "TRANSFER").toUpperCase(),
+              t.workOrderOrCrs || t.workOrderNo || t.crsNo || "-",
               t.sn || t.serialNumber || "-",
               t.tailNo || t.kuyrukKodu || t.kuyrukNo || "-",
               t.operator || t.teslimAlan || "-",
@@ -1153,10 +1274,93 @@ async function startServer() {
     }
   };
 
-  const isInvalidPortalItem = (name: string) => {
-    const u = String(name || '').toUpperCase();
-    return !u.trim() || u.includes("GÖREVLENDİRME") || u.includes("PLANLAMASI") || u.includes("ÇİZELGE") || u.includes("BIRIM ADI") || u.includes("GÜNCELLEME TARİH");
+  const isInvalidPortalItem = (itemOrName: any) => {
+    let name = '';
+    let type = '';
+    let date = '';
+    let sn = '';
+    let location = '';
+
+    if (typeof itemOrName === 'string') {
+      name = itemOrName;
+    } else if (itemOrName && typeof itemOrName === 'object') {
+      name = itemOrName.itemName || itemOrName.name || itemOrName.itemDesc || '';
+      type = itemOrName.type || itemOrName.islemTuru || '';
+      date = itemOrName.date || itemOrName.timestamp || '';
+      sn = itemOrName.sn || itemOrName.serialNumber || '';
+      location = itemOrName.location || itemOrName.depoYeri || '';
+    }
+
+    if (!name || typeof name !== 'string') return true;
+    const trimStr = name.trim();
+    const u = trimStr.toUpperCase();
+    if (u.length < 2) return true;
+
+    if (itemOrName && typeof itemOrName === 'object') {
+      const hasType = Boolean(type && String(type).trim());
+      const hasDate = Boolean(date && String(date).trim());
+      const hasSn = Boolean(sn && String(sn).trim() && String(sn).trim() !== '-');
+      const hasLoc = Boolean(location && String(location).trim() && String(location).trim() !== '-');
+      if (!hasType && !hasDate && !hasSn && !hasLoc) {
+        return true;
+      }
+    }
+
+    if (
+      u.startsWith("BIRIM (") ||
+      u.startsWith("BIRIM(") ||
+      u.includes("PERSONEL") ||
+      u.includes("HIZMET YILLARI") ||
+      u.includes("HİZMET YILLARI") ||
+      u.includes("GÖREVLENDİRME") ||
+      u.includes("GOREVLENDIRME") ||
+      u.includes("ZİMMET") ||
+      u.includes("ZIMMET") ||
+      u.includes("PLANLAMASI") ||
+      u.includes("ÇİZELGE") ||
+      u.includes("CIZELGE") ||
+      u.includes("SAYFA1") ||
+      u.includes("SAYFA 1") ||
+      u.includes("TEKNİK YAYIN") ||
+      u.includes("TEKNIK YAYIN") ||
+      u.includes("GÖREV EMRİ") ||
+      u.includes("GOREV EMRI") ||
+      u.includes("E-TABLO") ||
+      u.includes("EBYS") ||
+      u.includes("KARA ARAÇLARI") ||
+      u.includes("TEÇHİZAT") ||
+      u.includes("TECHIZAT") ||
+      u.includes("TÜRK HAVA KURUMU") ||
+      u.includes("SÖZLEŞME") ||
+      u.includes("SOZLESME") ||
+      u.includes("BIRIM ADI") ||
+      u.includes("GÜNCELLEME TARİH") ||
+      u === "MALZEME ADI" ||
+      u === "DESCRIPTION" ||
+      u === "SERİAL NUMBER" ||
+      u === "SIRA"
+    ) {
+      return true;
+    }
+
+    if (/\d+_[a-z]+_\d{4}/i.test(trimStr)) {
+      return true;
+    }
+
+    return false;
   };
+
+  // Self-cleaning step to purge invalid non-inventory entries from data/depo_transactions.json
+  try {
+    if (fs.existsSync(DEPO_TRANSACTIONS_FILE)) {
+      const rawTx = fs.readFileSync(DEPO_TRANSACTIONS_FILE, "utf-8");
+      const parsedTx = JSON.parse(rawTx);
+      if (Array.isArray(parsedTx)) {
+        const cleanTx = parsedTx.filter(it => !isInvalidPortalItem(it));
+        fs.writeFileSync(DEPO_TRANSACTIONS_FILE, JSON.stringify(cleanTx, null, 2), "utf-8");
+      }
+    }
+  } catch (e) {}
 
   const readOnayBekleyenler = (): any[] => {
     try {
@@ -1266,7 +1470,7 @@ async function startServer() {
         const raw = fs.readFileSync(DEPO_TRANSACTIONS_FILE, "utf-8");
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return parsed.filter(it => !isInvalidPortalItem(it.itemName || it.name || it.itemDesc));
+          return parsed.filter(it => !isInvalidPortalItem(it));
         }
       }
     } catch (err) {
@@ -1332,13 +1536,7 @@ async function startServer() {
                 if (!line.trim()) continue;
                 const cols = line.split(regex).map(c => c.replace(/^"|"$/g, '').trim());
                 if (cols.length > 0 && cols[0]) {
-                  const itemNameUpper = String(cols[0] || '').toUpperCase();
-                  // Ignore non-inventory document planning titles (e.g. GÖREVLENDİRME ÇİZELGELERİ, PLANLAMASI)
-                  if (
-                    itemNameUpper.includes("GÖREVLENDİRME") ||
-                    itemNameUpper.includes("PLANLAMASI") ||
-                    itemNameUpper.includes("ÇİZELGE")
-                  ) {
+                  if (isInvalidPortalItem(cols[0])) {
                     continue;
                   }
 
@@ -1351,7 +1549,7 @@ async function startServer() {
                   else unit = "at802";
 
                   const locNorm = String(cols[8] || '').toUpperCase().replace(/İ/g, 'I');
-                  const itemNorm = itemNameUpper.replace(/İ/g, 'I');
+                  const itemNorm = String(cols[0] || '').toUpperCase().replace(/İ/g, 'I');
                   const isKimya = locNorm.includes('KIMYA') || 
                                   sheetName.toUpperCase().replace(/İ/g, 'I').includes('KIMYA') ||
                                   itemNorm.includes('OIL') || itemNorm.includes('GREASE') || 
@@ -1440,9 +1638,11 @@ async function startServer() {
       console.warn("Public json transactions merge warn:", err);
     }
 
+    let validTransfers = allTransfers.filter(t => t && !isInvalidPortalItem(t.itemName || t.name || t.itemDesc));
+
     const deletedSet = getDeletedTxKeys();
     if (deletedSet.size > 0) {
-      return allTransfers.filter(t => {
+      validTransfers = validTransfers.filter(t => {
         if (!t) return false;
         if (t.id && deletedSet.has(String(t.id).trim())) return false;
         const k = `${t.itemName || t.name}_${t.timestamp || t.date || t.dateStr}_${t.quantity}_${t.type || t.islemTuru}_${t.sn || '-'}`;
@@ -1451,7 +1651,7 @@ async function startServer() {
       });
     }
 
-    return allTransfers;
+    return validTransfers;
   }
 
   // DELETE Depo Transaction with Password Protection
@@ -1493,7 +1693,7 @@ async function startServer() {
         return tSheet === targetSheet;
       });
 
-      const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
+      const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
       const rows = [
         headers,
         ...sheetSpecificTransfers.map((t: any) => [
@@ -1501,6 +1701,7 @@ async function startServer() {
           String(t.quantity !== undefined ? t.quantity : (t.adet || 1)),
           t.date || t.timestamp || "",
           String(t.islemTuru || t.type || "TRANSFER").toUpperCase(),
+          t.workOrderOrCrs || t.workOrderNo || t.crsNo || "-",
           t.sn || t.serialNumber || "-",
           t.tailNo || t.kuyrukKodu || t.kuyrukNo || "-",
           t.operator || t.teslimAlan || "-",
@@ -1633,7 +1834,12 @@ async function startServer() {
         console.warn("Live approval sync warning:", syncErr.message);
       }
 
-      return res.json({ status: "success", items: localItems });
+      // Reddedilen kayıtlar veritabanında ve e-tabloda kalır, ancak sistem onay ekranında gizlenir
+      const visibleItems = req.query.includeRejected === 'true'
+        ? localItems
+        : localItems.filter(it => String(it.status || "").toUpperCase() !== 'REDDEDİLDİ');
+
+      return res.json({ status: "success", items: visibleItems });
     } catch (err: any) {
       return res.json({ status: "success", items: [] });
     }
@@ -1658,10 +1864,14 @@ async function startServer() {
           date = new Date().toLocaleString("tr-TR"),
           depot = "ANKARA",
           tailNo = "-",
+          workOrderOrCrs = "",
+          workOrderNo = "",
           requestedBy = "",
           notes = "",
           unit = "at802"
         } = item;
+
+        const finalWorkOrder = String(workOrderOrCrs || workOrderNo || "").trim();
 
         const newRequest = {
           id: `TLP-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substr(2, 3).toUpperCase()}`,
@@ -1674,6 +1884,8 @@ async function startServer() {
           quantity: Number(quantity) || 1,
           depot: String(depot).trim().toUpperCase(),
           tailNo: String(tailNo).trim() || "-",
+          workOrderOrCrs: finalWorkOrder || "-",
+          workOrderNo: finalWorkOrder || "-",
           requestedBy: String(requestedBy).trim() || "Personel",
           notes: String(notes).trim(),
           status: "ONAY BEKLİYOR",
@@ -1761,6 +1973,8 @@ async function startServer() {
         sn: finalSn,
         quantity: target.quantity,
         tailNo: target.tailNo,
+        workOrderOrCrs: target.workOrderOrCrs || target.workOrderNo || "-",
+        workOrderNo: target.workOrderOrCrs || target.workOrderNo || "-",
         operator: target.requestedBy,
         receivedBy: approver,
         location: target.category === 'kimyasal' ? 'KİMYASAL DEPO' : (depotName.includes('ANKARA') ? 'ANKARA MERKEZ DEPO' : `${depotName} DEPOSU`),
@@ -1907,7 +2121,7 @@ async function startServer() {
       try {
         const xlsx = await import("xlsx");
         const wb = xlsx.utils.book_new();
-        const headerRow = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "AÇIKLAMA / NOTLAR", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
+        const headerRow = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO", "AÇIKLAMA / NOTLAR", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
         const rows = [headerRow];
         updatedList.forEach((t: any) => {
           const isChem = (t.category === 'kimyasal') || (t.sheetName && String(t.sheetName).toLowerCase().includes('kimya')) || (t.location && String(t.location).toLowerCase().includes('kimya'));
@@ -1916,6 +2130,7 @@ async function startServer() {
             t.quantity || t.miktar || t.adet || 1,
             t.date || t.timestamp || "",
             t.type || t.islemTuru || "",
+            t.workOrderOrCrs || t.workOrderNo || t.crsNo || "-",
             t.notes || t.aciklama || "",
             t.sn || t.serialNumber || "",
             t.tailNo || t.aircraftTail || t.tailNo || "",
@@ -1997,10 +2212,10 @@ async function startServer() {
     }
   }
 
-  // Sync to Google Sheets tab "YAŞAM DESTEK AT-802"
+  // Sync to Google Sheets tabs "GÖREV VE ZİMMETLER" and "YAŞAM DESTEK AT-802"
   async function syncYasamDestekToGoogleSheet(records: any[]) {
     const spreadsheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
-    const sheetName = "YAŞAM DESTEK AT-802";
+    const sheetNames = ["GÖREV VE ZİMMETLER", "YAŞAM DESTEK AT-802"];
     const headers = [
       "SIRA NO",
       "PERSONEL ADI SOYADI",
@@ -2020,9 +2235,9 @@ async function startServer() {
     const rows = [
       headers,
       ...records.map((r, idx) => {
-        // Devir durumunda personelin kendisi 'Devreden'dir.
         const isDevir = r.durum === "DEVREDİLDİ";
         const isTeslim = r.durum === "ANKARA DEPO TESLİM";
+        const devirInfo = r.devredilenPersonel || "-";
         
         return [
           String(idx + 1),
@@ -2035,7 +2250,7 @@ async function startServer() {
           r.helmetKitSn || "-",
           r.durum || "GÖREVDE",
           (isDevir || isTeslim) ? (r.personelAdi || "-") : "-", // DEVREDEN
-          (isDevir ? (r.devredilenPersonel || "-") : (isTeslim ? (r.teslimAlanPersonel || "-") : "-")), // DEVREDİLEN / TESLİM ALAN
+          (isDevir ? devirInfo : (isTeslim ? (r.teslimAlanPersonel || "-") : devirInfo)), // DEVREDİLEN / TESLİM ALAN
           r.notlar || "",
           r.guncellenmeTarihi || new Date().toLocaleDateString("tr-TR")
         ];
@@ -2048,21 +2263,23 @@ async function startServer() {
       "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
     ];
 
-    for (const sUrl of scriptUrls) {
-      try {
-        await fetch(sUrl, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({
-            action: "updateSheet",
-            sheetName,
-            spreadsheetId,
-            rows
-          })
-        });
-        break;
-      } catch (err) {
-        console.warn("Google Sheet yasam destek sync error:", err);
+    for (const sheetName of sheetNames) {
+      for (const sUrl of scriptUrls) {
+        try {
+          await fetch(sUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "updateSheet",
+              sheetName,
+              spreadsheetId,
+              rows
+            })
+          });
+          break;
+        } catch (err) {
+          console.warn(`Google Sheet yasam destek sync error for ${sheetName}:`, err);
+        }
       }
     }
   }
@@ -2566,6 +2783,13 @@ async function startServer() {
     let canYelegi = readJsonFile(CAN_YELEGI_FILE);
     let spareAir = readJsonFile(SPARE_AIR_FILE);
     let helmetKit = readJsonFile(HELMET_KIT_FILE);
+
+    if (canYelegi.length === 0 || spareAir.length === 0 || helmetKit.length === 0) {
+      initializeYasamDestekStocksFromExcel();
+      canYelegi = readJsonFile(CAN_YELEGI_FILE);
+      spareAir = readJsonFile(SPARE_AIR_FILE);
+      helmetKit = readJsonFile(HELMET_KIT_FILE);
+    }
 
     // Live sync from Google Spreadsheet online in parallel
     try {
@@ -3406,14 +3630,16 @@ async function startServer() {
         const newPerson = devredilenPersonel.trim().toUpperCase();
         const newLoc = (devredilenYer || oldRecord.gorevYeri || "MİLAS").trim().toUpperCase();
 
+        const devirLabel = `Devredilen: ${oldRecord.personelAdi} (${bitis})`;
+
         // Eski kaydı güncelle (DEVREDİLDİ)
         currentRecords[targetIdx] = {
           ...oldRecord,
           durum: "DEVREDİLDİ",
           bitisTarihi: bitis,
-          devredilenPersonel: newPerson,
+          devredilenPersonel: `Devredildi: ${newPerson} (${bitis})`,
           teslimAlanPersonel: newPerson,
-          notlar: `${oldRecord.notlar ? oldRecord.notlar + " | " : ""}Devredildi: ${newPerson} ${userNotes}`.trim(),
+          notlar: `${oldRecord.notlar ? oldRecord.notlar + " | " : ""}Devredildi: ${newPerson} (${bitis}) ${userNotes}`.trim(),
           guncellenmeTarihi: new Date().toLocaleDateString("tr-TR")
         };
 
@@ -3429,16 +3655,20 @@ async function startServer() {
           spareAirSn: oldRecord.spareAirSn || "-",
           helmetKitSn: oldRecord.helmetKitSn || "-",
           durum: "GÖREVDE",
-          devredilenPersonel: "-",
+          devredilenPersonel: devirLabel,
           teslimAlanPersonel: "Devir Teslim",
-          notlar: `${oldRecord.personelAdi} personelinden devir alındı. ${userNotes}`.trim(),
+          notlar: `${devirLabel} personelinden devir alındı. ${userNotes}`.trim(),
           guncellenmeTarihi: new Date().toLocaleDateString("tr-TR")
         };
         currentRecords.unshift(newRecord);
 
         // Stoklardaki teslim edilen ismini yeni personele güncelle ve YEŞİL TUT (#92d050)
         if (oldRecord.lifeVestSn && oldRecord.lifeVestSn !== "-") {
-          const lvIdx = cyList.findIndex((c: any) => c.seriNo === oldRecord.lifeVestSn);
+          const rawLv = oldRecord.lifeVestSn.trim().toUpperCase();
+          const lvIdx = cyList.findIndex((c: any) => {
+            const sn = (c.seriNo || '').trim().toUpperCase();
+            return sn === rawLv || (sn && rawLv.includes(sn)) || (rawLv && sn.includes(rawLv));
+          });
           if (lvIdx >= 0) {
             cyList[lvIdx].aciklamalar = newPerson;
             cyList[lvIdx].durum = "GÖREV BÖLGESİNDE";
@@ -3447,7 +3677,11 @@ async function startServer() {
           }
         }
         if (oldRecord.spareAirSn && oldRecord.spareAirSn !== "-") {
-          const saIdx = saList.findIndex((s: any) => s.seriNo === oldRecord.spareAirSn);
+          const rawSa = oldRecord.spareAirSn.trim().toUpperCase();
+          const saIdx = saList.findIndex((s: any) => {
+            const sn = (s.seriNo || '').trim().toUpperCase();
+            return sn === rawSa || (sn && rawSa.includes(sn)) || (rawSa && sn.includes(rawSa));
+          });
           if (saIdx >= 0) {
             saList[saIdx].aciklamalar = newPerson;
             saList[saIdx].durum = "GÖREV BÖLGESİNDE";
@@ -3456,13 +3690,18 @@ async function startServer() {
           }
         }
         if (oldRecord.helmetKitSn && oldRecord.helmetKitSn !== "-") {
-          const pureHk = oldRecord.helmetKitSn.split(" (")[0].trim();
-          const hkIdx = hkList.findIndex((h: any) => 
-            (h.aciklamalar && h.aciklamalar.includes(pureHk)) || 
-            h.seriNo1 === pureHk || 
-            h.seriNo2 === pureHk ||
-            h.aciklamalar === oldRecord.helmetKitSn
-          );
+          const pureHk = oldRecord.helmetKitSn.split(" (")[0].trim().toUpperCase();
+          const fullHk = oldRecord.helmetKitSn.trim().toUpperCase();
+          const hkIdx = hkList.findIndex((h: any) => {
+            const s1 = (h.seriNo1 || '').trim().toUpperCase();
+            const s2 = (h.seriNo2 || '').trim().toUpperCase();
+            const ack = (h.aciklamalar || '').trim().toUpperCase();
+            return (
+              (s1 && (s1 === pureHk || pureHk.includes(s1) || s1.includes(pureHk) || fullHk.includes(s1))) ||
+              (s2 && (s2 === pureHk || pureHk.includes(s2) || s2.includes(pureHk) || fullHk.includes(s2))) ||
+              ack === pureHk || ack === fullHk
+            );
+          });
           if (hkIdx >= 0) {
             hkList[hkIdx].aciklamalar = newPerson;
             hkList[hkIdx].durum = "GÖREV BÖLGESİNDE";
@@ -3486,7 +3725,11 @@ async function startServer() {
 
         // Stoklardaki teslim edilen ismini "DEPODA" yap ve DOLGUSUZ/BEYAZ (#ffffff) yap
         if (oldRecord.lifeVestSn && oldRecord.lifeVestSn !== "-") {
-          const lvIdx = cyList.findIndex((c: any) => c.seriNo === oldRecord.lifeVestSn);
+          const rawLv = oldRecord.lifeVestSn.trim().toUpperCase();
+          const lvIdx = cyList.findIndex((c: any) => {
+            const sn = (c.seriNo || '').trim().toUpperCase();
+            return sn === rawLv || (sn && rawLv.includes(sn)) || (rawLv && sn.includes(rawLv));
+          });
           if (lvIdx >= 0) {
             cyList[lvIdx].aciklamalar = "DEPODA";
             cyList[lvIdx].durum = "DEPODA";
@@ -3495,22 +3738,31 @@ async function startServer() {
           }
         }
         if (oldRecord.spareAirSn && oldRecord.spareAirSn !== "-") {
-          const saIdx = saList.findIndex((s: any) => s.seriNo === oldRecord.spareAirSn);
+          const rawSa = oldRecord.spareAirSn.trim().toUpperCase();
+          const saIdx = saList.findIndex((s: any) => {
+            const sn = (s.seriNo || '').trim().toUpperCase();
+            return sn === rawSa || (sn && rawSa.includes(sn)) || (rawSa && sn.includes(rawSa));
+          });
           if (saIdx >= 0) {
-            saList[saIdx].aciklamalar = "DEPODA";
+            cyList && (saList[saIdx].aciklamalar = "DEPODA");
             saList[saIdx].durum = "DEPODA";
             saList[saIdx].color = "#ffffff";
             saList[saIdx].tarih = "-";
           }
         }
         if (oldRecord.helmetKitSn && oldRecord.helmetKitSn !== "-") {
-          const pureHk = oldRecord.helmetKitSn.split(" (")[0].trim();
-          const hkIdx = hkList.findIndex((h: any) => 
-            (h.aciklamalar && h.aciklamalar.includes(pureHk)) || 
-            h.seriNo1 === pureHk || 
-            h.seriNo2 === pureHk ||
-            h.aciklamalar === oldRecord.helmetKitSn
-          );
+          const pureHk = oldRecord.helmetKitSn.split(" (")[0].trim().toUpperCase();
+          const fullHk = oldRecord.helmetKitSn.trim().toUpperCase();
+          const hkIdx = hkList.findIndex((h: any) => {
+            const s1 = (h.seriNo1 || '').trim().toUpperCase();
+            const s2 = (h.seriNo2 || '').trim().toUpperCase();
+            const ack = (h.aciklamalar || '').trim().toUpperCase();
+            return (
+              (s1 && (s1 === pureHk || pureHk.includes(s1) || s1.includes(pureHk) || fullHk.includes(s1))) ||
+              (s2 && (s2 === pureHk || pureHk.includes(s2) || s2.includes(pureHk) || fullHk.includes(s2))) ||
+              ack === pureHk || ack === fullHk
+            );
+          });
           if (hkIdx >= 0) {
             hkList[hkIdx].aciklamalar = "DEPODA";
             hkList[hkIdx].durum = "DEPODA";
@@ -4039,8 +4291,13 @@ async function startServer() {
     "at802_kimyasal_depo.xlsx": "1JYPCRpMSaZ8AWt7qEWnXhb4DbUKguDRK",
     "hava_araçları_yer_destek_bell-429.xlsx": "1oICd57xCIGHza96IrWfOBCh1p5jTv3mB",
     "hava_araclari_yer_destek_bell-429.xlsx": "1oICd57xCIGHza96IrWfOBCh1p5jTv3mB",
-    "bell-429_sarf_ve_parca_deposu.xlsx": "1tu8hDWSgIYkGn-7i_gDTC_UpUFUyaOzf",
-    "bell429_sarf_depo.xlsx": "1tu8hDWSgIYkGn-7i_gDTC_UpUFUyaOzf",
+    "bell-429_sarf_ve_parca_deposu.xlsx": "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG",
+    "bell429_sarf_depo.xlsx": "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG",
+    "bell-429_sarf_parca_deposu.xlsx": "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG",
+    "bell 429_sar_parça depo.xlsx": "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG",
+    "bell 429_sar_parca depo.xlsx": "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG",
+    "ornek bell 429_sar_parça depo.xlsx": "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG",
+    "ornek bell 429_sar_parca depo.xlsx": "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG",
     "hava_araçları_yer_destek_t-70.xlsx": "1xDxoQPBpKIWTvbAhcMv7cUsdTtKHxwkJ",
     "hava_araclari_yer_destek_t-70.xlsx": "1xDxoQPBpKIWTvbAhcMv7cUsdTtKHxwkJ",
     "t-70_sarf_ve_parca_deposu.xlsx": "",
@@ -4060,7 +4317,10 @@ async function startServer() {
     "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
     "hava_araclari_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
     "hangar_depo_hareket_gecmisi.xlsx": "1RXIhJps-PxUQAkTlLDyvcDWnpUbg2KzG",
-    "olay_takip_cizelgesi_at-802.xlsx": "1S-ktkzrs7p5CIcwUihuQsJDecmLpXmpp"
+    "olay_takip_cizelgesi_at-802.xlsx": "1S-ktkzrs7p5CIcwUihuQsJDecmLpXmpp",
+    "personel_egitim_listesi.xlsx": "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7",
+    "personel_egitim_listesi_at-802.xlsx": "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7",
+    "personel_egitim_cizelgesi.xlsx": "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7"
   };
 
   const normalizeExcelName = (name: string): string => {
@@ -4084,7 +4344,44 @@ async function startServer() {
     if (nCand === nTarget) return true;
     const bCand = nCand.replace(/\.(xlsx|xls|csv)$/, "");
     const bTarget = nTarget.replace(/\.(xlsx|xls|csv)$/, "");
-    return bCand === bTarget;
+    if (bCand === bTarget) return true;
+
+    // Check unit and category match to isolate fleet files strictly
+    const units = [
+      { key: 'bell429', matches: (s: string) => s.includes('bell') || s.includes('429') },
+      { key: 'at802', matches: (s: string) => s.includes('at802') || s.includes('at_802') || s.includes('802') },
+      { key: 't70', matches: (s: string) => s.includes('t70') || s.includes('t_70') },
+      { key: 'c650', matches: (s: string) => s.includes('c650') || s.includes('c_650') },
+      { key: 'b360', matches: (s: string) => s.includes('b360') || s.includes('b_360') },
+      { key: 'hangar', matches: (s: string) => s.includes('hangar') }
+    ];
+
+    for (const u of units) {
+      if (u.matches(bCand) && u.matches(bTarget)) {
+        const isKimCand = bCand.includes('kimyasal');
+        const isKimTarget = bTarget.includes('kimyasal');
+        if (isKimCand !== isKimTarget) continue;
+
+        const isYerCand = bCand.includes('yer_destek') || bCand.includes('techizat');
+        const isYerTarget = bTarget.includes('yer_destek') || bTarget.includes('techizat');
+        if (isYerCand !== isYerTarget) continue;
+
+        const isOlayCand = bCand.includes('olay_takip');
+        const isOlayTarget = bTarget.includes('olay_takip');
+        if (isOlayCand !== isOlayTarget) continue;
+
+        // If both refer to Sarf/Parça Depo of this exact fleet unit
+        const isSarfCand = bCand.includes('sarf') || bCand.includes('parca') || bCand.includes('depo');
+        const isSarfTarget = bTarget.includes('sarf') || bTarget.includes('parca') || bTarget.includes('depo');
+        if (isSarfCand && isSarfTarget) {
+          return true;
+        }
+      }
+    }
+    if (bCand.includes('egitim') && bTarget.includes('egitim')) {
+      return true;
+    }
+    return false;
   };
 
   // Helper to dynamically get or list all Excel files in Google Drive folder
@@ -4128,20 +4425,7 @@ async function startServer() {
       let { fileName = "at-802_sarf_ve_parca_deposu.xlsx", fileId = "", folderId = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP" } = req.body;
       fileName = String(fileName || "").trim();
 
-      const isOlayTakip = fileName.toLowerCase().includes("olay_takip");
       const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
-
-      // If not Olay Takip and not forced live, check local file first
-      if (!isOlayTakip && !req.body.forceLive && fs.existsSync(localExcelPath)) {
-        console.log(`[read-excel-from-drive] Using local file for ${fileName}`);
-        const buf = fs.readFileSync(localExcelPath);
-        return res.json({
-          status: "success",
-          source: "local",
-          base64: buf.toString("base64"),
-          updated: new Date().toLocaleString("tr-TR")
-        });
-      }
 
       // 1. LIVE GOOGLE DRIVE CHECK: Query real current files or known ID in Google Drive folder
       try {
@@ -4417,13 +4701,15 @@ async function startServer() {
           const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
           fs.writeFileSync(localExcelPath, buffer);
 
-          // 2. MODIFICATION: Inject Shelf Life columns ONLY for Depo/Teçhizat files (NEVER for Olay Takip!)
-          const isOlayTakip = fileName.toLowerCase().includes("olay_takip") || String(targetKey || "").toLowerCase().includes("olay_takip");
+          // 2. MODIFICATION: Inject Shelf Life columns ONLY for Depo/Teçhizat files (NEVER for Olay Takip or Personel Egitim!)
+          const safeFileName = String(fileName || "").toLowerCase();
+          const safeTargetKey = String(targetKey || "").toLowerCase();
+          const isOlayTakipOrEgitim = safeFileName.includes("olay_takip") || safeTargetKey.includes("olay_takip") || safeFileName.includes("personel_egitim") || safeTargetKey.includes("personel_egitim");
           const xlsx = await import("xlsx");
           let wb = xlsx.read(buffer, { type: "buffer" });
           let modified = false;
 
-          if (!isOlayTakip && wb && wb.SheetNames) {
+          if (!isOlayTakipOrEgitim && wb && wb.SheetNames) {
             for (const sName of wb.SheetNames) {
               const sheet = wb.Sheets[sName];
               const aoa = xlsx.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
@@ -4431,7 +4717,7 @@ async function startServer() {
                 // Find header row
                 let headerRowIdx = -1;
                 for (let r = 0; r < Math.min(15, aoa.length); r++) {
-                  const rowStr = (aoa[r] || []).join(' ').toUpperCase();
+                  const rowStr = Array.from(aoa[r] || [], c => String(c || '')).join(' ').toUpperCase();
                   if (rowStr.includes('DESCRIPTION') || rowStr.includes('PART NUMBER') || rowStr.includes('MALZEME')) {
                     headerRowIdx = r;
                     break;
@@ -4439,7 +4725,7 @@ async function startServer() {
                 }
 
                 const hIdx = headerRowIdx >= 0 ? headerRowIdx : 0;
-                const header = aoa[hIdx] || [];
+                const header = Array.from(aoa[hIdx] || [], c => String(c || ''));
                 const headerStr = header.join(' ').toUpperCase();
 
                 if (!headerStr.includes('RAF ÖMRÜ') && !headerStr.includes('ÖMÜRLÜ')) {
@@ -4473,8 +4759,8 @@ async function startServer() {
             fs.writeFileSync(localExcelPath, modBuffer);
           }
 
-          // 3. Also parse and update public/at802_sarf_data.json
-          if (wb && wb.SheetNames && wb.SheetNames.length > 0) {
+          // 3. Also parse and update public/at802_sarf_data.json ONLY for AT-802 Sarf files
+          if (!safeFileName.includes("personel_egitim") && safeFileName.includes("at-802") && wb && wb.SheetNames && wb.SheetNames.length > 0) {
             let parsedItems: any[] = [];
             for (const sName of wb.SheetNames) {
               const sheet = wb.Sheets[sName];
@@ -4483,16 +4769,16 @@ async function startServer() {
                 let headerRowIdx = -1;
                 let descIdx = -1, pnIdx = -1, snIdx = -1, qtyIdx = -1, locIdx = -1;
                 for (let r = 0; r < Math.min(25, rawRows.length); r++) {
-                  const row = (rawRows[r] || []).map(c => String(c || '').trim().toUpperCase());
-                  const hasDesc = row.some(c => c.includes('DESCRIPTION') || c.includes('MALZEME') || c.includes('TANIM') || c.includes('ÜRÜN') || c.includes('ITEM') || c.includes('PARÇA ADI'));
-                  const hasPn = row.some(c => c.includes('PART') || c.includes('P/N') || c.includes('PN') || c.includes('MODEL'));
+                  const row = Array.from(rawRows[r] || [], c => String(c || '').trim().toUpperCase());
+                  const hasDesc = row.some(c => typeof c === 'string' && (c.includes('DESCRIPTION') || c.includes('MALZEME') || c.includes('TANIM') || c.includes('ÜRÜN') || c.includes('ITEM') || c.includes('PARÇA ADI')));
+                  const hasPn = row.some(c => typeof c === 'string' && (c.includes('PART') || c.includes('P/N') || c.includes('PN') || c.includes('MODEL')));
                   if (hasDesc || hasPn) {
                     headerRowIdx = r;
-                    descIdx = row.findIndex(c => c.includes('DESCRIPTION') || c.includes('MALZEME') || c.includes('TANIM') || c.includes('ÜRÜN') || c.includes('ITEM') || c.includes('PARÇA ADI'));
-                    pnIdx = row.findIndex(c => c.includes('PART') || c.includes('P/N') || c.includes('PN') || c.includes('MODEL'));
-                    snIdx = row.findIndex(c => (c.includes('SERİ') || c.includes('SERI') || c.includes('S/N') || c.includes('SN')) && !c.includes('SIRA'));
-                    qtyIdx = row.findIndex(c => c.includes('MİKTAR') || c.includes('MIKTAR') || c.includes('GELEN') || c.includes('ADET') || c.includes('QTY') || c.includes('STOK'));
-                    locIdx = row.findIndex(c => c.includes('LOKASYON') || c.includes('KONUM') || c.includes('RAF') || c.includes('YER') || c.includes('DEPO'));
+                    descIdx = row.findIndex(c => typeof c === 'string' && (c.includes('DESCRIPTION') || c.includes('MALZEME') || c.includes('TANIM') || c.includes('ÜRÜN') || c.includes('ITEM') || c.includes('PARÇA ADI')));
+                    pnIdx = row.findIndex(c => typeof c === 'string' && (c.includes('PART') || c.includes('P/N') || c.includes('PN') || c.includes('MODEL')));
+                    snIdx = row.findIndex(c => typeof c === 'string' && ((c.includes('SERİ') || c.includes('SERI') || c.includes('S/N') || c.includes('SN')) && !c.includes('SIRA')));
+                    qtyIdx = row.findIndex(c => typeof c === 'string' && (c.includes('MİKTAR') || c.includes('MIKTAR') || c.includes('GELEN') || c.includes('ADET') || c.includes('QTY') || c.includes('STOK')));
+                    locIdx = row.findIndex(c => typeof c === 'string' && (c.includes('LOKASYON') || c.includes('KONUM') || c.includes('RAF') || c.includes('YER') || c.includes('DEPO')));
                     break;
                   }
                 }
@@ -5875,6 +6161,8 @@ async function startServer() {
               const sure = String(r["Süre"] || r.sure || "").trim();
               const sistemKayitTarihi = String(r["Sisteme Kayıt Tarihi"] || r.sistemKayitTarihi || "").trim();
               const fileName = String(r["Dosya Adı"] || r.fileName || "").trim();
+              const docVal = String(r["Belge / Döküman"] || r.belge || r.dokuman || "").trim();
+              const linkVal = String(r["EK DOSYA BAĞLANTI LİNKİ"] || r["Ek Dosya Bağlantı Linki"] || r.linkUrl || r.link || r.url || "").trim();
               return {
                 id: rowId,
                 "#": rowId,
@@ -5895,7 +6183,10 @@ async function startServer() {
                 sistemKayitTarihi,
                 "Sisteme Kayıt Tarihi": sistemKayitTarihi,
                 fileName,
-                "Dosya Adı": fileName
+                "Dosya Adı": fileName,
+                "Belge / Döküman": docVal,
+                "EK DOSYA BAĞLANTI LİNKİ": linkVal,
+                linkUrl: linkVal
               };
             });
           }
@@ -5909,7 +6200,7 @@ async function startServer() {
 
   // Helper to save entire sheet matrix to Google Sheets
   async function saveYellowNgToGoogleSheet(records: any[]): Promise<boolean> {
-    const headers = ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı"];
+    const headers = ["#", "Kuyruk No", "Motor S/N", "Olay Numarası", "Zaman Aralığı (TIME)", "Olay Tepesi", "Satır Aralığı", "Süre", "Sisteme Kayıt Tarihi", "Dosya Adı", "Belge / Döküman", "EK DOSYA BAĞLANTI LİNKİ"];
     const rows = [
       headers,
       ...records.map((r: any, idx: number) => [
@@ -5922,7 +6213,9 @@ async function startServer() {
         String(r.satirAraligi || r["Satır Aralığı"] || "").trim(),
         String(r.sure || r["Süre"] || "").trim(),
         String(r.sistemKayitTarihi || r["Sisteme Kayıt Tarihi"] || "").trim(),
-        String(r.fileName || r["Dosya Adı"] || "").trim()
+        String(r.fileName || r["Dosya Adı"] || "").trim(),
+        String(r["Belge / Döküman"] || r.belge || r.dokuman || "").trim(),
+        String(r["EK DOSYA BAĞLANTI LİNKİ"] || r["Ek Dosya Bağlantı Linki"] || r.linkUrl || r.ekBaglantiLinki || r.link || r.url || "").trim()
       ])
     ];
 
@@ -5983,8 +6276,8 @@ async function startServer() {
           String(r.sure || r["Süre"] || "").trim(),
           String(r.sistemKayitTarihi || r["Sisteme Kayıt Tarihi"] || "").trim(),
           String(r.fileName || r["Dosya Adı"] || "").trim(),
-          "",
-          ""
+          String(r["Belge / Döküman"] || r.belge || r.dokuman || "").trim(),
+          String(r["EK DOSYA BAĞLANTI LİNKİ"] || r["Ek Dosya Bağlantı Linki"] || r.linkUrl || r.ekBaglantiLinki || r.link || r.url || "").trim()
         ])
       ];
 
