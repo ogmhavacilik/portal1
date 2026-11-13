@@ -25,9 +25,12 @@ import {
   Clock
 } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import * as XLSX from 'xlsx';
 import { DepoItem, AIRCRAFT_TAILS } from './DepoManagementModal';
 import { DepoTransaction } from '../types';
 import { PersonnelAutocomplete } from './PersonnelAutocomplete';
+import { unmergeAndFillWorksheet, isHeaderLikeRow } from '../utils/driveExcelSync';
+import { fetchExcelFromDrive as remoteFetchExcelFromDrive, DRIVE_FOLDER_ID } from '../utils/remoteDriveSync';
 
 export const UNITS_SECURITY = [
   { id: 'at802', name: 'AT-802F', code: 'UÇAK', password: '802' },
@@ -94,6 +97,11 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
   // Manual Scan Input fallback
   const [manualCodeInput, setManualCodeInput] = useState<string>('');
   const [isManualSearchDropdownOpen, setIsManualSearchDropdownOpen] = useState<boolean>(false);
+  const manualSearchRef = useRef<HTMLDivElement>(null);
+
+  // Live Drive Inventory state (used when inventory prop is empty or missing units)
+  const [liveInventory, setLiveInventory] = useState<DepoItem[]>([]);
+  const [isLoadingInventory, setIsLoadingInventory] = useState<boolean>(false);
 
   // Scanned / Matched Item State (Module 1 - Barkod Oku)
   const [scannedResultText, setScannedResultText] = useState<string | null>(null);
@@ -114,6 +122,13 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
   }>>([]);
   const [isAddTalepItemOpen, setIsAddTalepItemOpen] = useState<boolean>(false);
   const [addTalepSearchQuery, setAddTalepSearchQuery] = useState<string>('');
+  const [isTalepCameraActive, setIsTalepCameraActive] = useState<boolean>(false);
+  const [talepCameraError, setTalepCameraError] = useState<string | null>(null);
+  const [talepAvailableCameras, setTalepAvailableCameras] = useState<Array<{ id: string; label: string }>>([]);
+  const [selectedTalepCameraId, setSelectedTalepCameraId] = useState<string>('auto');
+  const talepScannerRef = useRef<Html5Qrcode | null>(null);
+  const talepScannerContainerId = 'talep-barcode-reader-viewfinder';
+  const addTalepInputRef = useRef<HTMLInputElement>(null);
   const [talepDate, setTalepDate] = useState<string>('');
   const [talepTailNo, setTalepTailNo] = useState<string>((AIRCRAFT_TAILS.at802 && AIRCRAFT_TAILS.at802[0]) || 'ORMAN 21 (OR-2021) - AT-802');
   const [talepTailNoOther, setTalepTailNoOther] = useState<string>('');
@@ -128,6 +143,9 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     const handleOutsideClick = (e: MouseEvent) => {
       if (talepDropdownRef.current && !talepDropdownRef.current.contains(e.target as Node)) {
         setIsTalepDropdownOpen(false);
+      }
+      if (manualSearchRef.current && !manualSearchRef.current.contains(e.target as Node)) {
+        setIsManualSearchDropdownOpen(false);
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
@@ -191,6 +209,9 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     }
 
     setTalepItemList(initialList);
+    setIsAddTalepItemOpen(false);
+    setAddTalepSearchQuery('');
+    setTalepCameraError(null);
     const pad = (n: number) => String(n).padStart(2, '0');
     const now = new Date();
     setTalepDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`);
@@ -235,6 +256,10 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     }]);
     setIsAddTalepItemOpen(false);
     setAddTalepSearchQuery('');
+    setTalepCameraError(null);
+    if (showNotification) {
+      showNotification(`✅ Talebe eklendi: ${itemName || pn} (P/N: ${pn || '-'})`);
+    }
   };
 
   const handleRemoveTalepItem = (id: string) => {
@@ -357,7 +382,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
     let allDocs: any[] = [];
     try {
-      const stored = localStorage.getItem('ogm_depo_belge_bul_v5') || localStorage.getItem('ogm_form_one_docs');
+      const stored: string | null = null;
       if (stored) {
         allDocs = JSON.parse(stored);
       }
@@ -428,18 +453,195 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     excessSource?: 'ANKARA' | 'BOLGE' 
   }>>({});
 
-  // Active inventory: use prop or fallback to live localStorage
-  const activeInventory = useMemo(() => {
-    if (inventory && inventory.length > 0) return inventory;
-    try {
-      const stored = localStorage.getItem('ogm_depo_inventory_v5');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  // Fetch live inventory from Google Drive for autocomplete & barcode matching (Zero localStorage Cache)
+  useEffect(() => {
+    if (!isOpen) return;
+    if (inventory && inventory.length > 0) return;
+
+    let cancelled = false;
+
+    const getFileName = (unitKey: string, cat: 'sarf' | 'kimyasal') => {
+      const u = (unitKey || 'at802').toLowerCase();
+      if (u.includes('bell') || u.includes('429')) return cat === 'kimyasal' ? 'bell-429_kimyasal_depo.xlsx' : 'bell-429_sarf_ve_parca_deposu.xlsx';
+      if (u.includes('t70') || u.includes('t-70')) return cat === 'kimyasal' ? 't-70_kimyasal_depo.xlsx' : 't-70_sarf_ve_parca_deposu.xlsx';
+      if (u.includes('c650') || u.includes('650')) return cat === 'kimyasal' ? 'c-650_kimyasal_depo.xlsx' : 'c-650_sarf_ve_parca_deposu.xlsx';
+      if (u.includes('b360') || u.includes('360')) return cat === 'kimyasal' ? 'b-360_kimyasal_depo.xlsx' : 'b-360_sarf_ve_parca_deposu.xlsx';
+      if (u.includes('hangar')) return cat === 'kimyasal' ? 'hangar_kimyasal_depo.xlsx' : 'hangar_sarf_ve_parca_deposu.xlsx';
+      return cat === 'kimyasal' ? 'at-802_kimyasal_depo.xlsx' : 'at-802_sarf_ve_parca_deposu.xlsx';
+    };
+
+    const parseDriveExcel = (base64: string, unitKey: string, cat: 'sarf' | 'kimyasal'): DepoItem[] => {
+      try {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+        const workbook = XLSX.read(bytes, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        unmergeAndFillWorksheet(sheet);
+        const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        if (!rawRows || rawRows.length <= 1) return [];
+
+        let headerRowIdx = 0;
+        for (let r = 0; r < Math.min(15, rawRows.length); r++) {
+          const rowStr = (rawRows[r] || []).map(c => String(c || '').toUpperCase().trim()).join(' ');
+          if (rowStr.includes('MALZEME') || rowStr.includes('DESCRIPTION') || rowStr.includes('PARÇA') || rowStr.includes('P/N')) {
+            headerRowIdx = r;
+            break;
+          }
+        }
+        const headerRow = (rawRows[headerRowIdx] || []).map(c => String(c || '').toUpperCase().trim());
+        const normHeader = headerRow.map(c => c.replace(/Ç/g, 'C').replace(/Ğ/g, 'G').replace(/İ/g, 'I').replace(/Ö/g, 'O').replace(/Ş/g, 'S').replace(/Ü/g, 'U'));
+
+        const descCol = normHeader.findIndex(c => c === 'DESCRIPTION' || c.includes('DESCRIPTION') || c.includes('MALZEME') || c === 'TANIM');
+        const pnCol = normHeader.findIndex(c => c.includes('P/N') || c.includes('PART NUMBER') || c.includes('PARCA NO') || c.includes('PART'));
+        const snCol = normHeader.findIndex(c => c.includes('SERI') || c.includes('MUKERRER'));
+        const locCol = normHeader.findIndex(c => c.includes('LOKASYON') || c.includes('RAF') || c.includes('KONUM'));
+        const gelenCol = normHeader.findIndex(c => c === 'GELEN' || c.includes('GELEN'));
+        const piyasaCol = normHeader.findIndex(c => c.includes('PIYASA'));
+        const spainGelenCol = normHeader.findIndex(c => c.includes('SPAIN GELEN'));
+        const genelToplamCol = normHeader.findIndex(c => c.includes('GENEL TOPLAM'));
+        const toplamStokCol = normHeader.findIndex(c => c.includes('TOPLAM STOK'));
+        const ankaraCikanCol = normHeader.findIndex(c => c.includes('ANKARA CIKAN'));
+        const ankaraMevcutCol = normHeader.findIndex(c => c.includes('ANKARA MEVCUT'));
+        const karainTransferCol = normHeader.findIndex(c => c.includes('KARAIN TRANSFER'));
+        const karainCikanCol = normHeader.findIndex(c => c.includes('KARAIN CIKAN'));
+        const karainMevcutCol = normHeader.findIndex(c => c.includes('KARAIN MEVCUT'));
+        const canakkaleTransferCol = normHeader.findIndex(c => c.includes('CANAKKALE TRANSFER'));
+        const canakkaleCikanCol = normHeader.findIndex(c => c.includes('CANAKKALE CIKAN'));
+        const canakkaleMevcutCol = normHeader.findIndex(c => c.includes('CANAKKALE MEVCUT'));
+        const milasTransferCol = normHeader.findIndex(c => c.includes('MILAS TRANSFER'));
+        const milasCikanCol = normHeader.findIndex(c => c.includes('MILAS CIKAN'));
+        const milasMevcutCol = normHeader.findIndex(c => c.includes('MILAS MEVCUT'));
+        const bursaTransferCol = normHeader.findIndex(c => c.includes('BURSA TRANSFER'));
+        const bursaCikanCol = normHeader.findIndex(c => c.includes('BURSA CIKAN'));
+        const bursaMevcutCol = normHeader.findIndex(c => c.includes('BURSA MEVCUT') || (c.includes('BURSA') && c.includes('MEVCUT')));
+
+        const isKim = cat === 'kimyasal';
+        const items: DepoItem[] = [];
+        for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+          const row = rawRows[r];
+          if (!row || row.length === 0) continue;
+          const desc = String(row[descCol >= 0 ? descCol : 1] || row[0] || '').trim();
+          if (!desc || isHeaderLikeRow(row) || desc.toUpperCase() === 'DESCRIPTION' || desc.toUpperCase() === 'MALZEME ADI' || desc.toUpperCase() === 'TANIM') continue;
+
+          const pn = String(row[pnCol >= 0 ? pnCol : 2] ?? '-').trim() || '-';
+          const sn = snCol >= 0 ? String(row[snCol] ?? '-').trim() || '-' : (isKim ? '-' : String(row[3] ?? '-').trim() || '-');
+          const loc = locCol >= 0 ? String(row[locCol] ?? (isKim ? 'KİMYASAL DEPO' : '-')).trim() || '-' : (isKim ? String(row[3] || 'KİMYASAL DEPO') : String(row[5] || '-'));
+
+          const piyasa = Number(row[piyasaCol >= 0 ? piyasaCol : 5]) || 0;
+          const spainGelen = Number(row[spainGelenCol >= 0 ? spainGelenCol : 6]) || 0;
+          const genelToplam = Number(row[genelToplamCol >= 0 ? genelToplamCol : 7]) || (isKim ? (piyasa + spainGelen) : 0);
+          const gelen = isKim ? (genelToplam || piyasa + spainGelen) : (Number(row[gelenCol >= 0 ? gelenCol : 6]) || 0);
+
+          const ankaraCikan = Number(row[ankaraCikanCol >= 0 ? ankaraCikanCol : (isKim ? 9 : 8)]) || 0;
+          const ankaraMevcut = Number(row[ankaraMevcutCol >= 0 ? ankaraMevcutCol : (isKim ? 10 : 9)]) || 0;
+          const karainTransfer = Number(row[karainTransferCol >= 0 ? karainTransferCol : (isKim ? 11 : 10)]) || 0;
+          const karainCikan = Number(row[karainCikanCol >= 0 ? karainCikanCol : (isKim ? 12 : 11)]) || 0;
+          const karainMevcut = Number(row[karainMevcutCol >= 0 ? karainMevcutCol : (isKim ? 13 : 12)]) || 0;
+          const canakkaleTransfer = Number(row[canakkaleTransferCol >= 0 ? canakkaleTransferCol : (isKim ? 14 : 13)]) || 0;
+          const canakkaleCikan = Number(row[canakkaleCikanCol >= 0 ? canakkaleCikanCol : (isKim ? 15 : 14)]) || 0;
+          const canakkaleMevcut = Number(row[canakkaleMevcutCol >= 0 ? canakkaleMevcutCol : (isKim ? 16 : 15)]) || 0;
+          const milasTransfer = Number(row[milasTransferCol >= 0 ? milasTransferCol : (isKim ? 17 : 16)]) || 0;
+          const milasCikan = Number(row[milasCikanCol >= 0 ? milasCikanCol : (isKim ? 18 : 17)]) || 0;
+          const milasMevcut = Number(row[milasMevcutCol >= 0 ? milasMevcutCol : (isKim ? 19 : 18)]) || 0;
+          const bursaTransfer = Number(row[bursaTransferCol >= 0 ? bursaTransferCol : (isKim ? 20 : 19)]) || 0;
+          const bursaCikan = Number(row[bursaCikanCol >= 0 ? bursaCikanCol : (isKim ? 21 : 20)]) || 0;
+          const bursaMevcut = Number(row[bursaMevcutCol >= 0 ? bursaMevcutCol : (isKim ? 22 : 21)]) || 0;
+          const sumRegions = ankaraMevcut + karainMevcut + canakkaleMevcut + milasMevcut + bursaMevcut;
+          const toplamStok = (toplamStokCol >= 0 && Number(row[toplamStokCol]) > 0) ? Number(row[toplamStokCol]) : sumRegions;
+
+          items.push({
+            unit: unitKey,
+            category: cat,
+            description: desc,
+            name: desc,
+            partNumber: pn,
+            pn: pn,
+            serialAndNotes: sn,
+            sn: sn,
+            lokasyonNo: loc,
+            location: loc,
+            gelen,
+            baseGelen: gelen,
+            piyasa,
+            spainGelen,
+            genelToplam,
+            ankaraCikan,
+            ankaraMevcut,
+            karainTransfer,
+            karainCikan,
+            karainMevcut,
+            canakkaleTransfer,
+            canakkaleCikan,
+            canakkaleMevcut,
+            milasTransfer,
+            milasCikan,
+            milasMevcut,
+            bursaTransfer,
+            bursaCikan,
+            bursaMevcut,
+            toplamStok
+          } as DepoItem);
+        }
+        return items;
+      } catch {
+        return [];
       }
-    } catch (e) {}
-    return [];
-  }, [inventory]);
+    };
+
+    const loadAllForUnit = async () => {
+      setIsLoadingInventory(true);
+      const targetUnits = selectedUnit === 'all'
+        ? ['at802', 'bell429', 't70', 'c650', 'b360', 'hangar']
+        : [selectedUnit];
+
+      const fetchTasks = targetUnits.flatMap(u =>
+        (['sarf', 'kimyasal'] as const).map(async cat => {
+          const fileName = getFileName(u, cat);
+          const candidates = [fileName, fileName.replace(/-/g, '_'), fileName.replace(/_/g, '-')];
+          try {
+            const res = await remoteFetchExcelFromDrive(fileName, candidates, DRIVE_FOLDER_ID);
+            if (res && res.status === 'success' && res.base64) {
+              return parseDriveExcel(res.base64, u, cat);
+            }
+            const staticRes = await fetch(`/${fileName}`);
+            if (staticRes.ok && !(staticRes.headers.get('content-type') || '').includes('text/html')) {
+              const buf = await staticRes.arrayBuffer();
+              const bytes = new Uint8Array(buf);
+              let bin = '';
+              for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+              return parseDriveExcel(btoa(bin), u, cat);
+            }
+          } catch {}
+          return [] as DepoItem[];
+        })
+      );
+
+      const results = await Promise.all(fetchTasks);
+      const collected = results.flat();
+
+      if (!cancelled) {
+        setLiveInventory(collected);
+        setIsLoadingInventory(false);
+      }
+    };
+
+    loadAllForUnit();
+    return () => { cancelled = true; };
+  }, [isOpen, selectedUnit, inventory]);
+
+  // Active inventory: use prop or live Drive inventory filtered to selectedUnit
+  const activeInventory = useMemo(() => {
+    const source = (inventory && inventory.length > 0) ? inventory : liveInventory;
+    if (!source || source.length === 0) return [];
+    if (!selectedUnit || selectedUnit === 'all') return source;
+    const normSel = selectedUnit.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return source.filter(it => {
+      const u = String(it.unit || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (normSel.startsWith('at802')) return u === 'at802' || !it.unit;
+      return u === normSel || u.includes(normSel);
+    });
+  }, [inventory, liveInventory, selectedUnit]);
 
   // Beep sound function on barcode read
   const playBeep = () => {
@@ -667,24 +869,208 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     }
   };
 
+  // Stop talep modal camera helper
+  const stopTalepCamera = async () => {
+    if (talepScannerRef.current) {
+      try {
+        if (talepScannerRef.current.isScanning) {
+          await talepScannerRef.current.stop();
+        }
+        await talepScannerRef.current.clear();
+      } catch (e) {
+        console.warn('Talep camera stop error:', e);
+      }
+      talepScannerRef.current = null;
+    }
+
+    const container = document.getElementById(talepScannerContainerId);
+    if (container) {
+      const videos = container.querySelectorAll('video');
+      videos.forEach((video: any) => {
+        if (video.srcObject) {
+          const stream = video.srcObject as MediaStream;
+          stream.getTracks().forEach(t => t.stop());
+          video.srcObject = null;
+        }
+      });
+      container.innerHTML = '';
+    }
+
+    setIsTalepCameraActive(false);
+  };
+
+  // Start talep modal camera helper (with optional explicit camera ID selection)
+  const startTalepCamera = async (overrideCameraId?: string) => {
+    setTalepCameraError(null);
+    try {
+      const el = document.getElementById(talepScannerContainerId);
+      if (!el) {
+        setTimeout(() => {
+          if (document.getElementById(talepScannerContainerId)) {
+            startTalepCamera(overrideCameraId);
+          }
+        }, 120);
+        return;
+      }
+
+      await stopCamera();
+      await stopTalepCamera();
+      await new Promise(r => setTimeout(r, 150));
+
+      if (typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+          stream.getTracks().forEach(track => track.stop());
+        } catch (permErr) {
+          console.warn('Talep getUserMedia precheck failed:', permErr);
+        }
+      }
+
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length > 0) {
+          setTalepAvailableCameras(devices.map((d, idx) => ({
+            id: d.id,
+            label: d.label || `Kamera ${idx + 1}`
+          })));
+        }
+      } catch {}
+
+      const html5QrCode = new Html5Qrcode(talepScannerContainerId, {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.DATA_MATRIX,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODE_93,
+          Html5QrcodeSupportedFormats.ITF
+        ],
+        verbose: false
+      });
+      talepScannerRef.current = html5QrCode;
+
+      const scanConfig = {
+        fps: 20,
+        qrbox: (viewfinderWidth: number, viewfinderHeight: number) => ({
+          width: Math.max(180, Math.floor(viewfinderWidth * 0.88)),
+          height: Math.max(120, Math.floor(viewfinderHeight * 0.65))
+        }),
+        aspectRatio: 1.333,
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: true
+        }
+      };
+
+      const onTalepCodeDecoded = (decodedText: string) => {
+        playBeep();
+        const { found, extractedQuery } = resolveInventoryItemByCode(decodedText);
+        stopTalepCamera();
+        if (found) {
+          handleAddTalepItemFromInventory(found);
+        } else {
+          setAddTalepSearchQuery(extractedQuery || decodedText);
+          if (showNotification) {
+            showNotification(`⚠️ Okunan kod (${decodedText}) bulunamadı. Alttan arayarak devam edebilirsiniz.`);
+          }
+          setTimeout(() => addTalepInputRef.current?.focus(), 80);
+        }
+      };
+
+      const targetCam = overrideCameraId || selectedTalepCameraId;
+      if (targetCam && targetCam !== 'auto') {
+        await html5QrCode.start(targetCam, scanConfig, onTalepCodeDecoded, () => {});
+        setIsTalepCameraActive(true);
+        return;
+      }
+
+      try {
+        await html5QrCode.start({ facingMode: 'environment' }, scanConfig, onTalepCodeDecoded, () => {});
+        setIsTalepCameraActive(true);
+        return;
+      } catch {}
+
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length > 0) {
+          const backCam = devices.find(d =>
+            d.label.toLowerCase().includes('back') ||
+            d.label.toLowerCase().includes('rear') ||
+            d.label.toLowerCase().includes('environment') ||
+            d.label.toLowerCase().includes('arka')
+          ) || devices[devices.length - 1];
+          await html5QrCode.start(backCam.id, scanConfig, onTalepCodeDecoded, () => {});
+          setIsTalepCameraActive(true);
+          return;
+        }
+      } catch {}
+
+      await html5QrCode.start({ facingMode: 'user' }, scanConfig, onTalepCodeDecoded, () => {});
+      setIsTalepCameraActive(true);
+    } catch (err: any) {
+      let errorMsg = '❌ Kameraya erişilemedi.';
+      if (err?.name === 'NotAllowedError' || (err?.message && err.message.toLowerCase().includes('permission'))) {
+        errorMsg = '❌ Kamera izni verilmedi. Tarayıcı adres çubuğundan kamera iznini onaylayınız.';
+      } else if (err?.name === 'NotFoundError') {
+        errorMsg = '❌ Cihazda kullanılabilir kamera bulunamadı.';
+      } else if (err?.message) {
+        errorMsg = `❌ Kamera başlatılamadı: ${err.message}`;
+      }
+      setTalepCameraError(errorMsg);
+      setIsTalepCameraActive(false);
+    }
+  };
+
   // Cleanup camera on close or unmount (NEVER auto-start on page open)
   useEffect(() => {
     if (!isOpen) {
       stopCamera();
+      stopTalepCamera();
     }
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isUrunTalebiModalOpen || !isAddTalepItemOpen) {
+      stopTalepCamera();
+    } else {
+      // Enumerate available cameras silently if already permitted and focus search input
+      Html5Qrcode.getCameras()
+        .then(devices => {
+          if (devices && devices.length > 0) {
+            setTalepAvailableCameras(devices.map((d, idx) => ({
+              id: d.id,
+              label: d.label || `Kamera ${idx + 1}`
+            })));
+          }
+        })
+        .catch(() => {});
+      setTimeout(() => addTalepInputRef.current?.focus(), 100);
+    }
+  }, [isUrunTalebiModalOpen, isAddTalepItemOpen]);
+
+  useEffect(() => {
     return () => {
       stopCamera();
+      stopTalepCamera();
     };
   }, []);
 
-  // Code parser & item matcher
-  const handleCodeRead = (rawText: string) => {
-    setScannedResultText(rawText);
+  // Unique checklist key per inventory row so '-' PNs or same PNs never collide
+  const getCountItemKey = (item: DepoItem) => {
+    const it = item as any;
+    const p = String(item.partNumber || item.pn || it.MALZEME_PN || '').trim();
+    const s = String(item.serialAndNotes || item.sn || it.SERI_NO || '').trim();
+    const d = String(item.description || item.name || it.MALZEME_ADI || '').trim();
+    const l = String(item.lokasyonNo || item.location || '').trim();
+    return `${p}__${s}__${d}__${l}`;
+  };
 
-    // Extract PN, SN or Location from text
+  // Shared Barcode/QR/PN inventory resolver
+  const resolveInventoryItemByCode = (rawText: string): { found: DepoItem | null; extractedQuery: string } => {
+    const sourceInv = (activeInventory && activeInventory.length > 0) ? activeInventory : inventory;
     let targetPn = '';
     let targetLoc = '';
 
@@ -703,29 +1089,50 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
       targetPn = rawText.trim();
     }
 
-    // Look for matching item in inventory
-    const cleanQ = (targetPn || targetLoc || rawText).toLowerCase();
-    const found = activeInventory.find(i => {
-      const item = i as any;
-      const pn = (i.partNumber || i.pn || item.MALZEME_PN || '').toLowerCase();
-      const desc = (i.description || i.name || item.MALZEME_ADI || '').toLowerCase();
-      const loc = (i.lokasyonNo || i.location || item.DEPO_YERI || '').toLowerCase();
-      const sn = (i.serialAndNotes || i.sn || item.SERI_NO || '').toLowerCase();
+    const normTight = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanQ = (targetPn || targetLoc || rawText).trim().toLowerCase();
+    const cleanQTight = normTight(targetPn || rawText);
 
-      return (targetPn && pn === targetPn.toLowerCase()) ||
-        (targetLoc && loc.includes(targetLoc.toLowerCase())) ||
+    let found = sourceInv.find(i => {
+      const item = i as any;
+      const pn = (i.partNumber || i.pn || item.MALZEME_PN || '').trim().toLowerCase();
+      return pn && pn !== '-' && (
+        (targetPn && pn === targetPn.toLowerCase()) ||
         pn === cleanQ ||
-        desc.includes(cleanQ) ||
-        sn.includes(cleanQ) ||
-        loc.includes(cleanQ);
+        (cleanQTight.length >= 3 && normTight(pn) === cleanQTight)
+      );
     }) || null;
+
+    if (!found) {
+      found = sourceInv.find(i => {
+        const item = i as any;
+        const pn = (i.partNumber || i.pn || item.MALZEME_PN || '').trim().toLowerCase();
+        const desc = (i.description || i.name || item.MALZEME_ADI || '').trim().toLowerCase();
+        const loc = (i.lokasyonNo || i.location || item.DEPO_YERI || '').trim().toLowerCase();
+        const sn = (i.serialAndNotes || i.sn || item.SERI_NO || '').trim().toLowerCase();
+
+        return (targetLoc && loc.includes(targetLoc.toLowerCase())) ||
+          (pn && pn !== '-' && pn.includes(cleanQ)) ||
+          (sn && sn !== '-' && sn.includes(cleanQ)) ||
+          desc.includes(cleanQ) ||
+          (loc && loc !== '-' && loc.includes(cleanQ));
+      }) || null;
+    }
+
+    return { found, extractedQuery: targetPn || targetLoc || rawText.trim() };
+  };
+
+  // Code parser & item matcher (Barcode/QR resolves to P/N and immediately queries depot)
+  const handleCodeRead = (rawText: string) => {
+    setScannedResultText(rawText);
+    const { found } = resolveInventoryItemByCode(rawText);
 
     if (activeModule === 'read') {
       stopCamera(); // Pause camera to display details window
       if (found) {
         setMatchedItem(found);
         if (showNotification) {
-          showNotification(`✅ Barkod okundu: ${found.description || found.name || (found as any).MALZEME_ADI}`);
+          showNotification(`✅ Barkod okundu (P/N: ${found.partNumber || found.pn || '-'}): ${found.description || found.name || (found as any).MALZEME_ADI}`);
         }
       } else {
         setMatchedItem(null);
@@ -740,38 +1147,103 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
         setMissingSayimSerialSelect('');
         const regionProp = DEPO_REGIONS.find(r => r.id === sayimDepoBolge)?.prop || 'ankaraMevcut';
         const sistemStok = Number((found as any)[regionProp] ?? 0);
-        
-        // If in session, maybe show what we already counted? 
-        // No, user wants to see current system stock as physical initially or for verification.
         setSayilanAdetInput(sistemStok);
 
         if (showNotification) {
           showNotification(`📦 ${found.description || found.name || (found as any).MALZEME_ADI} için sayım penceresi açıldı.`);
         }
+      } else if (showNotification) {
+        showNotification(`⚠️ Okunan kod (${rawText}) sayım listesinde bulunamadı.`);
       }
     }
   };
 
-  const handleStartSession = () => {
-    const regionProp = DEPO_REGIONS.find(r => r.id === sayimDepoBolge)?.prop || 'ankaraMevcut';
-    // Filter items with quantity > 0 and matching sayimCategory ('sarf' vs 'kimyasal')
-    // Ayrıca Karain seçildiğinde, mevcut 0 olsa bile önceden transfer geçmişi olanlar da sayım checklistine dahil edilir
-    const items = activeInventory.filter(item => {
-        const qty = Number((item as any)[regionProp] || 0);
-        const itemCat = item.category || 'sarf';
-        const isKimyasalItem = itemCat === 'kimyasal' || (item.description || item.name || '').toLowerCase().includes('kimya') || (item.description || item.name || '').toLowerCase().includes('solvent') || (item.description || item.name || '').toLowerCase().includes('yağ') || (item.description || item.name || '').toLowerCase().includes('hidrolik');
-        
-        const matchesCategory = sayimCategory === 'kimyasal' ? isKimyasalItem : !isKimyasalItem;
-        if (!matchesCategory) return false;
+  // Build Checklist Items: selected depot stock > 0 PLUS previously received/transferred items that are currently 0
+  const getChecklistItemsForSession = (
+    inv: DepoItem[],
+    region: string,
+    cat: 'sarf' | 'kimyasal',
+    txs: DepoTransaction[]
+  ) => {
+    const regionProp = DEPO_REGIONS.find(r => r.id === region)?.prop || 'ankaraMevcut';
+    const normRegion = region.toUpperCase()
+      .replace(/İ/g, 'I')
+      .replace(/Ç/g, 'C')
+      .replace(/Ş/g, 'S')
+      .replace(/Ö/g, 'O')
+      .replace(/Ü/g, 'U')
+      .replace(/Ğ/g, 'G');
 
-        if (qty > 0) return true;
-        if ((sayimDepoBolge as string) === 'KARAİN' || (sayimDepoBolge as string) === 'KARAIN') {
-          const hadTransfer = Number((item as any).karainTransfer || 0) > 0 || Number((item as any).karainCikan || 0) > 0;
-          if (hadTransfer) return true;
-        }
-        return false;
+    return inv.filter(item => {
+      const it = item as any;
+      // Respect explicit category from Drive Excel; only fallback to keywords if category missing
+      const matchesCategory = item.category
+        ? item.category === cat
+        : (() => {
+            const dLower = (item.description || item.name || '').toLowerCase();
+            const isKimKeyword = dLower.includes('kimya') || dLower.includes('solvent');
+            return cat === 'kimyasal' ? isKimKeyword : !isKimKeyword;
+          })();
+      if (!matchesCategory) return false;
+
+      // 1) Stock > 0 in selected depot
+      const qty = Number(it[regionProp] || 0);
+      if (qty > 0) return true;
+
+      // 2) Previously arrived / had activity in selected depot even if current stock is 0
+      if (normRegion === 'ANKARA') {
+        const hadAnkaraHistory =
+          Number(it.gelen || it.baseGelen || it.genelToplam || it.piyasa || it.spainGelen || 0) > 0 ||
+          Number(it.ankaraCikan || 0) > 0 ||
+          Number(it.karainTransfer || 0) > 0 ||
+          Number(it.canakkaleTransfer || 0) > 0 ||
+          Number(it.milasTransfer || 0) > 0 ||
+          Number(it.bursaTransfer || 0) > 0;
+        if (hadAnkaraHistory) return true;
+      } else if (normRegion === 'KARAIN') {
+        if (Number(it.karainTransfer || 0) > 0 || Number(it.karainCikan || 0) > 0) return true;
+      } else if (normRegion === 'CANAKKALE') {
+        if (Number(it.canakkaleTransfer || 0) > 0 || Number(it.canakkaleCikan || 0) > 0) return true;
+      } else if (normRegion === 'MILAS') {
+        if (Number(it.milasTransfer || 0) > 0 || Number(it.milasCikan || 0) > 0) return true;
+      } else if (normRegion === 'BURSA') {
+        if (Number(it.bursaTransfer || 0) > 0 || Number(it.bursaCikan || 0) > 0) return true;
+      }
+
+      // Check transaction history for this item in selected depot
+      const itemPn = String(item.partNumber || item.pn || '').trim().toLowerCase();
+      const itemDesc = String(item.description || item.name || '').trim().toLowerCase();
+      const hasTxInRegion = txs.some(tx => {
+        const txPn = String(tx.pn || tx.partNumber || '').trim().toLowerCase();
+        const txDesc = String(tx.itemName || '').trim().toLowerCase();
+        const sameItem = (itemPn && itemPn !== '-' && txPn === itemPn) || (itemDesc && txDesc === itemDesc);
+        if (!sameItem) return false;
+        const txBlob = `${tx.location || ''} ${tx.islemTuru || ''} ${tx.receivedBy || ''} ${tx.notes || ''}`
+          .toUpperCase()
+          .replace(/İ/g, 'I')
+          .replace(/Ç/g, 'C')
+          .replace(/Ş/g, 'S')
+          .replace(/Ö/g, 'O')
+          .replace(/Ü/g, 'U')
+          .replace(/Ğ/g, 'G');
+        return txBlob.includes(normRegion);
+      });
+
+      return hasTxInRegion;
     });
-    
+  };
+
+  // Auto-populate / refresh checklist if activeInventory finishes loading from Drive during an active session
+  useEffect(() => {
+    if (!sessionActive || activeInventory.length === 0) return;
+    const items = getChecklistItemsForSession(activeInventory, sayimDepoBolge, sayimCategory, transactions);
+    setSessionItemsToCount(items);
+    setSessionTotalCount(items.length);
+  }, [sessionActive, activeInventory, sayimDepoBolge, sayimCategory, transactions]);
+
+  const handleStartSession = () => {
+    const items = getChecklistItemsForSession(activeInventory, sayimDepoBolge, sayimCategory, transactions);
+
     setSessionItemsToCount(items);
     setSessionTotalCount(items.length);
     setScannedInSession(new Set());
@@ -779,7 +1251,11 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     setSessionScannedData({});
     setSessionActive(true);
     if (showNotification) {
-      showNotification(`🚀 ${sayimDepoBolge} [${sayimCategory === 'kimyasal' ? 'KİMYASAL DEPOSU' : 'SARF & PARÇA DEPOSU'}] için ${items.length} kalemlik sayım oturumu başladı.`);
+      if (isLoadingInventory && items.length === 0) {
+        showNotification(`⏳ Drive stok verileri yükleniyor; liste hazır olduğunda ${sayimDepoBolge} sayım checklist'i otomatik dolacaktır.`);
+      } else {
+        showNotification(`🚀 ${sayimDepoBolge} [${sayimCategory === 'kimyasal' ? 'KİMYASAL DEPOSU' : 'SARF & PARÇA DEPOSU'}] için ${items.length} kalemlik sayım checklist oturumu başladı.`);
+      }
     }
   };
 
@@ -791,9 +1267,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     
     // 2. Items NEVER scanned (stok preserved)
     const neverScanned = sessionItemsToCount.filter(item => {
-      const it = item as any;
-      const itemKey = item.partNumber || item.pn || it.MALZEME_PN || item.name || it.MALZEME_ADI || '';
-      return !scannedInSession.has(itemKey);
+      return !scannedInSession.has(getCountItemKey(item));
     });
 
     const allTransactions: DepoTransaction[] = [];
@@ -825,19 +1299,29 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
     if (onUpdateInventory) onUpdateInventory(currentInventory);
 
-    // Otomatik olarak sayım sonuçlarını Onay Bekleyenler listesine gönder
-    const pendingCountItems = scannedItems.map(data => ({
-      pn: data.item.partNumber || data.item.pn || '-',
-      sn: data.item.serialAndNotes || data.item.sn || '-',
-      itemName: data.item.description || data.item.name || 'Sayılan Parça',
-      category: sayimCategory,
-      quantity: data.sayilan,
-      date: new Date().toLocaleString('tr-TR'),
-      requestedBy: sayimPersonel || 'Sayım Sorumlusu',
-      depot: sayimDepoBolge,
-      tailNo: 'SAYIM SONUCU',
-      notes: `SAYIM ONAYI (${sayimDepoBolge} DEPOSU) - Fiziksel Sayılan: ${data.sayilan} Adet`
-    }));
+    // Otomatik olarak sayım sonuçlarını Onay Bekleyenler listesine gönder (Fark bilgisiyle birlikte)
+    const pendingCountItems = scannedItems.map(data => {
+      const sistemStok = Number((data.item as any)[regionProp] ?? 0);
+      const fark = data.sayilan - sistemStok;
+      const farkStr = fark > 0 ? `+${fark}` : `${fark}`;
+      return {
+        pn: data.item.partNumber || data.item.pn || '-',
+        sn: data.item.serialAndNotes || data.item.sn || '-',
+        itemName: data.item.description || data.item.name || 'Sayılan Parça',
+        category: sayimCategory,
+        txCategory: 'sayim',
+        quantity: fark !== 0 ? Math.abs(fark) : data.sayilan,
+        sistemStok,
+        sayilanAdet: data.sayilan,
+        fark,
+        date: new Date().toLocaleString('tr-TR'),
+        requestedBy: sayimPersonel || 'Sayım Sorumlusu',
+        depot: sayimDepoBolge,
+        tailNo: 'SAYIM SONUCU',
+        unit: selectedUnit === 'all' ? (data.item.unit || 'at802') : selectedUnit,
+        notes: `SAYIM ONAYI (${sayimDepoBolge} DEPOSU) - Sistem: ${sistemStok}, Sayılan: ${data.sayilan}, Fark: ${farkStr} Adet`
+      };
+    });
 
     if (pendingCountItems.length > 0) {
       fetch('/api/onay-bekleyenler', {
@@ -963,17 +1447,36 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
   const commitSayimFarki = (item: DepoItem, fark: number, excessSource?: 'ANKARA' | 'BOLGE', isVerified: boolean = false) => {
     const { tx, updatedInv } = prepareSayimFarkiData(item, fark, activeInventory, excessSource, isVerified);
-    
-    try {
-      if (updatedInv) {
-        localStorage.setItem('ogm_depo_inventory_v5', JSON.stringify(updatedInv));
-      }
-      if (tx) {
-        const storedTxs = localStorage.getItem('ogm_depo_transactions_v5');
-        const existingTxs: DepoTransaction[] = storedTxs ? JSON.parse(storedTxs) : [];
-        localStorage.setItem('ogm_depo_transactions_v5', JSON.stringify([tx, ...existingTxs]));
-      }
-    } catch (e) {}
+
+    if (fark !== 0) {
+      const regionProp = DEPO_REGIONS.find(r => r.id === sayimDepoBolge)?.prop || 'ankaraMevcut';
+      const sistemStok = Number((item as any)[regionProp] ?? 0);
+      const sayilanAdet = sistemStok + fark;
+      const farkStr = fark > 0 ? `+${fark}` : `${fark}`;
+      fetch('/api/onay-bekleyenler', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{
+            pn: item.partNumber || item.pn || '-',
+            sn: item.serialAndNotes || item.sn || '-',
+            itemName: item.description || item.name || 'Sayılan Parça',
+            category: sayimCategory,
+            txCategory: 'sayim',
+            quantity: Math.abs(fark),
+            sistemStok,
+            sayilanAdet,
+            fark,
+            date: new Date().toLocaleString('tr-TR'),
+            requestedBy: sayimPersonel || 'Sayım Sorumlusu',
+            depot: sayimDepoBolge,
+            tailNo: 'SAYIM SONUCU',
+            unit: selectedUnit === 'all' ? (item.unit || 'at802') : selectedUnit,
+            notes: `SAYIM ONAYI (${sayimDepoBolge} DEPOSU) - Sistem: ${sistemStok}, Sayılan: ${sayilanAdet}, Fark: ${farkStr} Adet`
+          }]
+        })
+      }).catch(() => {});
+    }
 
     if (onAddTransaction && tx) onAddTransaction(tx);
     if (onUpdateInventory && updatedInv) onUpdateInventory(updatedInv);
@@ -984,8 +1487,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     if (current) {
       if (sessionActive) {
         // Collect for batch processing at the end
-        const it = current.item as any;
-        const itemKey = it.partNumber || it.pn || it.MALZEME_PN || it.description || it.name || it.MALZEME_ADI || '';
+        const itemKey = getCountItemKey(current.item);
         const sayilan = Number(sayilanAdetInput);
         
         setSessionScannedData(prev => ({
@@ -1018,9 +1520,81 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     e.preventDefault();
     if (!manualCodeInput.trim()) return;
     playBeep();
+    setIsManualSearchDropdownOpen(false);
     handleCodeRead(manualCodeInput.trim());
     setManualCodeInput('');
   };
+
+  // Auto-trigger depot query when a barcode/QR scanner enters or pastes an exact P/N into the manual P/N box
+  useEffect(() => {
+    const q = manualCodeInput.trim();
+    if (!isOpen || !isUnlocked || !q || q.length < 3) return;
+    if (q.startsWith('OGM-DEPO-')) {
+      setIsManualSearchDropdownOpen(false);
+      playBeep();
+      handleCodeRead(q);
+      setManualCodeInput('');
+      return;
+    }
+    const qLower = q.toLowerCase();
+    const exactPnMatches = activeInventory.filter(i => {
+      const p = String(i.partNumber || i.pn || (i as any).MALZEME_PN || '').trim().toLowerCase();
+      return p && p !== '-' && p === qLower;
+    });
+    if (exactPnMatches.length >= 1) {
+      const hasLongerPrefix = activeInventory.some(i => {
+        const p = String(i.partNumber || i.pn || (i as any).MALZEME_PN || '').trim().toLowerCase();
+        return p.length > qLower.length && p.startsWith(qLower);
+      });
+      const timer = setTimeout(() => {
+        setIsManualSearchDropdownOpen(false);
+        playBeep();
+        handleCodeRead(q);
+        setManualCodeInput('');
+      }, hasLongerPrefix ? 550 : 220);
+      return () => clearTimeout(timer);
+    }
+  }, [manualCodeInput, isOpen, isUnlocked, activeInventory]);
+
+  // Auto-match barcode / exact P/N inside "+ Parça / Barkod Ekle" search box
+  useEffect(() => {
+    if (!isUrunTalebiModalOpen || !isAddTalepItemOpen) return;
+    const q = addTalepSearchQuery.trim();
+    if (!q || q.length < 3) return;
+
+    const sourceInv = (activeInventory && activeInventory.length > 0) ? activeInventory : inventory;
+
+    if (q.startsWith('OGM-DEPO-')) {
+      const { found, extractedQuery } = resolveInventoryItemByCode(q);
+      if (found) {
+        playBeep();
+        stopTalepCamera();
+        handleAddTalepItemFromInventory(found);
+      } else if (extractedQuery && extractedQuery !== q) {
+        setAddTalepSearchQuery(extractedQuery);
+      }
+      return;
+    }
+
+    const qLower = q.toLowerCase();
+    const exactPnMatches = sourceInv.filter(i => {
+      const p = String(i.partNumber || i.pn || (i as any).MALZEME_PN || '').trim().toLowerCase();
+      return p && p !== '-' && p === qLower;
+    });
+
+    if (exactPnMatches.length === 1) {
+      const hasLongerPrefix = sourceInv.some(i => {
+        const p = String(i.partNumber || i.pn || (i as any).MALZEME_PN || '').trim().toLowerCase();
+        return p.length > qLower.length && p.startsWith(qLower);
+      });
+      const timer = setTimeout(() => {
+        playBeep();
+        stopTalepCamera();
+        handleAddTalepItemFromInventory(exactPnMatches[0]);
+      }, hasLongerPrefix ? 650 : 320);
+      return () => clearTimeout(timer);
+    }
+  }, [addTalepSearchQuery, isUrunTalebiModalOpen, isAddTalepItemOpen, activeInventory, inventory]);
 
   // Single item save or Confirmation from Popup
   const handleSaveSayimFarki = () => {
@@ -1031,7 +1605,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     const fark = isNaN(sayilan) ? 0 : sayilan - sistemStok;
 
     const it = sayimItem as any;
-    const itemKey = sayimItem.partNumber || sayimItem.pn || it.MALZEME_PN || sayimItem.name || it.MALZEME_ADI || '';
+    const itemKey = getCountItemKey(sayimItem);
 
     // 1. Update Session Tracking if active
     if (sessionActive) {
@@ -1302,7 +1876,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
                   {/* Manual Barcode / P/N Input fallback with Autocomplete */}
                   <form onSubmit={handleManualSubmit} className="flex items-center gap-2 pt-1 relative">
-                    <div className="relative flex-1">
+                    <div ref={manualSearchRef} className="relative flex-1">
                       <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5 z-10" />
                       <input
                         type="text"
@@ -1312,44 +1886,59 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                           setIsManualSearchDropdownOpen(true);
                         }}
                         onFocus={() => setIsManualSearchDropdownOpen(true)}
-                        placeholder="Barkod / Karekod verisi veya P/N / Malzeme Adı yazınız..."
+                        placeholder={isLoadingInventory ? "Drive stok verileri yükleniyor..." : "Barkod / Karekod verisi veya P/N / Malzeme Adı yazınız..."}
                         className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-emerald-500 font-bold"
                       />
 
                       {/* Autocomplete Dropdown List */}
-                      {isManualSearchDropdownOpen && manualCodeInput.trim().length > 0 && (
-                        <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-slate-950 border-2 border-emerald-500/60 rounded-2xl shadow-2xl max-h-56 overflow-y-auto divide-y divide-slate-800/80">
-                          {activeInventory.filter(i => {
-                            const q = manualCodeInput.toLowerCase().trim();
-                            const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
-                            const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
-                            const s = (i.serialAndNotes || i.sn || (i as any).SERI_NO || '').toLowerCase();
-                            return p.includes(q) || d.includes(q) || s.includes(q);
-                          }).slice(0, 10).map((item, idx) => (
-                            <div
-                              key={idx}
-                              onClick={() => {
-                                const selPn = item.partNumber || item.pn || (item as any).MALZEME_PN || item.description || item.name;
-                                setManualCodeInput(selPn);
-                                setIsManualSearchDropdownOpen(false);
-                                playBeep();
-                                handleCodeRead(selPn);
-                              }}
-                              className="p-2.5 hover:bg-emerald-950/60 cursor-pointer text-xs flex items-center justify-between gap-2 transition-colors"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="font-bold text-white truncate">{item.description || item.name}</div>
-                                <div className="text-[11px] font-mono text-slate-400 truncate">
-                                  P/N: <strong className="text-emerald-300">{item.partNumber || item.pn || '-'}</strong> | S/N: {item.serialAndNotes || item.sn || '-'}
-                                </div>
+                      {isManualSearchDropdownOpen && manualCodeInput.trim().length > 0 && (() => {
+                        const q = manualCodeInput.toLowerCase().trim();
+                        const matchedList = activeInventory.filter(i => {
+                          const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
+                          const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
+                          const s = (i.serialAndNotes || i.sn || (i as any).SERI_NO || '').toLowerCase();
+                          const l = (i.lokasyonNo || i.location || '').toLowerCase();
+                          return p.includes(q) || d.includes(q) || s.includes(q) || l.includes(q);
+                        }).slice(0, 15);
+
+                        return (
+                          <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-slate-950 border-2 border-emerald-500/60 rounded-2xl shadow-2xl max-h-60 overflow-y-auto divide-y divide-slate-800/80">
+                            {isLoadingInventory && matchedList.length === 0 ? (
+                              <div className="p-3 text-center text-xs text-emerald-300 font-mono animate-pulse">
+                                ⏳ Drive deposundan malzeme listesi yükleniyor...
                               </div>
-                              <span className="text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full shrink-0">
-                                Stok: {item.ankaraMevcut || item.toplamStok || 0}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                            ) : matchedList.length === 0 ? (
+                              <div className="p-3 text-center text-xs text-slate-400">
+                                "{manualCodeInput}" ile eşleşen malzeme bulunamadı.
+                              </div>
+                            ) : (
+                              matchedList.map((item, idx) => (
+                                <div
+                                  key={idx}
+                                  onClick={() => {
+                                    const selPn = item.partNumber && item.partNumber !== '-' ? item.partNumber : (item.pn && item.pn !== '-' ? item.pn : (item.description || item.name));
+                                    setManualCodeInput(selPn);
+                                    setIsManualSearchDropdownOpen(false);
+                                    playBeep();
+                                    handleCodeRead(selPn);
+                                  }}
+                                  className="p-2.5 hover:bg-emerald-950/60 cursor-pointer text-xs flex items-center justify-between gap-2 transition-colors"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-bold text-white truncate">{item.description || item.name}</div>
+                                    <div className="text-[11px] font-mono text-slate-400 truncate">
+                                      P/N: <strong className="text-emerald-300">{item.partNumber || item.pn || '-'}</strong> | S/N: {item.serialAndNotes || item.sn || '-'} | Raf: {item.lokasyonNo || item.location || '-'}
+                                    </div>
+                                  </div>
+                                  <span className="text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full shrink-0">
+                                    Stok: {item.ankaraMevcut || item.toplamStok || 0}
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <button
                       type="submit"
@@ -1675,7 +2264,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                         <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
                           <div 
                             className="h-full bg-emerald-500 transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]"
-                            style={{ width: `${(scannedInSession.size / sessionTotalCount) * 100}%` }}
+                            style={{ width: `${sessionTotalCount > 0 ? Math.min(100, (scannedInSession.size / sessionTotalCount) * 100) : 0}%` }}
                           />
                         </div>
 
@@ -1686,7 +2275,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                             className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-[10px] font-black uppercase tracking-wider transition border border-slate-700 flex items-center justify-center gap-2 cursor-pointer"
                           >
                             <Search className="w-3.5 h-3.5" />
-                            KALANLARI GÖR ({sessionTotalCount - scannedInSession.size})
+                            KALANLARI GÖR ({Math.max(0, sessionTotalCount - scannedInSession.size)})
                           </button>
                           
                           <button
@@ -1698,6 +2287,91 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                             SAYIMI BİTİR
                           </button>
                         </div>
+                      </div>
+
+                      {/* SAYIM CHECKLİSTİ (0'dan Farklı + Önceden Gelmiş 0 Stoklu Tüm Kalemler) */}
+                      <div className="bg-slate-950 p-4 rounded-3xl border border-slate-800 space-y-2.5">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div>
+                            <div className="text-xs font-black text-white uppercase tracking-wider font-mono">
+                              📋 {sayimDepoBolge} DEPOSU SAYIM CHECKLİSTİ
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              Stoku 0&apos;dan farklı ve önceden gelip şu an 0 olan tüm kalemler dahildir. Satıra tıklayarak da sayım girebilirsiniz.
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-mono font-black px-2.5 py-1 rounded-full bg-amber-950/60 text-amber-300 border border-amber-700/50">
+                            {scannedInSession.size} / {sessionTotalCount} Sayıldı
+                          </span>
+                        </div>
+
+                        {isLoadingInventory && sessionItemsToCount.length === 0 ? (
+                          <div className="py-6 text-center text-xs font-mono text-amber-300 animate-pulse">
+                            ⏳ Drive stok verileri yükleniyor... Checklist hazırlanıyor...
+                          </div>
+                        ) : sessionItemsToCount.length === 0 ? (
+                          <div className="py-6 text-center text-xs text-slate-400">
+                            {sayimDepoBolge} ({sayimCategory === 'kimyasal' ? 'Kimyasal' : 'Sarf & Parça'}) deposunda sayılacak kalem bulunamadı.
+                          </div>
+                        ) : (
+                          <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/80 rounded-2xl border border-slate-800 bg-slate-900/40">
+                            {sessionItemsToCount.map((item, idx) => {
+                              const key = getCountItemKey(item);
+                              const isCounted = scannedInSession.has(key);
+                              const regionProp = DEPO_REGIONS.find(r => r.id === sayimDepoBolge)?.prop || 'ankaraMevcut';
+                              const sistemStok = Number((item as any)[regionProp] ?? 0);
+                              const countedVal = sessionCounts[key];
+                              return (
+                                <div
+                                  key={key + idx}
+                                  onClick={() => {
+                                    setSayimItem(item);
+                                    setNewSayimSerialInput('');
+                                    setMissingSayimSerialSelect('');
+                                    setSayilanAdetInput(isCounted && countedVal !== undefined ? countedVal : sistemStok);
+                                  }}
+                                  className={`px-3 py-2 flex items-center justify-between gap-2 cursor-pointer transition text-xs ${
+                                    isCounted ? 'bg-emerald-950/25 hover:bg-emerald-950/40' : 'hover:bg-slate-800/60'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <div className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
+                                      isCounted
+                                        ? 'bg-emerald-600 border-emerald-400 text-white'
+                                        : 'bg-slate-950 border-slate-600 text-transparent'
+                                    }`}>
+                                      <Check className="w-3.5 h-3.5" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className={`font-bold truncate ${isCounted ? 'text-emerald-200' : 'text-white'}`}>
+                                        {item.description || item.name || (item as any).MALZEME_ADI}
+                                      </div>
+                                      <div className="text-[10px] font-mono text-slate-400 truncate">
+                                        P/N: <strong className="text-amber-300">{item.partNumber || item.pn || '-'}</strong> | Raf: {item.lokasyonNo || item.location || '-'}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0 font-mono">
+                                    {sistemStok <= 0 ? (
+                                      <span className="px-2 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-700/60 text-[10px] font-bold">
+                                        0 EA • Önceden Gelmiş
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded bg-slate-800 text-amber-300 text-[10px] font-bold">
+                                        Sistem: {sistemStok} EA
+                                      </span>
+                                    )}
+                                    {isCounted && (
+                                      <span className="px-2 py-0.5 rounded bg-emerald-600 text-white text-[10px] font-black">
+                                        Sayılan: {countedVal ?? sistemStok}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
 
                       {/* LAST SCANNED ITEM MINI PREVIEW */}
@@ -1714,7 +2388,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                             <div className="text-right">
                               <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">SAYILAN ADET</div>
                               <div className="text-xs font-mono font-black text-white">
-                                {sessionCounts[sayimItem.partNumber || sayimItem.pn || (sayimItem as any).MALZEME_PN || sayimItem.name || (sayimItem as any).MALZEME_ADI || ''] || 0} EA
+                                {sessionCounts[getCountItemKey(sayimItem)] || 0} EA
                               </div>
                             </div>
                           )}
@@ -2069,7 +2743,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
             
             <div className="overflow-y-auto space-y-2 flex-1">
               {sessionItemsToCount
-                .filter(i => !scannedInSession.has(i.partNumber || i.pn || (i as any).MALZEME_PN || i.name || (i as any).MALZEME_ADI || ''))
+                .filter(i => !scannedInSession.has(getCountItemKey(i)))
                 .map((item, idx) => (
                   <div 
                     key={idx} 
@@ -2163,43 +2837,163 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                   </button>
                 </div>
 
-                {/* Ekleme Açılır Kutusu (Sorgula / Tüm Depolar) */}
+                {/* Ekleme Açılır Kutusu (Kamera Seçimi + Barkod Okuma + Otomatik Arama / Manuel Yazma) */}
                 {isAddTalepItemOpen && (
-                  <div className="p-3 bg-slate-950 rounded-2xl border-2 border-amber-500/50 space-y-2 animate-fade-in">
-                    <label className="block text-[9.5px] font-bold text-amber-300 uppercase font-mono">
-                      TÜM DEPOLARDA ARA VE BİR ÜRÜN DAHA EKLE (SARF VE KİMYASAL)
-                    </label>
-                    <input
-                      type="text"
-                      value={addTalepSearchQuery}
-                      onChange={(e) => setAddTalepSearchQuery(e.target.value)}
-                      placeholder="P/N veya malzeme adı yazarak arayınız..."
-                      className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-400"
-                    />
-                    <div className="max-h-44 overflow-y-auto divide-y divide-slate-800 rounded-xl bg-slate-900/60 border border-slate-800">
-                      {((activeInventory && activeInventory.length > 0) ? activeInventory : inventory).filter(i => {
-                        if (!addTalepSearchQuery.trim()) return true;
-                        const q = addTalepSearchQuery.toLowerCase().trim();
-                        const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
-                        const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
-                        return d.includes(q) || p.includes(q);
-                      }).slice(0, 10).map((item, idx) => (
-                        <div
-                          key={idx}
-                          onClick={() => handleAddTalepItemFromInventory(item)}
-                          className="p-2.5 hover:bg-amber-950/50 cursor-pointer text-xs flex items-center justify-between gap-2 transition"
-                        >
-                          <div>
-                            <div className="font-bold text-white">{item.description || item.name || (item as any).MALZEME_ADI}</div>
-                            <div className="text-[10px] font-mono text-slate-400">
-                              P/N: <strong className="text-amber-300">{item.partNumber || item.pn || (item as any).MALZEME_PN || '-'}</strong>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-800 px-2 py-0.5 rounded-full shrink-0">
-                            {item.category === 'kimyasal' ? '🧪 Kimyasal' : '📦 Sarf'}
-                          </span>
+                  <div className="p-3.5 bg-slate-950 rounded-2xl border-2 border-amber-500/50 space-y-3 animate-fade-in">
+                    {/* 1. KAMERA SEÇİMİ & BARKOD / KAREKOD OKUTMA */}
+                    <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-[10px] font-black text-emerald-300 uppercase font-mono">
+                          <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>KAMERA İLE BARKOD / KAREKOD OKUT</span>
                         </div>
-                      ))}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <select
+                            value={selectedTalepCameraId}
+                            onChange={(e) => {
+                              const nextCam = e.target.value;
+                              setSelectedTalepCameraId(nextCam);
+                              if (isTalepCameraActive) {
+                                startTalepCamera(nextCam);
+                              }
+                            }}
+                            className="px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-[10px] font-bold text-slate-200 max-w-[165px] focus:outline-none focus:border-emerald-500 cursor-pointer"
+                            title="Kullanılacak kamerayı seçiniz"
+                          >
+                            <option value="auto">Otomatik (Arka Kamera)</option>
+                            {talepAvailableCameras.map((cam) => (
+                              <option key={cam.id} value={cam.id}>
+                                {cam.label}
+                              </option>
+                            ))}
+                          </select>
+
+                          {isTalepCameraActive ? (
+                            <button
+                              type="button"
+                              onClick={() => stopTalepCamera()}
+                              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-black uppercase rounded-lg transition cursor-pointer flex items-center gap-1"
+                            >
+                              <X className="w-3 h-3" />
+                              <span>Kamerayı Kapat</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => startTalepCamera()}
+                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase rounded-lg transition cursor-pointer flex items-center gap-1 shadow-xs active:scale-95"
+                            >
+                              <Camera className="w-3 h-3" />
+                              <span>Kamerayı Aç</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className={`relative rounded-xl overflow-hidden bg-black/70 border border-slate-800 transition-all ${isTalepCameraActive || talepCameraError ? 'min-h-[190px] flex items-center justify-center' : 'hidden'}`}>
+                        <div id={talepScannerContainerId} className="w-full max-w-xs mx-auto overflow-hidden" />
+                        {talepCameraError && (
+                          <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center p-3 text-center text-[11px] text-rose-300">
+                            <AlertTriangle className="w-6 h-6 text-rose-400 mb-1.5" />
+                            <span>{talepCameraError}</span>
+                            <span className="text-[10px] text-slate-400 mt-1">Alttaki arama kutusundan yazarak devam edebilirsiniz.</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 2. OTOMATİK ARAMA VEYA YAZARAK DEVAM ETME */}
+                    <div className="space-y-1.5">
+                      <label className="block text-[9.5px] font-bold text-amber-300 uppercase font-mono">
+                        OTOMATİK BARKOD ARAMA VEYA P/N / MALZEME ADI YAZARAK EKLE
+                      </label>
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                        <input
+                          ref={addTalepInputRef}
+                          type="text"
+                          value={addTalepSearchQuery}
+                          onChange={(e) => setAddTalepSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              const q = addTalepSearchQuery.trim();
+                              if (!q) return;
+                              const { found } = resolveInventoryItemByCode(q);
+                              if (found) {
+                                playBeep();
+                                stopTalepCamera();
+                                handleAddTalepItemFromInventory(found);
+                              } else if (showNotification) {
+                                showNotification(`⚠️ "${q}" ile eşleşen ürün bulunamadı. Listeden seçebilirsiniz.`);
+                              }
+                            }
+                          }}
+                          placeholder="Barkod/QR okutun veya P/N / malzeme adı yazarak devam edin..."
+                          className="w-full pl-8 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-400"
+                        />
+                      </div>
+                      <div className="max-h-44 overflow-y-auto divide-y divide-slate-800 rounded-xl bg-slate-900/60 border border-slate-800">
+                        {(() => {
+                          const sourceInv = (activeInventory && activeInventory.length > 0) ? activeInventory : inventory;
+                          const q = addTalepSearchQuery.toLowerCase().trim();
+                          const filtered = !q
+                            ? sourceInv.slice(0, 12)
+                            : sourceInv
+                                .filter(i => {
+                                  const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
+                                  const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
+                                  const s = (i.serialAndNotes || i.sn || (i as any).SERI_NO || '').toLowerCase();
+                                  const l = (i.lokasyonNo || i.location || '').toLowerCase();
+                                  return p.includes(q) || d.includes(q) || s.includes(q) || l.includes(q);
+                                })
+                                .sort((a, b) => {
+                                  const pa = (a.partNumber || a.pn || (a as any).MALZEME_PN || '').toLowerCase();
+                                  const pb = (b.partNumber || b.pn || (b as any).MALZEME_PN || '').toLowerCase();
+                                  const aExact = pa === q ? 0 : pa.startsWith(q) ? 1 : 2;
+                                  const bExact = pb === q ? 0 : pb.startsWith(q) ? 1 : 2;
+                                  return aExact - bExact;
+                                })
+                                .slice(0, 15);
+
+                          if (filtered.length === 0) {
+                            return (
+                              <div className="p-3 text-center text-[11px] text-slate-400">
+                                "{addTalepSearchQuery}" ile eşleşen malzeme bulunamadı.
+                              </div>
+                            );
+                          }
+
+                          return filtered.map((item, idx) => (
+                            <div
+                              key={idx}
+                              onClick={() => {
+                                playBeep();
+                                stopTalepCamera();
+                                handleAddTalepItemFromInventory(item);
+                              }}
+                              className="p-2.5 hover:bg-amber-950/50 cursor-pointer text-xs flex items-center justify-between gap-2 transition"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="font-bold text-white truncate">{item.description || item.name || (item as any).MALZEME_ADI}</div>
+                                <div className="text-[10px] font-mono text-slate-400 truncate">
+                                  P/N: <strong className="text-amber-300">{item.partNumber || item.pn || (item as any).MALZEME_PN || '-'}</strong>
+                                  {item.lokasyonNo || item.location ? ` | Raf: ${item.lokasyonNo || item.location}` : ''}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <span className="text-[10px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-800 px-2 py-0.5 rounded-full">
+                                  {item.category === 'kimyasal' ? '🧪 Kimyasal' : '📦 Sarf'}
+                                </span>
+                                <span className="text-[10px] font-black bg-emerald-600/20 text-emerald-300 border border-emerald-600/40 px-2 py-0.5 rounded-md">
+                                  + Ekle
+                                </span>
+                              </div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2320,17 +3114,17 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                       className="w-full mt-1.5 px-3 py-1.5 bg-amber-950/40 border border-amber-500/50 rounded-lg text-amber-200 font-mono text-xs focus:outline-none focus:border-amber-500 font-bold"
                     />
                   )}
-                  {/* İŞ EMRİ / CRS NO */}
+                  {/* İŞ EMRİ / CRS NO / DEFTER SIRA NO */}
                   <div className="mt-2">
-                    <label className="block text-[9.5px] font-black text-amber-300 uppercase font-mono mb-1 flex items-center justify-between">
-                      <span>İŞ EMRİ (WORK ORDER) / CRS NO *</span>
-                      <span className="text-[9px] text-amber-400 font-normal">Zorunlu</span>
+                    <label className="block text-[9.5px] font-black text-amber-300 uppercase font-mono mb-1 flex items-center justify-between gap-1">
+                      <span>İŞ EMRİ / CRS NO / DEFTER SIRA NO *</span>
+                      <span className="text-[8.5px] text-amber-400 font-bold shrink-0">3'ünden Biri Zorunlu</span>
                     </label>
                     <input
                       type="text"
                       value={talepWorkOrderOrCrs}
                       onChange={(e) => setTalepWorkOrderOrCrs(e.target.value)}
-                      placeholder="Örn: WO-2024-092 veya CRS-802-044"
+                      placeholder="İş Emri, CRS No veya Defter Sıra No yazınız..."
                       required
                       className="w-full px-3 py-2 bg-amber-950/40 border border-amber-500/50 rounded-xl text-amber-100 font-mono text-xs focus:outline-none focus:border-amber-400 font-bold"
                     />

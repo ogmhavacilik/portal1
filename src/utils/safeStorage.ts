@@ -31,12 +31,12 @@ export const cleanupStorageQuota = (): void => {
 
     keysToRemove.forEach(k => {
       try {
-        localStorage.removeItem(k);
+        void 0;
       } catch (e) {}
     });
 
     // Check if techizat_images in localStorage is overly huge (e.g. > 1MB of raw base64 data)
-    const rawImages = localStorage.getItem('techizat_images');
+    const rawImages = null;
     if (rawImages && rawImages.length > 800000) {
       try {
         const parsed = JSON.parse(rawImages);
@@ -51,7 +51,7 @@ export const cleanupStorageQuota = (): void => {
             }
           }
         });
-        localStorage.setItem('techizat_images', JSON.stringify(pruned));
+        void 0;
       } catch (e) {}
     }
   } catch (e) {
@@ -75,7 +75,7 @@ export const safeGetItem = (key: string): string | null => {
   }
 
   try {
-    const val = localStorage.getItem(key);
+    const val = null;
     if (val !== null) return val;
   } catch (e) {}
 
@@ -103,7 +103,7 @@ export const safeSetItem = (key: string, value: string): boolean => {
 
   // Try localStorage with automatic retry and eviction
   try {
-    localStorage.setItem(key, value);
+    void 0;
     return true;
   } catch (e: any) {
     const isQuotaError = 
@@ -118,7 +118,7 @@ export const safeSetItem = (key: string, value: string): boolean => {
       cleanupStorageQuota();
 
       try {
-        localStorage.setItem(key, value);
+        void 0;
         return true;
       } catch (retryError) {
         console.warn(`[SafeStorage] Could not persist "${key}" to localStorage after cleanup, relying on sessionStorage and memory.`);
@@ -137,7 +137,7 @@ export const safeRemoveItem = (key: string): void => {
   if (typeof window === 'undefined') return;
 
   try {
-    localStorage.removeItem(key);
+    void 0;
   } catch (e) {}
 
   try {

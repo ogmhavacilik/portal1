@@ -572,14 +572,14 @@ export const DepoSlipPrintModal: React.FC<DepoSlipPrintModalProps> = ({
     }
   }, [isOpen, initialType, initialData, inventory, techizatList, isTechizatMode]);
 
-  // Derived Barcode and QR Values
-  const barcodeValue = selectedSlipType === 'raf'
-    ? `LOC-${(lokasyonKodu || 'A04R2BIN08').replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`
-    : `${(pn || '013-00066-00').trim()}-${(sn && sn !== '-' ? sn : 'GENEL').replace(/[^a-zA-Z0-9]/g, '')}`;
+  // Derived Barcode and QR Values (Always P/N so barcode & QR scan directly resolves Part Number)
+  const cleanSlipPn = (pn || '').trim();
+  const resolvedSlipPnCode = (cleanSlipPn && cleanSlipPn !== '-')
+    ? cleanSlipPn
+    : sanitizeBarcode(lokasyonKodu || tanimIcerik || malzemeDesc || 'OGM12345');
 
-  const qrContent = selectedSlipType === 'raf'
-    ? `OGM-DEPO-RAF|LOC:${lokasyonKodu}|ZONE:${bolgeZone}|QTY:${guncelSayim}|DATE:${sonSayimTarih}`
-    : `OGM-DEPO-GIRIS|PN:${pn}|SN:${sn}|QTY:${adet}|DATE:${tarih}|LOC:${depoYeri}`;
+  const barcodeValue = resolvedSlipPnCode;
+  const qrContent = resolvedSlipPnCode;
 
   // Generate Barcode SVG, DataURL & QR Code whenever values change
   useEffect(() => {
@@ -639,6 +639,8 @@ export const DepoSlipPrintModal: React.FC<DepoSlipPrintModalProps> = ({
   // Handler to pick an inventory item to autofill
   const handleSelectInventoryItem = (item: DepoItem) => {
     setSearchQuery('');
+    const pickedPn = item.partNumber || item.pn || '-';
+    setPn(pickedPn);
     if (selectedSlipType === 'raf') {
       setLokasyonKodu(item.lokasyonNo || item.location || 'A-01-RAF-1');
       setBolgeZone(item.category === 'kimyasal' ? 'KİMYASAL DEPOSU' : 'SARF MALZEME DEPOSU');
@@ -648,7 +650,6 @@ export const DepoSlipPrintModal: React.FC<DepoSlipPrintModalProps> = ({
       setSonSayimTarih(`${now.getDate()}.${now.getMonth() + 1}.${now.getFullYear()}`);
     } else {
       setMalzemeDesc(item.description || item.name || '');
-      setPn(item.partNumber || item.pn || '-');
       setSn(item.serialAndNotes && item.serialAndNotes !== '-' ? item.serialAndNotes : 'SN-99482');
       setDepoYeri(item.lokasyonNo || 'ANKARA MERKEZ DEP');
       setAdet(1);
@@ -851,6 +852,7 @@ ${LINE}`;
         const fields = selectedSlipType === 'raf' ? [
           { label: 'LOKASYON', value: lokasyonKodu, isBold: true },
           { label: 'BÖLGE', value: bolgeZone },
+          { label: 'P/N', value: pn, isBold: true },
           { label: 'İÇERİK', value: tanimIcerik, isBold: true },
           { label: 'SAYIM', value: `${guncelSayim} EA`, isBold: true },
           { label: 'TARİH', value: sonSayimTarih }
@@ -959,8 +961,11 @@ ${LINE}`;
           const hasShelf = item.hasShelfLife === 'EVET' || item.hasShelfLife === true || String(item.hasShelfLife).toUpperCase().includes('EVET');
           const shelfDate = item.shelfLifeDate || '-';
 
-          const bValue = `LOC-${itemLoc.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
-          const qContent = `OGM-DEPO-RAF|LOC:${itemLoc}|PN:${itemPn}|QTY:${itemQty}|DATE:${new Date().toLocaleDateString('tr-TR')}`;
+          const resolvedBulkPn = (itemPn && itemPn.trim() !== '-')
+            ? itemPn.trim()
+            : sanitizeBarcode(itemLoc || itemDesc || 'OGM12345');
+          const bValue = resolvedBulkPn;
+          const qContent = resolvedBulkPn;
 
           const barcodeBase64 = generateLocalBarcodeDataUrl(bValue);
           const qrBase64 = await generateLocalQrDataUrl(qContent);
@@ -1482,6 +1487,7 @@ ${LINE}`;
         const fields = selectedSlipType === 'raf' ? [
           { l: 'LOK:', v: lokasyonKodu },
           { l: 'BÖL:', v: bolgeZone },
+          { l: 'P/N:', v: pn },
           { l: 'TNM:', v: tanimIcerik },
           { l: 'STK:', v: `${guncelSayim} EA` },
           { l: 'Tarih:', v: currentDateStr }
@@ -1513,8 +1519,11 @@ ${LINE}`;
       for (const item of itemsToExport) {
         const itemPn = item.partNumber || item.pn || '-';
         const itemLoc = item.lokasyonNo || item.location || 'A-01';
-        const bValue = `LOC-${itemLoc.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
-        const qContent = `OGM-DEPO-RAF|LOC:${itemLoc}|PN:${itemPn}|QTY:${item.ankaraMevcut || 0}`;
+        const resolvedPrintPn = (itemPn && itemPn.trim() !== '-')
+          ? itemPn.trim()
+          : sanitizeBarcode(itemLoc || item.description || item.name || 'OGM12345');
+        const bValue = resolvedPrintPn;
+        const qContent = resolvedPrintPn;
         
         const bImg = generateLocalBarcodeDataUrl(bValue);
         const qImg = await generateLocalQrDataUrl(qContent);
@@ -1525,6 +1534,7 @@ ${LINE}`;
             <div class="content-area">
               <div class="row"><span class="lbl">LOK:</span><span class="val">${itemLoc}</span></div>
               <div class="row"><span class="lbl">BÖL:</span><span class="val">${item.zone || 'GENEL'}</span></div>
+              <div class="row"><span class="lbl">P/N:</span><span class="val">${itemPn}</span></div>
               <div class="row"><span class="lbl">TNM:</span><span class="val">${item.description || item.name || '-'}</span></div>
               <div class="row"><span class="lbl">STK:</span><span class="val">${item.ankaraMevcut || 0} EA</span></div>
               <div class="row"><span class="lbl">Tarih:</span><span class="val">${currentDateStr}</span></div>
@@ -2056,6 +2066,16 @@ ${LINE}`;
               ) : selectedSlipType === 'raf' ? (
                 <div className="space-y-2.5">
                   <div>
+                    <label className="block text-[10px] font-bold text-amber-400 uppercase font-mono mb-1">P/N (Parça No — Barkod &amp; Karekod Karşılığı)</label>
+                    <input
+                      type="text"
+                      value={pn}
+                      onChange={e => setPn(e.target.value)}
+                      placeholder="Örn: 013-00066-00"
+                      className="w-full bg-slate-900 border border-amber-500/50 rounded-lg px-2.5 py-1.5 text-amber-300 font-mono font-bold focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
                     <label className="block text-[10px] font-bold text-slate-400 uppercase font-mono mb-1">Lokasyon Kodu</label>
                     <input
                       type="text"
@@ -2360,6 +2380,7 @@ ${LINE}`;
                           <>
                             <div className="truncate"><strong className="text-slate-500">LOK:</strong> <span className="font-black text-slate-950">{lokasyonKodu}</span></div>
                             <div className="truncate"><strong className="text-slate-500">BÖL:</strong> <span>{bolgeZone}</span></div>
+                            <div className="truncate"><strong className="text-slate-500">P/N:</strong> <span className="font-black font-mono text-slate-950">{pn || '-'}</span></div>
                             <div className="truncate"><strong className="text-slate-500">TNM:</strong> <span className="font-bold text-slate-900">{tanimIcerik}</span></div>
                             <div><strong className="text-slate-500">STK:</strong> <span className="font-black text-emerald-800">{guncelSayim} EA</span></div>
                             <div className="text-[7px] text-slate-400 font-sans">Tarih: {sonSayimTarih}</div>
@@ -2420,6 +2441,10 @@ ${LINE}`;
                         <div className="flex justify-between">
                           <span className="font-bold text-slate-600">BÖLGE:</span>
                           <span className="text-slate-800 text-right truncate max-w-[150px]">{bolgeZone}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="font-bold text-slate-600">P/N:</span>
+                          <span className="font-black font-mono text-slate-950">{pn || '-'}</span>
                         </div>
                         <div>
                           <span className="font-bold text-slate-600">İÇERİK:</span>{' '}

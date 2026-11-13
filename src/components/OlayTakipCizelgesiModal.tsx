@@ -27,7 +27,8 @@ import {
   Link as LinkIcon,
   ExternalLink,
   Flame,
-  Gauge
+  Gauge,
+  Upload
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { unmergeAndFillWorksheet, cleanAndFormatDateString } from '../utils/driveExcelSync';
@@ -45,10 +46,15 @@ import {
 } from '../utils/hangarPdfStorage';
 import { PdfPreviewModal } from './PdfPreviewModal';
 import { MvpFlightDataAnalysisModal } from './MvpFlightDataAnalysisModal';
+import {
+  fetchExcelFromDrive as remoteFetchExcelFromDrive,
+  uploadExcelToDrive as remoteUploadExcelToDrive,
+  DIRECT_GAS_URLS,
+  DRIVE_FOLDER_ID
+} from '../utils/remoteDriveSync';
 
-export const GOOGLE_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
-export const DRIVE_FOLDER_ID = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
+export const GOOGLE_SCRIPT_URL = DIRECT_GAS_URLS[0];
+export { DRIVE_FOLDER_ID };
 
 export interface OlayTakipSheet {
   id: string;
@@ -778,6 +784,45 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
   // State for syncing docs from Drive
   const [isSyncingDocs, setIsSyncingDocs] = useState<boolean>(false);
 
+  // Prompt state for "PDF Yüklendi mi?" with checkbox & EVET button (matches Personel Eğitim workflow)
+  const [promptRowKey, setPromptRowKey] = useState<string | null>(null);
+  const [isPdfConfirmedChecked, setIsPdfConfirmedChecked] = useState<boolean>(true);
+
+  const handleOlayBelgeEkleClick = (originalIndex: number) => {
+    window.open('https://bulut.ogm.gov.tr/OLAYBELGE', '_blank');
+    setPromptRowKey(`${selectedUnit}_${activeSheetIndex}_${originalIndex}`);
+    setIsPdfConfirmedChecked(true);
+    showNotification('📄 Olay Belge yükleme sayfası yeni sekmede açıldı (https://bulut.ogm.gov.tr/OLAYBELGE). Lütfen yükleme onayını veriniz.', 'info');
+  };
+
+  const handleConfirmOlayPdfUpload = (originalIndex: number) => {
+    const sheets = allUnitsData[selectedUnit] || [];
+    const curSheet = sheets[activeSheetIndex];
+    if (!curSheet) return;
+
+    const colIdx = curSheet.columns.findIndex(c => /belge|d[oö]k[uü]man/i.test(c));
+    const finalColIdx = colIdx >= 0 ? colIdx : curSheet.columns.length - 1;
+    const linkIdx = curSheet.columns.findIndex(c => isLinkColumnName(c));
+
+    const updatedRows = [...curSheet.rows];
+    const targetRow = [...(updatedRows[originalIndex] || [])];
+    targetRow[finalColIdx] = 'https://bulut.ogm.gov.tr/OLAYBELGEGOR';
+    if (linkIdx >= 0) {
+      targetRow[linkIdx] = 'https://bulut.ogm.gov.tr/OLAYBELGEGOR';
+    }
+    updatedRows[originalIndex] = targetRow;
+
+    const updatedSheet = { ...curSheet, rows: updatedRows };
+    const updatedList = [...sheets];
+    updatedList[activeSheetIndex] = updatedSheet;
+
+    const full = { ...allUnitsData, [selectedUnit]: updatedList };
+    persistAndSyncToDrive(full);
+
+    setPromptRowKey(null);
+    showNotification('✅ Belge onaylandı. Artık "BELGE GÖR" ile görüntülenebilir.', 'success');
+  };
+
   // Load Hangar PDF documents from IndexedDB and sync from Google Drive
   useEffect(() => {
     getAllHangarPdfDocs()
@@ -849,7 +894,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
 
     fetchExcelFromDrive(selectedUnit, false);
     syncYellowNgToOlayTakipSheet();
-  }, [isOpen]);
+  }, [isOpen, selectedUnit]);
 
   // Google E-Tablodan Sarı İkaz Ng Takip satırlarını canlı çekip AT-802 sayfasına ekle/güncelle
   const syncYellowNgToOlayTakipSheet = async (notify = false) => {
@@ -953,44 +998,14 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
     const fileName = getOlayTakipDriveFileName(unitKey);
     setIsSyncing(true);
     try {
-      let data: any = null;
+      const candidateNames = [
+        fileName,
+        `olay_takip_cizelgesi_${unitKey}.xlsx`,
+        fileName.replace(/-/g, '_'),
+        fileName.replace(/_/g, '-')
+      ];
 
-      // 1. Try local server-side proxy / cache first
-      try {
-        const localRes = await fetch('/api/read-excel-from-drive', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: fileName,
-            folderId: DRIVE_FOLDER_ID
-          })
-        });
-        if (localRes.ok) {
-          const localJson = await localRes.json();
-          if (localJson && localJson.status === 'success' && localJson.base64) {
-            data = localJson;
-          }
-        }
-      } catch (localErr) {
-        console.warn('Local read-excel proxy error, attempting GAS directly:', localErr);
-      }
-
-      // 2. Direct fallback to Google Apps Script if needed
-      if (!data) {
-        const res = await fetch(GOOGLE_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            action: 'readExcelFromDrive',
-            fileName: fileName,
-            folderId: DRIVE_FOLDER_ID
-          })
-        });
-
-        if (res.ok) {
-          data = await res.json();
-        }
-      }
+      const data = await remoteFetchExcelFromDrive(fileName, candidateNames, DRIVE_FOLDER_ID);
 
       if (data && data.status === 'success' && data.base64) {
         const binaryString = atob(data.base64);
@@ -1003,19 +1018,43 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
         const parsedSheets = parseOlayTakipWorkbook(wb);
         if (parsedSheets.length > 0) {
           setAllUnitsData(prev => {
-            const mergedSheets = parsedSheets.map((pSheet) => {
-              return stripEkDosyaLinkColumn(pSheet);
+            const currentList = prev[unitKey] && prev[unitKey].length > 0
+              ? [...prev[unitKey]]
+              : unitKey === 'at802' ? [...DEFAULT_AT802_SHEETS] : [];
+
+            const merged = [...currentList];
+            parsedSheets.forEach(pSheet => {
+              const stripped = stripEkDosyaLinkColumn(pSheet);
+              const pNorm = normalizeTurkish(stripped.sheetName);
+              const matchIdx = merged.findIndex(s => {
+                const sNorm = normalizeTurkish(s.sheetName);
+                return sNorm === pNorm || (s.id && stripped.id && s.id === stripped.id);
+              });
+              if (matchIdx >= 0) {
+                merged[matchIdx] = {
+                  ...merged[matchIdx],
+                  sheetName: stripped.sheetName,
+                  title: stripped.title || merged[matchIdx].title,
+                  columns: stripped.columns && stripped.columns.length > 0 ? stripped.columns : merged[matchIdx].columns,
+                  rows: stripped.rows && stripped.rows.length > 0 ? stripped.rows : merged[matchIdx].rows
+                };
+              } else {
+                merged.push(stripped);
+              }
             });
 
-            const updated = { ...prev, [unitKey]: mergedSheets };
+            const deduplicated = deduplicateSheets(merged);
+            const updated = { ...prev, [unitKey]: deduplicated };
             safeSetJSON(STORAGE_KEY, updated);
             return updated;
           });
+
           if (unitKey === 'at802') {
             syncYellowNgToOlayTakipSheet(false);
           }
-          if (data.updated) {
-            setLastSyncTime(data.updated);
+
+          if ((data as any).updated) {
+            setLastSyncTime((data as any).updated);
           } else {
             setLastSyncTime(
               new Date().toLocaleString('tr-TR', {
@@ -1081,35 +1120,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
       const base64Data = btoa(binary);
       const standardFileName = getOlayTakipDriveFileName(selectedUnit);
 
-      try {
-        const apiRes = await fetch('/api/upload-techizat-excel', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: standardFileName,
-            targetKey: `olay_takip_${selectedUnit}`,
-            base64Data: base64Data,
-            folderId: DRIVE_FOLDER_ID
-          })
-        });
-        if (!apiRes.ok) throw new Error('API route proxy failed');
-      } catch (localErr) {
-        try {
-          await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({
-              action: 'uploadTechizatExcel',
-              fileName: standardFileName,
-              targetKey: `olay_takip_${selectedUnit}`,
-              base64Data: base64Data,
-              folderId: DRIVE_FOLDER_ID
-            })
-          });
-        } catch (gasErr) {
-          console.warn('Drive upload fallback error:', gasErr);
-        }
-      }
+      await remoteUploadExcelToDrive(standardFileName, base64Data, `olay_takip_${selectedUnit}`, DRIVE_FOLDER_ID);
 
       setSyncProgressPercent(95);
       setSyncProgressStage('4/4: Sistem çizelgeleri ve dinamik sayfalar güncelleniyor...');
@@ -1198,28 +1209,8 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
       const base64Data = btoa(binary);
       const standardFileName = getOlayTakipDriveFileName(selectedUnit);
 
-      fetch('/api/upload-techizat-excel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: standardFileName,
-          targetKey: `olay_takip_${selectedUnit}`,
-          base64Data: base64Data,
-          folderId: DRIVE_FOLDER_ID
-        })
-      }).catch(err => {
-        console.warn('Background sync warning via API route:', err);
-        fetch(GOOGLE_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            action: 'uploadTechizatExcel',
-            fileName: standardFileName,
-            targetKey: `olay_takip_${selectedUnit}`,
-            base64Data: base64Data,
-            folderId: DRIVE_FOLDER_ID
-          })
-        }).catch(gasErr => console.warn('Background GAS fallback warning:', gasErr));
+      remoteUploadExcelToDrive(standardFileName, base64Data, `olay_takip_${selectedUnit}`, DRIVE_FOLDER_ID).catch(err => {
+        console.warn('Background sync warning:', err);
       });
     } catch (e) {
       console.warn('Background XLSX generation warning:', e);
@@ -2532,57 +2523,84 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
 
                               // Document Attachment Column
                               if (isDocCol) {
+                                const rawBelge = String(cellValue || '').trim();
+                                const rawLink = (ekDosyaLinkColIndex >= 0 ? String(row[ekDosyaLinkColIndex] || '') : '').trim();
+                                const isRowPdfConfirmed = rawBelge.includes('OLAYBELGEGOR') ||
+                                  rawBelge.includes('BELGE GÖR') ||
+                                  rawLink.includes('OLAYBELGEGOR') ||
+                                  rawLink.includes('BELGE GÖR') ||
+                                  rowDocs.length > 0;
+
+                                const rowKey = `${selectedUnit}_${activeSheetIndex}_${originalIndex}`;
+                                const isPromptActive = promptRowKey === rowKey;
+
                                 return (
                                   <td
                                     key={cIdx}
-                                    className="px-3 py-2 border-r border-slate-100 align-middle whitespace-nowrap min-w-[140px]"
+                                    className="px-3 py-2 border-r border-slate-100 align-middle whitespace-nowrap min-w-[150px]"
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      {rowDocs.length > 0 ? (
-                                        <>
-                                          {rowDocs.map(doc => (
-                                            <div key={doc.id} className="inline-flex items-center gap-0.5 rounded-md bg-emerald-50 border border-emerald-200 shadow-2xs overflow-hidden">
-                                              <button
-                                                type="button"
-                                                onClick={() => setPreviewDoc(doc)}
-                                                className="inline-flex items-center gap-1 px-2 py-1 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold transition-all cursor-pointer max-w-[130px] truncate"
-                                                title={`${doc.fileName} (${doc.fileSize || 'PDF'}) - Önizle`}
-                                              >
-                                                <FileText className="w-3 h-3 text-emerald-700 shrink-0" />
-                                                <span className="truncate">{doc.fileName}</span>
-                                              </button>
-                                              <button
-                                                type="button"
-                                                onClick={() => handleOpenDocInNewTab(doc)}
-                                                className="p-1 text-emerald-700 hover:text-emerald-950 hover:bg-emerald-200 border-l border-emerald-200 transition-colors cursor-pointer"
-                                                title="Yeni Sekmede Aç"
-                                              >
-                                                <ExternalLink className="w-3 h-3" />
-                                              </button>
-                                            </div>
-                                          ))}
+                                    {isPromptActive ? (
+                                      <div className="flex flex-col gap-1.5 p-2 bg-amber-50 rounded-xl border border-amber-300 shadow-sm animate-fade-in">
+                                        <label className="flex items-center gap-1.5 text-[11px] font-bold text-amber-950 cursor-pointer select-none">
+                                          <input
+                                            type="checkbox"
+                                            checked={isPdfConfirmedChecked}
+                                            onChange={(e) => setIsPdfConfirmedChecked(e.target.checked)}
+                                            className="w-3.5 h-3.5 text-amber-600 rounded border-amber-400 focus:ring-0 cursor-pointer"
+                                          />
+                                          <span>PDF YÜKLENDİ Mİ?</span>
+                                        </label>
+                                        <div className="flex items-center gap-1.5">
                                           <button
                                             type="button"
-                                            onClick={() => handleOpenDocModal(originalIndex, row, 'upload')}
-                                            className="p-1 rounded-md bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-800 border border-slate-200 transition-all cursor-pointer"
-                                            title="Yeni Belge Ekle"
+                                            disabled={!isPdfConfirmedChecked}
+                                            onClick={() => handleConfirmOlayPdfUpload(originalIndex)}
+                                            className="flex-1 py-1 px-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black text-[10px] font-mono rounded-lg transition-all cursor-pointer shadow-sm active:scale-95"
                                           >
-                                            <Plus className="w-3 h-3" />
+                                            EVET
                                           </button>
-                                        </>
-                                      ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => setPromptRowKey(null)}
+                                            className="py-1 px-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-[10px] font-mono rounded-lg transition-all cursor-pointer"
+                                          >
+                                            İptal
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : isRowPdfConfirmed ? (
+                                      <div className="flex items-center gap-1.5">
                                         <button
                                           type="button"
-                                          onClick={() => handleOpenDocModal(originalIndex, row, 'upload')}
-                                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-800 border border-slate-200 text-[11px] font-medium transition-all cursor-pointer"
-                                          title="PDF Belge / Döküman Ekle"
+                                          onClick={() => window.open('https://bulut.ogm.gov.tr/OLAYBELGEGOR', '_blank')}
+                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs transition-all shadow-sm cursor-pointer group active:scale-95"
+                                          title="Belgeyi Yeni Sekmede Görüntüle (https://bulut.ogm.gov.tr/OLAYBELGEGOR)"
                                         >
-                                          <Paperclip className="w-3 h-3 text-slate-400" />
-                                          <span>+ Belge Ekle</span>
+                                          <FileText className="w-3.5 h-3.5 text-blue-100" />
+                                          <span>BELGE GÖR</span>
+                                          <ExternalLink className="w-3 h-3 text-white/70 group-hover:text-white" />
                                         </button>
-                                      )}
-                                    </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOlayBelgeEkleClick(originalIndex)}
+                                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+                                          title="Belgeyi Yeniden Yükle / Değiştir"
+                                        >
+                                          <Edit3 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOlayBelgeEkleClick(originalIndex)}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs transition-all shadow-sm cursor-pointer active:scale-95"
+                                        title="Belge Ekle (https://bulut.ogm.gov.tr/OLAYBELGE)"
+                                      >
+                                        <Upload className="w-3.5 h-3.5" />
+                                        <span>BELGE EKLE</span>
+                                      </button>
+                                    )}
                                   </td>
                                 );
                               }

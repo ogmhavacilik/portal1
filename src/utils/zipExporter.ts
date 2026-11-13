@@ -63,9 +63,9 @@ export async function downloadStandaloneSystemZip(systemId: 'yer-destek' | 'depo
         (systemId === 'kara-araclari' && (key.includes('kara') || key.includes('arac') || key.includes('gorev')))
       ) {
         try {
-          exportedData[key] = JSON.parse(localStorage.getItem(key) || '""');
+          exportedData[key] = null;
         } catch {
-          exportedData[key] = localStorage.getItem(key);
+          exportedData[key] = null;
         }
       }
     }

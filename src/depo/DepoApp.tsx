@@ -25,9 +25,15 @@ import * as XLSX from 'xlsx';
 import { cleanAndFormatDateString } from '../utils/driveExcelSync';
 import { publishCrossSystemEvent, subscribeCrossSystemEvents } from '../utils/crossSystemBridge';
 import { downloadStandaloneSystemZip } from '../utils/zipExporter';
+import {
+  fetchExcelFromDrive,
+  uploadExcelToDrive,
+  DIRECT_GAS_URLS,
+  DRIVE_FOLDER_ID
+} from '../utils/remoteDriveSync';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
-export const DRIVE_FOLDER_ID = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
+export const GOOGLE_SCRIPT_URL = DIRECT_GAS_URLS[0];
+export { DRIVE_FOLDER_ID };
 
 export const DEPO_CATEGORIES = [
   {
@@ -126,7 +132,7 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
     const initial: Record<string, string[][]> = {};
     for (const c of DEPO_CATEGORIES) {
       try {
-        const stored = localStorage.getItem(c.storageKey);
+        const stored = null;
         if (stored) {
           initial[c.key] = JSON.parse(stored);
         } else {
@@ -173,7 +179,7 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
     const cat = DEPO_CATEGORIES.find(c => c.key === catKey);
     if (cat) {
       try {
-        localStorage.setItem(cat.storageKey, JSON.stringify(rows));
+        void 0;
       } catch (e) {}
 
       // Kalıcı olarak Excel'e ve Google Drive'a kaydet (Canlı E-Tablo / Drive Entegrasyonu)
@@ -196,16 +202,8 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
         XLSX.utils.book_append_sheet(wb, ws, cat.shortLabel);
         const base64Data = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
 
-        fetch('/api/upload-techizat-excel', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: cat.driveFileName,
-            targetKey: `depo_${catKey}`,
-            base64Data: base64Data,
-            folderId: DRIVE_FOLDER_ID
-          })
-        }).catch(err => console.warn('Drive save warn:', err));
+        uploadExcelToDrive(cat.driveFileName, base64Data, `depo_${catKey}`, DRIVE_FOLDER_ID)
+          .catch(err => console.warn('Drive save warn:', err));
       } catch (excelErr) {
         console.warn('Excel export error:', excelErr);
       }
@@ -219,7 +217,7 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
         const updated: Record<string, string[][]> = {};
         for (const c of DEPO_CATEGORIES) {
           try {
-            const val = localStorage.getItem(c.storageKey);
+            const val = null;
             if (val) updated[c.key] = JSON.parse(val);
           } catch {}
         }
@@ -350,16 +348,12 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
     setIsLoadingDrive(true);
     showNotification(`Google Drive'dan ${currentCategory.name} verileri canlı olarak alınıyor...`);
     try {
-      const res = await fetch('/api/read-excel-from-drive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: currentCategory.driveFileName,
-          fileId: (currentCategory as any).fileId || '',
-          folderId: DRIVE_FOLDER_ID
-        })
-      });
-      const json = await res.json();
+      const candidates = [
+        currentCategory.driveFileName,
+        currentCategory.driveFileName.replace(/-/g, '_'),
+        currentCategory.driveFileName.replace(/_/g, '-')
+      ];
+      const json = await fetchExcelFromDrive(currentCategory.driveFileName, candidates, DRIVE_FOLDER_ID);
       if (json && json.status === 'success' && json.base64) {
         const binaryString = atob(json.base64);
         const len = binaryString.length;

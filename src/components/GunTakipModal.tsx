@@ -17,14 +17,19 @@ import {
   Boxes,
   FileSpreadsheet,
   Filter,
-  Check
+  Check,
+  Edit2,
+  Info,
+  ChevronDown
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { TEKNISYEN_PERSONEL_SCRIPT_URL } from '../utils/personnelData';
 
 export interface GunTakipBirimRow {
   birim: string;
   adSoyad: string;
   eposta: string;
+  norm?: string;
   mail90?: string;
   mail60?: string;
   mail30?: string;
@@ -72,10 +77,62 @@ interface GunTakipModalProps {
     c650?: any[][];
     hangar?: any[][];
     kara_araclari?: any[][];
+    yasam_destek?: any[];
+    personel_bilgi?: any[];
+    personel_egitim?: any[];
   };
   onUpdateEquipmentMailDate?: (unitKey: string, rowIndex: number, mailColIndex: number, dateStr: string) => void;
   googleScriptUrl: string;
 }
+
+// Standart Norm Seçenekleri Listesi
+export const NORM_OPTIONS = [
+  {
+    id: 'depo_omur_ve_kritik_stok',
+    label: 'Depo: Ömür Takip (Tarih Bazlı - 3 Ay Kala) & Kritik Stok (Kritik +1 Adet Kala)',
+    desc: 'Sarf/kimyasal SKT/ömrü 3 ay kalanlar veya stok miktarı kritik stok +1 adet kalanlar'
+  },
+  {
+    id: 'yer_destek_kalibrasyon',
+    label: 'Yer Destek & Özel Alet: Kalibrasyon / Bakım Tarih Takip (3 Ay Kala)',
+    desc: 'Hava araçları yer destek ekipmanlarının gelecek kalibrasyon ve periyodik bakım tarihine 3 ay kalanlar'
+  },
+  {
+    id: 'ozel_alet_kalibrasyon',
+    label: 'Özel Aletler: Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)',
+    desc: 'Özel aletlerin kalibrasyon ve test sertifika yenilemesine 3 ay kalanlar'
+  },
+  {
+    id: 'hangar_yer_destek',
+    label: 'Hangar Yer Destek: Son Kontrol / Kalibrasyon / Bakım Takip (3 Ay Kala)',
+    desc: 'Hangar genel ekipmanlarının son kontrol, kalibrasyon ve bakım süresine 3 ay kalanlar'
+  },
+  {
+    id: 'kara_araclari_bakim_km',
+    label: 'Kara Araçları: Bakım Tarihi & Sonraki Bakım / KM Takip (3 Ay Kala)',
+    desc: 'Kara araçlarının periyodik bakım tarihi veya KM yaklaşım limitine 3 ay kalanlar'
+  },
+  {
+    id: 'at802_yasam_destek',
+    label: 'AT-802 Yaşam Destek: Can Yeleği, Spare Air & Kask Kit SKT Takip (3 Ay Kala)',
+    desc: 'Zimmetli can yeleği, spare air ve kask kitlerinin periyodik muayene ve SKT süresine 3 ay kalanlar'
+  },
+  {
+    id: 'personel_bilgi_muayene',
+    label: 'Personel Bilgi Sistemi: OGM Periyodik Muayene Tarih Takip (1 Ay Kala)',
+    desc: 'Personel periyodik sağlık muayenesi geçerlilik süresine 1 ay kalanlar'
+  },
+  {
+    id: 'personel_egitim_isg',
+    label: 'Personel Eğitim Bilgi Sistemi: 3 Yıllık İSG Eğitim Tarihi Takip (1 Ay Kala)',
+    desc: '3 yıllık periyodik İSG eğitiminin yenilenmesine 1 ay kalan personel'
+  },
+  {
+    id: 'yangin_ve_helitak',
+    label: 'Yangın Ekipmanları / Helitak / Bumbi: Kalibrasyon & Bakım Takip (3 Ay Kala)',
+    desc: 'Bumbi backet ve helitak yangın ekipmanlarının periyodik muayenesine 3 ay kalanlar'
+  }
+];
 
 // Türkçe karakterleri normalize et
 export const normalizeTurkishStr = (str: string): string => {
@@ -94,6 +151,36 @@ export const normalizeTurkishStr = (str: string): string => {
     .replace(/Ç/g, "C")
     .replace(/ç/g, "c")
     .toUpperCase();
+};
+
+// Birim adından varsayılan takip normu metni üretici
+export const getDefaultNormForBirim = (birimName: string): string => {
+  const norm = normalizeTurkishStr(birimName);
+  if (norm.includes('YASAM DESTEK') || norm.includes('YAŞAM DESTEK')) {
+    return 'AT-802 Yaşam Destek: Can Yeleği, Spare Air & Kask Kit SKT Takip (3 Ay Kala)';
+  }
+  if (norm.includes('PERSONEL BILGI') || norm.includes('PERSONEL BİLGİ')) {
+    return 'Personel Bilgi Sistemi: OGM Periyodik Muayene Tarih Takip (1 Ay Kala)';
+  }
+  if (norm.includes('PERSONEL EGITIM') || norm.includes('PERSONEL EĞİTİM')) {
+    return 'Personel Eğitim Bilgi Sistemi: 3 Yıllık İSG Eğitim Tarihi Takip (1 Ay Kala)';
+  }
+  if (norm.includes('DEPO')) {
+    return 'Depo: Ömür Takip (Tarih Bazlı - 3 Ay Kala) & Kritik Stok (Kritik +1 Adet Kala)';
+  }
+  if (norm.includes('KARA')) {
+    return 'Kara Araçları: Bakım Tarihi & Sonraki Bakım / KM Takip (3 Ay Kala)';
+  }
+  if (norm.includes('HANGAR')) {
+    return 'Hangar Yer Destek: Son Kontrol / Kalibrasyon / Bakım Takip (3 Ay Kala)';
+  }
+  if (norm.includes('OZEL') || norm.includes('ÖZEL')) {
+    return 'Özel Aletler: Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)';
+  }
+  if (norm.includes('BUMBI') || norm.includes('BUMBİ') || norm.includes('HELITAK') || norm.includes('HELİTAK')) {
+    return 'Yangın Ekipmanları / Helitak / Bumbi: Kalibrasyon & Bakım Takip (3 Ay Kala)';
+  }
+  return 'Yer Destek & Özel Alet: Kalibrasyon / Bakım Tarih Takip (3 Ay Kala)';
 };
 
 // Başlık satırı kontrolü
@@ -121,7 +208,6 @@ export const isHeaderLikeRow = (r: any[]): boolean => {
 export const getRowSection = (row: string[]): 'yer_destek' | 'ozel_alet' | 'depo_sarf' | 'depo_kimyasal' => {
   if (!row || !Array.isArray(row)) return 'yer_destek';
 
-  // 1. Tag in explicit section tag column
   const candidateIndices = [13, row.length - 1, 12, row.length - 2, 11];
   for (const idx of candidateIndices) {
     if (idx >= 0 && idx < row.length) {
@@ -136,22 +222,18 @@ export const getRowSection = (row: string[]): 'yer_destek' | 'ozel_alet' | 'depo
     }
   }
 
-  // 2. Search for explicit markers embedded in cells
   const combined = normalizeTurkishStr(row.join(" ")).toUpperCase();
   if (combined.includes("##DEPO_SARF##") || combined.includes("[SARF DEPO]") || combined.includes("[PARCA DEPO]")) return 'depo_sarf';
   if (combined.includes("##DEPO_KIMYASAL##") || combined.includes("[KIMYASAL DEPO]")) return 'depo_kimyasal';
   if (combined.includes("##OZEL_ALET##") || combined.includes("[OZEL ALET]") || combined.includes("OZEL BAKIM VE TEST ALETLERI") || combined.includes("OZEL BAKIM ALETLERI") || combined.includes("OZEL ALETLER")) return 'ozel_alet';
   if (combined.includes("##YER_DESTEK##") || combined.includes("[YER DESTEK]") || combined.includes("YER DESTEK TECHIZATLARI")) return 'yer_destek';
 
-  // 3. Heuristics based on item name (row[1]) or part number (row[2]) or description (row[11])
   const itemName = normalizeTurkishStr(String(row[1] || "") + " " + String(row[2] || "") + " " + String(row[11] || "")).toUpperCase();
 
-  // Sarf depo kontrolü
   if (itemName.includes("FILTRE") || itemName.includes("FILTER") || itemName.includes("CONTA") || itemName.includes("O-RING") || itemName.includes("BALATA") || itemName.includes("KECE") || itemName.includes("SEAL") || itemName.includes("SARF") || itemName.includes("CIVATA") || itemName.includes("SOMUN") || itemName.includes("PUL") || itemName.includes("RIVET") || itemName.includes("PERCIN")) {
     return 'depo_sarf';
   }
 
-  // Özel Alet kontrolü
   if (itemName.includes("OZEL ALET") || itemName.includes("TEST ADAPTOR") || itemName.includes("TORK ADAPTOR") || itemName.includes("KOMPRESOR YIKAMA") || itemName.includes("AYAR MASTAR") || itemName.includes("BOSALTMA KAPAK TEST") || itemName.includes("CALIBRATION") || itemName.includes("TEST RIG") || itemName.includes("FIREGATE") || itemName.includes("OZEL BAKIM") || itemName.includes("ACHIOLCER") || itemName.includes("ACIOLCER") || itemName.includes("KALIBRASYON KIT") || itemName.includes("HAT BAKIM VE KALIBRASYON") || itemName.includes("TORQUE") || itemName.includes("MASTAR") || itemName.includes("ADAPTOR") || itemName.includes("TEST KIT") || itemName.includes("TORK ANAHTAR") || itemName.includes("MOTOR TEST") || itemName.includes("TORQ") || itemName.includes("WRENCH") || itemName.includes("PULLER") || itemName.includes("SOCKET") || itemName.includes("VOLTMETRE") || itemName.includes("MULTIMETRE") || itemName.includes("MANOMETRE")) {
     return 'ozel_alet';
   }
@@ -159,12 +241,10 @@ export const getRowSection = (row: string[]): 'yer_destek' | 'ozel_alet' | 'depo
   return 'yer_destek';
 };
 
-// Tarih ayrıştırma ve fark hesaplama
-export const calculateDaysDiff = (dateStr: string): number | null => {
-  if (!dateStr || typeof dateStr !== 'string') return null;
+// Türkçe tarih stringini JS Date nesnesine çevir
+function parseTrDateObj(dateStr?: string): Date | null {
+  if (!dateStr || dateStr === '-' || dateStr.trim() === '') return null;
   const clean = dateStr.trim();
-  if (!clean || clean === '-' || clean === '--' || clean.toLowerCase() === 'yok' || clean.toLowerCase().includes('belirtilme')) return null;
-
   let day = 0, month = 0, year = 0;
   if (clean.includes('.')) {
     const parts = clean.split('.');
@@ -190,13 +270,55 @@ export const calculateDaysDiff = (dateStr: string): number | null => {
   }
 
   if (!year || isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  if (year < 100) year += 2000;
+  return new Date(year, month, day);
+}
 
-  const targetDate = new Date(year, month, day);
+function getFutureDateStr(dateStr: string, yearsToAdd: number): string {
+  const dObj = parseTrDateObj(dateStr);
+  if (!dObj) return dateStr;
+  dObj.setFullYear(dObj.getFullYear() + yearsToAdd);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(dObj.getDate())}.${pad(dObj.getMonth() + 1)}.${dObj.getFullYear()}`;
+}
+
+export const calculateDaysDiff = (dateStr: string): number | null => {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const clean = dateStr.trim();
+  if (!clean || clean === '-' || clean === '--' || clean.toLowerCase() === 'yok' || clean.toLowerCase().includes('belirtilme')) return null;
+
+  const targetDate = parseTrDateObj(clean);
+  if (!targetDate) return null;
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   targetDate.setHours(0, 0, 0, 0);
 
   const diffTime = targetDate.getTime() - today.getTime();
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+};
+
+export const calculateDaysDiffForPersonelMuayene = (dateStr: string): number | null => {
+  const dObj = parseTrDateObj(dateStr);
+  if (!dObj) return null;
+  const expiryDate = new Date(dObj);
+  expiryDate.setFullYear(expiryDate.getFullYear() + 5);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  expiryDate.setHours(0, 0, 0, 0);
+  const diffTime = expiryDate.getTime() - today.getTime();
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+};
+
+export const calculateDaysDiffForIsgEgitim = (dateStr: string): number | null => {
+  const dObj = parseTrDateObj(dateStr);
+  if (!dObj) return null;
+  const expiryDate = new Date(dObj);
+  expiryDate.setFullYear(expiryDate.getFullYear() + 3);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  expiryDate.setHours(0, 0, 0, 0);
+  const diffTime = expiryDate.getTime() - today.getTime();
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
@@ -214,11 +336,23 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
   const [activeFleetFilter, setActiveFleetFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Live Drive / Server Fetching State
+  const [isLiveFetching, setIsLiveFetching] = useState<boolean>(true);
+  const [liveServerData, setLiveServerData] = useState<Record<string, any[][]>>({});
+
+  // Inline Cell Edit State (Double-click activation)
+  const [editingCell, setEditingCell] = useState<{ index: number; field: 'birim' | 'adSoyad' | 'eposta' | 'mail90' } | null>(null);
+
+  // Yaşam Destek & Personel Canlı Veri State'leri
+  const [yasamDestekData, setYasamDestekData] = useState<any[]>([]);
+  const [personelData, setPersonelData] = useState<any[]>([]);
+
   // New Sub-Unit Dialog
   const [isAddDialogOpen, setIsAddDialogOpen] = useState<boolean>(false);
   const [newBirimName, setNewBirimName] = useState<string>('');
   const [newAdSoyad, setNewAdSoyad] = useState<string>('');
   const [newEposta, setNewEposta] = useState<string>('orhavak.bakimsube@gmail.com');
+  const [newNorm, setNewNorm] = useState<string>(NORM_OPTIONS[0].label);
 
   // Detail Modal State
   const [selectedBirimDetails, setSelectedBirimDetails] = useState<{
@@ -239,6 +373,84 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     }
   }, [sorumlular]);
 
+  // CANLI VERİLERİ DRIVEDEN VE SERVER'DAN ÇEKME FONKSİYONU
+  const fetchAllLiveDriveData = async () => {
+    setIsLiveFetching(true);
+    try {
+      // 1. Server-side live scan API
+      const serverRes = await fetch('/api/gun-takip-live-scan').catch(() => null);
+      if (serverRes && serverRes.ok) {
+        const json = await serverRes.json();
+        if (json && json.status === 'success' && json.data) {
+          setLiveServerData(json.data);
+        }
+      }
+
+      // 2. Yaşam Destek Verileri
+      const ydRes = await fetch('/api/yasam-destek').catch(() => null);
+      if (ydRes && ydRes.ok) {
+        const json = await ydRes.json();
+        if (json && Array.isArray(json.records)) {
+          setYasamDestekData(json.records);
+        }
+      }
+
+      // 3. Personel Bilgi & Eğitim Verileri
+      const persRes = await fetch(`${TEKNISYEN_PERSONEL_SCRIPT_URL}?sheet=Personel&action=getPersonel`).catch(() => null);
+      if (persRes && persRes.ok) {
+        const json = await persRes.json();
+        if (json && json.status === 'success' && Array.isArray(json.data)) {
+          setPersonelData(json.data);
+        }
+      } else {
+        const localPers = await fetch('/api/yasam-destek/personnel-list').catch(() => null);
+        if (localPers && localPers.ok) {
+          const json = await localPers.json();
+          if (json && Array.isArray(json.data)) setPersonelData(json.data);
+        }
+      }
+
+      // 4. Canlı Gün Takip E-Tablosu Okuma
+      if (googleScriptUrl) {
+        try {
+          const targetUrl = `${googleScriptUrl}?action=readSheet&sheetName=${encodeURIComponent("GÜN TAKİP")}&t=${Date.now()}`;
+          const gtRes = await fetch(targetUrl);
+          if (gtRes.ok) {
+            const result = await gtRes.json();
+            if (result && result.status === 'success' && Array.isArray(result.data)) {
+              const mapped = result.data.map((row: any) => ({
+                birim: String(row["SORUMLU BİRİM"] || row["Sorumlu Birim"] || row[0] || "").trim().toUpperCase(),
+                adSoyad: String(row["ADI SOYADI"] || row["Adı Soyadı"] || row["AD SOYAD"] || row[1] || "").trim(),
+                eposta: String(row["E-POSTA ADRESİ"] || row["E-posta Adresi"] || row["EPOSTA ADRESI"] || row[2] || "").trim(),
+                norm: String(row["TAKİP EDİLECEK NORM"] || row["Norm"] || row[3] || "").trim(),
+                mail90: String(row["SON BİLDİRİM TARİHİ"] || row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[4] || "").trim(),
+                mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[5] || "").trim(),
+                mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[6] || "").trim()
+              })).filter((item: any) => item.birim);
+
+              if (mapped.length > 0) {
+                setList(mapped);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('GunTakip live sheet read error:', e);
+        }
+      }
+    } catch (err) {
+      console.warn('Live Drive Scan error:', err);
+    } finally {
+      setIsLiveFetching(false);
+    }
+  };
+
+  // Modal her açıldığında canlı verileri otomatik çekip inceler
+  useEffect(() => {
+    if (isOpen) {
+      fetchAllLiveDriveData();
+    }
+  }, [isOpen]);
+
   // Format date helper
   const getNowFormattedWithSeconds = (): string => {
     const now = new Date();
@@ -247,13 +459,139 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
   };
 
   /**
-   * GERÇEK VERİ EŞLEME:
-   * Sorumlu birim adına göre ilgili veri kümesini filtreler ve hem toplam kayıt sayısını hem de yaklaşan/günü geçen öğeleri tespit eder.
+   * GERÇEK VERİ EŞLEME VE DİNAMİK NORM KONTROLÜ:
+   * Sorumlu birim adına ve seçili takip normuna göre canlı veriyi inceler, norm kurallarına uymayanları tespit eder.
    */
-  const getBirimStats = (birimName: string): BirimStats => {
+  const getBirimStats = (birimName: string, assignedNorm?: string): BirimStats => {
     const norm = normalizeTurkishStr(birimName);
+    const activeNormStr = normalizeTurkishStr(assignedNorm || getDefaultNormForBirim(birimName));
 
-    // 1. Hedef Filo Tespiti
+    // ----------------------------------------------------
+    // 1. PERSONEL BİLGİ SİSTEMİ (OGM Sağlık Muayenesi Takibi - 1 Ay / 30 Gün Kala)
+    // ----------------------------------------------------
+    if (activeNormStr.includes('PERSONEL BILGI') || activeNormStr.includes('MUAYENE') || norm.includes('PERSONEL BILGI') || (norm.includes('PERSONEL') && !norm.includes('EGITIM') && !norm.includes('EĞİTİM'))) {
+      const approachingItems: ApproachingItem[] = [];
+      const totalCount = personelData.length;
+
+      personelData.forEach((p, rIdx) => {
+        const name = p.adiSoyadi || p['ADI SOYADI'] || p.adSoyad || p[1] || 'Personel';
+        const muayeneDateStr = p.periyodikMuayeneTarihi || p['PERİYODİK SAĞLIK MUAYENE TARİHİ'] || p['MUAYENE TARİHİ'] || p.muayeneTarihi || p[13] || '';
+
+        if (!muayeneDateStr || muayeneDateStr === '-' || muayeneDateStr.trim() === '') return;
+
+        const daysDiff = calculateDaysDiffForPersonelMuayene(muayeneDateStr);
+        if (daysDiff !== null && daysDiff <= 30) {
+          approachingItems.push({
+            unitKey: 'personel_bilgi',
+            unitName: 'PERSONEL BİLGİ SİSTEMİ',
+            subSection: 'OGM SAĞLIK MUAYENESİ',
+            techName: `${name} - Periyodik Sağlık Muayenesi`,
+            partNo: p.sicilNo || p.tcKimlik || '-',
+            seriNo: p.kadroUnvani || 'Teknisyen',
+            miktar: '1',
+            location: p.gorevYeri || 'Ankara',
+            status: daysDiff <= 0 ? 'MUAYENE GÜNÜ GEÇTİ (KRİTİK)' : 'MUAYENE YAKLAŞIYOR (≤30 GÜN)',
+            sonTarih: muayeneDateStr,
+            gelecekTarih: getFutureDateStr(muayeneDateStr, 5),
+            daysDiff,
+            isNew: true,
+            rowIndex: rIdx
+          });
+        }
+      });
+
+      approachingItems.sort((a, b) => a.daysDiff - b.daysDiff);
+      const overdueCount = approachingItems.filter(i => i.daysDiff <= 0).length;
+      const upcomingCount = approachingItems.filter(i => i.daysDiff > 0).length;
+      return { totalCount, approachingItems, overdueCount, upcomingCount };
+    }
+
+    // ----------------------------------------------------
+    // 2. PERSONEL EĞİTİM BİLİGİ SİSTEMİ (3 Yıllık İSG Eğitimi - 1 Ay / 30 Gün Kala)
+    // ----------------------------------------------------
+    if (activeNormStr.includes('EGITIM') || activeNormStr.includes('ISG') || norm.includes('EGITIM') || norm.includes('EĞİTİM')) {
+      const approachingItems: ApproachingItem[] = [];
+      const totalCount = personelData.length;
+
+      personelData.forEach((p, rIdx) => {
+        const name = p.adiSoyadi || p['ADI SOYADI'] || p.adSoyad || p[1] || 'Personel';
+        const isgDateStr = p.isgEgitimTarihi || p['İSG EĞİTİM TARİHİ'] || p['ISG EGITIM TARIHI'] || p.egitimTarihi || p[14] || '';
+
+        if (!isgDateStr || isgDateStr === '-' || isgDateStr.trim() === '') return;
+
+        const daysDiff = calculateDaysDiffForIsgEgitim(isgDateStr);
+        if (daysDiff !== null && daysDiff <= 30) {
+          approachingItems.push({
+            unitKey: 'personel_egitim',
+            unitName: 'PERSONEL EĞİTİM BİLİGİ SİSTEMİ',
+            subSection: 'İSG EĞİTİMİ (3 YILLIK)',
+            techName: `${name} - İSG Periyodik Eğitimi`,
+            partNo: p.sicilNo || p.tcKimlik || '-',
+            seriNo: p.kadroUnvani || 'Teknisyen',
+            miktar: '1',
+            location: p.gorevYeri || 'Ankara',
+            status: daysDiff <= 0 ? 'İSG EĞİTİM SÜRESİ DOLDU (KRİTİK)' : 'İSG EĞİTİMİ YAKLAŞIYOR (≤30 GÜN)',
+            sonTarih: isgDateStr,
+            gelecekTarih: getFutureDateStr(isgDateStr, 3),
+            daysDiff,
+            isNew: true,
+            rowIndex: rIdx
+          });
+        }
+      });
+
+      approachingItems.sort((a, b) => a.daysDiff - b.daysDiff);
+      const overdueCount = approachingItems.filter(i => i.daysDiff <= 0).length;
+      const upcomingCount = approachingItems.filter(i => i.daysDiff > 0).length;
+      return { totalCount, approachingItems, overdueCount, upcomingCount };
+    }
+
+    // ----------------------------------------------------
+    // 3. AT-802 YAŞAM DESTEK (Can Yeleği, Spare Air, Kask Kit SKT & Kontrol - 3 Ay Kala)
+    // ----------------------------------------------------
+    if (activeNormStr.includes('YASAM DESTEK') || activeNormStr.includes('YAŞAM DESTEK') || norm.includes('YASAM DESTEK') || norm.includes('YAŞAM DESTEK')) {
+      const approachingItems: ApproachingItem[] = [];
+      const totalCount = yasamDestekData.length;
+
+      yasamDestekData.forEach((item, rIdx) => {
+        const person = item.personelAdi || item.personel || 'Teknisyen';
+        const vestSn = item.lifeVestSn || '-';
+        const airSn = item.spareAirSn || '-';
+        const helmetSn = item.helmetKitSn || '-';
+        const checkDate = item.bitisTarihi || item.baslangicTarihi || '';
+
+        if (checkDate && checkDate !== 'DEVAM EDİYOR') {
+          const daysDiff = calculateDaysDiff(checkDate);
+          if (daysDiff !== null && daysDiff <= 90) {
+            approachingItems.push({
+              unitKey: 'at802_yasam_destek',
+              unitName: 'AT-802 YAŞAM DESTEK',
+              subSection: 'ZİMMET EKİPMAN KONTROLÜ',
+              techName: `${person} (Vest: ${vestSn}, Air: ${airSn}, Helmet: ${helmetSn})`,
+              partNo: vestSn,
+              seriNo: airSn,
+              miktar: '1',
+              location: item.gorevYeri || 'Ankara',
+              status: daysDiff <= 0 ? 'ZİMMET KONTROL GÜNÜ GEÇTİ' : 'ZİMMET KONTROLÜ YAKLAŞIYOR (≤90 GÜN)',
+              sonTarih: item.baslangicTarihi || '-',
+              gelecekTarih: checkDate,
+              daysDiff,
+              isNew: true,
+              rowIndex: rIdx
+            });
+          }
+        }
+      });
+
+      approachingItems.sort((a, b) => a.daysDiff - b.daysDiff);
+      const overdueCount = approachingItems.filter(i => i.daysDiff <= 0).length;
+      const upcomingCount = approachingItems.filter(i => i.daysDiff > 0).length;
+      return { totalCount, approachingItems, overdueCount, upcomingCount };
+    }
+
+    // ----------------------------------------------------
+    // 4. HAVA ARAÇLARI, DEPOLAR, TEÇHİZAT VE KARA ARAÇLARI
+    // ----------------------------------------------------
     let targetFleetKey = '';
     if (norm.includes('BUMBI')) targetFleetKey = 't70_bumbi_backet';
     else if (norm.includes('HELITAK')) targetFleetKey = 't70_helitak';
@@ -265,18 +603,17 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     else if (norm.includes('HANGAR')) targetFleetKey = 'hangar';
     else if (norm.includes('KARA')) targetFleetKey = 'kara_araclari';
 
-    // 2. Hedef Bölüm Tespiti (Depo mu, Yer Destek mi, Özel Alet mi?)
     let targetSection: 'all' | 'depo' | 'ozel_alet' | 'yer_destek' = 'all';
-    if (norm.includes('DEPO')) {
+    if (activeNormStr.includes('DEPO') || norm.includes('DEPO')) {
       targetSection = 'depo';
-    } else if (norm.includes('OZEL') || norm.includes('ÖZEL')) {
+    } else if (activeNormStr.includes('OZEL') || activeNormStr.includes('ÖZEL') || norm.includes('OZEL') || norm.includes('ÖZEL')) {
       targetSection = 'ozel_alet';
-    } else if (norm.includes('YER DESTEK') || norm.includes('YERDESTEK')) {
+    } else if (activeNormStr.includes('YER DESTEK') || norm.includes('YER DESTEK')) {
       targetSection = 'yer_destek';
     }
 
-    // İlgili veri dizisini al
-    const rawRows = (unitDataMap as any)[targetFleetKey] || [];
+    // Canlı sunucu verisi öncelikli, yoksa unitDataMap fallback
+    const rawRows = (liveServerData as any)[targetFleetKey] || (unitDataMap as any)[targetFleetKey] || [];
     if (!Array.isArray(rawRows) || rawRows.length === 0) {
       return { totalCount: 0, approachingItems: [], overdueCount: 0, upcomingCount: 0 };
     }
@@ -292,9 +629,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
       const isKara = targetFleetKey === 'kara_araclari';
       const isDepoRow = sec === 'depo_sarf' || sec === 'depo_kimyasal';
 
-      // Bölüm Filtresi Eşleşmesi
       if (targetSection === 'depo') {
-        // Yalnızca DEPO satırları (Yer destek veya özel aletler ASLA depoya giremez!)
         const loc = String(row[5] || '').toLowerCase();
         if (!isDepoRow && !loc.includes('depo')) return;
       } else if (targetSection === 'ozel_alet') {
@@ -303,10 +638,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         if (sec !== 'yer_destek') return;
       }
 
-      // Bu satır bu birime aittir -> Toplam sayacı artır
       totalCount++;
 
-      // Alanları ve tarihleri güvenli şekilde oku
       let techName = '';
       let partNo = '';
       let seriNo = '';
@@ -317,6 +650,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
       let gelecekTarih = '';
       let isMuaf = false;
       let lastMailSentDate = '';
+      let kritikStok = 0;
+      let mevcutStok = 0;
 
       if (isKara) {
         techName = String(row[1] || 'Araç / Ekipman').trim();
@@ -337,12 +672,14 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         location = String(row[5] || '-').trim();
         status = String(row[6] || 'Faal').trim();
         const omurlu = String(row[7] || '').trim().toUpperCase();
-        if (omurlu !== 'EVET') isMuaf = true; // Ömürlü parça değilse gün takibi yapılmaz
+        if (omurlu !== 'EVET') isMuaf = true;
         gelecekTarih = String(row[8] || '').trim();
         sonTarih = String(row[9] || '').trim();
         lastMailSentDate = String(row[11] || '').trim();
+
+        mevcutStok = Number(row[4]) || 1;
+        kritikStok = Number(row[15] || row[16] || 0);
       } else if (targetFleetKey === 'bell429') {
-        // Bell 429 özel indeksleri
         techName = String(row[1] || 'Teçhizat').trim();
         partNo = String(row[2] || '-').trim();
         seriNo = String(row[3] || '-').trim();
@@ -353,7 +690,6 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         gelecekTarih = String(row[8] || '').trim();
         lastMailSentDate = String(row[11] || '').trim();
       } else {
-        // Standart Uçak ve Hangar tabloları (T-70, AT-802, B-360, C-650, Hangar)
         techName = String(row[1] || 'Teçhizat').trim();
         partNo = String(row[2] || '-').trim();
         seriNo = String(row[3] || '-').trim();
@@ -367,11 +703,31 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         lastMailSentDate = String(row[12] || row[11] || '').trim();
       }
 
-      // Eğer bakımdan muafsa veya gelecek tarih boşsa bildirim oluşturulmaz
+      // Depo Kritik Stok Takibi (1 Adet Kala veya Altına İnince Uyarır)
+      if (isDepoRow && kritikStok > 0 && mevcutStok <= (kritikStok + 1)) {
+        approachingItems.push({
+          unitKey: targetFleetKey,
+          unitName: targetFleetKey.toUpperCase(),
+          subSection: 'KRİTİK STOK SEVİYESİ',
+          techName: `${techName} (Kritik Stok Uyarısı)`,
+          partNo: partNo || '-',
+          seriNo: seriNo || '-',
+          miktar: String(mevcutStok),
+          location: location || '-',
+          status: mevcutStok <= kritikStok ? `KRİTİK STOK SEVİYESİNE İNDİ (Mevcut: ${mevcutStok}, Limit: ${kritikStok})` : `KRİTİK STOĞA 1 ADET KALDI (Mevcut: ${mevcutStok}, Limit: ${kritikStok})`,
+          sonTarih: '-',
+          gelecekTarih: 'STOK LİMİTİ',
+          daysDiff: mevcutStok <= kritikStok ? 0 : 1,
+          lastMailSentDate,
+          isNew: true,
+          rowIndex: rIdx
+        });
+      }
+
+      // Tarih Bazlı Takip (3 Ay / 90 Gün Kala Uyarı)
       if (isMuaf || !gelecekTarih) return;
 
       const daysDiff = calculateDaysDiff(gelecekTarih);
-      // Sadece günü gelen veya 90 günden az kalanlar bildirime girer
       if (daysDiff === null || daysDiff > 90) return;
 
       const isNew = !lastMailSentDate || lastMailSentDate.trim() === '' || lastMailSentDate.trim() === '-';
@@ -379,7 +735,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
       approachingItems.push({
         unitKey: targetFleetKey,
         unitName: targetFleetKey.toUpperCase(),
-        subSection: isDepoRow ? 'DEPO' : (sec === 'ozel_alet' ? 'ÖZEL ALET' : 'YER DESTEK'),
+        subSection: isDepoRow ? 'DEPO ÖMÜR' : (sec === 'ozel_alet' ? 'ÖZEL ALET' : 'YER DESTEK'),
         techName: techName || 'Teçhizat / Malzeme',
         partNo: partNo || '-',
         seriNo: seriNo || '-',
@@ -396,7 +752,6 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     });
 
     approachingItems.sort((a, b) => a.daysDiff - b.daysDiff);
-
     const overdueCount = approachingItems.filter(i => i.daysDiff <= 0).length;
     const upcomingCount = approachingItems.filter(i => i.daysDiff > 0).length;
 
@@ -420,7 +775,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         const b = item.birim.toLowerCase();
         const a = item.adSoyad.toLowerCase();
         const e = item.eposta.toLowerCase();
-        return b.includes(q) || a.includes(q) || e.includes(q);
+        const n = (item.norm || '').toLowerCase();
+        return b.includes(q) || a.includes(q) || e.includes(q) || n.includes(q);
       }
       return true;
     });
@@ -430,26 +786,26 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
   const allOverdueItems = useMemo(() => {
     const map = new Map<string, ApproachingItem>();
     list.forEach(b => {
-      const stats = getBirimStats(b.birim);
+      const stats = getBirimStats(b.birim, b.norm);
       stats.approachingItems.filter(i => i.daysDiff <= 0).forEach(i => {
         const key = `${i.unitKey}_${i.partNo}_${i.seriNo}_${i.gelecekTarih}`;
         map.set(key, i);
       });
     });
     return Array.from(map.values());
-  }, [list, unitDataMap]);
+  }, [list, unitDataMap, liveServerData, yasamDestekData, personelData]);
 
   const allApproachingItems = useMemo(() => {
     const map = new Map<string, ApproachingItem>();
     list.forEach(b => {
-      const stats = getBirimStats(b.birim);
+      const stats = getBirimStats(b.birim, b.norm);
       stats.approachingItems.filter(i => i.daysDiff > 0 && i.daysDiff <= 90).forEach(i => {
         const key = `${i.unitKey}_${i.partNo}_${i.seriNo}_${i.gelecekTarih}`;
         map.set(key, i);
       });
     });
     return Array.from(map.values());
-  }, [list, unitDataMap]);
+  }, [list, unitDataMap, liveServerData, yasamDestekData, personelData]);
 
   // Arka plan otomatik kontrol
   const runSilentOverdueCheck = async (isManualTrigger = false) => {
@@ -457,7 +813,6 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     const nowTimestamp = getNowFormattedWithSeconds();
 
     try {
-      // 1. Local backend API
       await fetch('/api/trigger-auto-reminders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -468,7 +823,6 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         })
       }).catch(e => console.warn('Local trigger reminder warn:', e));
 
-      // 2. Google Apps Script
       if (allOverdueItems.length > 0 && googleScriptUrl) {
         await fetch(googleScriptUrl, {
           method: 'POST',
@@ -497,8 +851,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     }
   }, [isOpen]);
 
-  // Yeni Birim Ekleme
-  const handleAddNewBirim = () => {
+  // Yeni Birim Ekleme (E-Tabloya Anında Kaydeder)
+  const handleAddNewBirim = async () => {
     if (!newBirimName.trim()) {
       showNotification('Lütfen geçerli bir birim veya alt birim adı giriniz.', 'warning');
       return;
@@ -509,10 +863,13 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
       return;
     }
 
+    const normText = newNorm.trim() || getDefaultNormForBirim(cleanName);
+
     const newRow: GunTakipBirimRow = {
       birim: cleanName,
       adSoyad: newAdSoyad.trim() || 'Sorumlu Personel',
       eposta: newEposta.trim() || 'orhavak.bakimsube@gmail.com',
+      norm: normText,
       mail90: ''
     };
 
@@ -520,19 +877,44 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     setList(updated);
     setNewBirimName('');
     setNewAdSoyad('');
+    setNewNorm(NORM_OPTIONS[0].label);
     setIsAddDialogOpen(false);
-    showNotification(`✅ "${cleanName}" başarıyla listeye eklendi!`, 'success');
+    showNotification(`✅ "${cleanName}" başarıyla eklendi!`, 'success');
+
+    await onSaveSorumlular(updated);
   };
 
-  // Birim Silme
-  const handleDeleteBirim = (index: number) => {
+  // Birim Silme (E-Tabloya Anında Kaydeder)
+  const handleDeleteBirim = async (index: number) => {
     const itemToDelete = filteredList[index];
     if (!itemToDelete) return;
-    if (confirm(`"${itemToDelete.birim}" birimini silmek istediğinize emin misiniz?`)) {
+    if (confirm(`"${itemToDelete.birim}" birimini ve takibini silmek istediğinize emin misiniz?`)) {
       const updated = list.filter(item => item.birim !== itemToDelete.birim);
       setList(updated);
       showNotification(`"${itemToDelete.birim}" listeden silindi.`, 'info');
+      await onSaveSorumlular(updated);
     }
+  };
+
+  // Inline hücre güncelleme ve E-Tabloya kaydetme
+  const handleUpdateItemField = (itemBirim: string, field: 'birim' | 'adSoyad' | 'eposta' | 'mail90', value: string) => {
+    setList(prev => {
+      const updated = prev.map(p => p.birim === itemBirim ? { ...p, [field]: value } : p);
+      return updated;
+    });
+  };
+
+  const handleCellBlurOrEnter = async () => {
+    setEditingCell(null);
+    await onSaveSorumlular(list);
+  };
+
+  // Norm Seçim Listesinden Değiştirme (Anında Kaydeder & Canlı Analizi Yeniler)
+  const handleSelectNorm = async (itemBirim: string, newNormLabel: string) => {
+    const updatedList = list.map(p => p.birim === itemBirim ? { ...p, norm: newNormLabel } : p);
+    setList(updatedList);
+    await onSaveSorumlular(updatedList);
+    showNotification(`✅ "${itemBirim}" için takip normu "${newNormLabel}" olarak güncellendi ve E-Tabloya kaydedildi.`, 'success');
   };
 
   // Tüm sorumluları Excel'e aktar
@@ -542,15 +924,16 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         'SORUMLU BİRİM / ALT BİRİM',
         'ADI SOYADI',
         'E-POSTA ADRESİ',
+        'TAKİP EDİLECEK NORM',
         'TOPLAM KAYITLI',
         'GÜNÜ GEÇEN',
-        'YAKLAŞAN (≤90 GÜN)',
+        'YAKLAŞAN (≤90 GÜN / ≤30 GÜN)',
         'DURUM',
         'SON BİLDİRİM TARİHİ'
       ];
 
       const dataRows = list.map(item => {
-        const stats = getBirimStats(item.birim);
+        const stats = getBirimStats(item.birim, item.norm);
         let durum = 'GÜVENLİ (SORUN YOK)';
         if (stats.overdueCount > 0) durum = `${stats.overdueCount} KALEM GÜNÜ GEÇTİ`;
         else if (stats.upcomingCount > 0) durum = `${stats.upcomingCount} KALEM YAKLAŞIYOR`;
@@ -560,6 +943,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
           item.birim,
           item.adSoyad,
           item.eposta,
+          item.norm || getDefaultNormForBirim(item.birim),
           stats.totalCount,
           stats.overdueCount,
           stats.upcomingCount,
@@ -574,6 +958,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         { wch: 30 },
         { wch: 22 },
         { wch: 32 },
+        { wch: 50 },
         { wch: 16 },
         { wch: 16 },
         { wch: 20 },
@@ -595,13 +980,13 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     try {
       const headers = [
         'SIRA NO',
-        'TEÇHİZAT / MALZEME ADI',
-        'PARÇA NO (P/N)',
-        'SERİ NO (S/N)',
-        'BÖLÜM',
+        'TEÇHİZAT / MALZEME / PERSONEL ADI',
+        'PARÇA NO / SİCİL NO',
+        'SERİ NO / ÜNVAN',
+        'BÖLÜM / NORM',
         'BULUNDUĞU YER',
-        'SON KONTROL / BAKIM',
-        'GELECEK KONTROL / BAKIM',
+        'SON KONTROL / BAKIM / EĞİTİM',
+        'GELECEK KONTROL / YENİLEME TARİHİ',
         'KALAN GÜN',
         'DURUM'
       ];
@@ -616,20 +1001,20 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         item.sonTarih || '-',
         item.gelecekTarih,
         item.daysDiff <= 0 ? `${Math.abs(item.daysDiff)} Gün Geçti` : `${item.daysDiff} Gün Kaldı`,
-        item.daysDiff <= 0 ? 'GÜNÜ GEÇTİ (KRİTİK)' : 'YAKLAŞIYOR (≤90 GÜN)'
+        item.daysDiff <= 0 ? 'GÜNÜ GEÇTİ (KRİTİK)' : 'YAKLAŞIYOR'
       ]);
 
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
       ws['!cols'] = [
         { wch: 8 },
-        { wch: 35 },
+        { wch: 38 },
         { wch: 22 },
         { wch: 20 },
-        { wch: 16 },
+        { wch: 24 },
         { wch: 22 },
         { wch: 20 },
-        { wch: 22 },
+        { wch: 24 },
         { wch: 18 },
         { wch: 24 }
       ];
@@ -660,16 +1045,25 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
               <h2 className="text-base sm:text-lg font-black tracking-tight text-white flex items-center gap-2.5">
                 <span>GÜN TAKİP VE OTOMATİK BİLDİRİM PANELİ</span>
                 <span className="text-[10px] bg-emerald-500/30 text-emerald-200 font-mono font-black px-2.5 py-0.5 rounded-full border border-emerald-400/40">
-                  GERÇEK VERİ KONTROLÜ
+                  {isLiveFetching ? '⏳ CANLI VERİLER ALINIYOR...' : '🟢 GERÇEK VERİ & NORM KONTROLÜ'}
                 </span>
               </h2>
               <p className="text-xs text-emerald-200/80 font-medium mt-0.5">
-                Sistemdeki gerçek envanter kayıtları taranır; kayıt yoksa "SORUN YOK" kabul edilir, ≤90 gün kalan teçhizatlar otomatik takip edilir.
+                Pencere açılır açılmaz veriler Google Drive ve sunucudan canlı çekilir; seçilen norma göre anında analiz edilip uymayanlar listelenir.
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => fetchAllLiveDriveData()}
+              disabled={isLiveFetching}
+              className="px-3 py-1.5 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer border border-emerald-600/50 active:scale-95 disabled:opacity-50"
+              title="Canlı Drive Verilerini Yeniden Tara"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLiveFetching ? 'animate-spin' : ''}`} />
+              <span>{isLiveFetching ? 'Taranıyor...' : 'Yeniden Tara'}</span>
+            </button>
             <button
               onClick={onClose}
               className="p-2 rounded-xl bg-emerald-900/50 hover:bg-rose-600/80 text-emerald-200 hover:text-white transition-all cursor-pointer border border-emerald-700/50"
@@ -689,11 +1083,13 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xl font-black text-rose-200 font-mono">{allOverdueItems.length}</span>
+                <span className="text-xl font-black text-rose-200 font-mono">
+                  {isLiveFetching ? '...' : allOverdueItems.length}
+                </span>
                 <span className="text-[10px] bg-rose-700 text-white font-bold px-1.5 py-0.5 rounded-md uppercase">Günü Geçti</span>
               </div>
               <p className="text-[11px] text-rose-300/80 leading-tight mt-0.5">
-                Kayıtlı ve günü geçen teçhizatlar arka planda onay sormadan bildirilir.
+                Kayıtlı ve günü geçen teçhizatlar/personel e-postaya otomatik bildirilir.
               </p>
             </div>
           </div>
@@ -705,11 +1101,13 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xl font-black text-amber-200 font-mono">{allApproachingItems.length}</span>
-                <span className="text-[10px] bg-amber-700 text-white font-bold px-1.5 py-0.5 rounded-md uppercase">Yaklaşan (≤ 90 Gün)</span>
+                <span className="text-xl font-black text-amber-200 font-mono">
+                  {isLiveFetching ? '...' : allApproachingItems.length}
+                </span>
+                <span className="text-[10px] bg-amber-700 text-white font-bold px-1.5 py-0.5 rounded-md uppercase">Yaklaşan Normlar</span>
               </div>
               <p className="text-[11px] text-amber-300/80 leading-tight mt-0.5">
-                Sistem takibinde. Günü geldiğinde e-posta otomatik postalanır.
+                Depolarda 3 ay, personelde 1 ay kala uyarı otomatik listelenir.
               </p>
             </div>
           </div>
@@ -723,10 +1121,10 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
               <div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                  <span className="text-xs font-black text-emerald-300 uppercase tracking-wide">OTOMATİK SERVİS AKTİF</span>
+                  <span className="text-xs font-black text-emerald-300 uppercase tracking-wide">HER GÜN SABAHLARI 09:00 OTOMATİK TARAMA</span>
                 </div>
                 <p className="text-[11px] text-emerald-200/80 leading-tight mt-0.5">
-                  Her gün 09:00 ve günü geçenlerde arka planda otomatik çalışır.
+                  Her gün 09:00'da tüm parametreler Drive'dan çekilir ve onay sormadan bildirilir.
                 </p>
               </div>
             </div>
@@ -754,7 +1152,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
               { key: 'B-360', label: 'B-360' },
               { key: 'C-650', label: 'C-650' },
               { key: 'HANGAR', label: 'HANGAR' },
-              { key: 'KARA', label: 'KARA ARAÇLARI' }
+              { key: 'KARA', label: 'KARA ARAÇLARI' },
+              { key: 'PERSONEL', label: 'PERSONEL SİSTEMLERİ' }
             ].map(tab => (
               <button
                 key={tab.key}
@@ -777,7 +1176,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Birim, Sorumlu, Mail..."
+                placeholder="Birim, Sorumlu, Mail, Norm..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-8 pr-3 py-1.5 bg-white text-xs text-slate-800 placeholder:text-slate-400 border border-slate-200 rounded-xl focus:outline-none focus:border-[#0b3d1d] font-medium"
@@ -786,7 +1185,13 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
 
             {/* Add Sub-Unit Button */}
             <button
-              onClick={() => setIsAddDialogOpen(true)}
+              onClick={() => {
+                setNewBirimName('');
+                setNewAdSoyad('');
+                setNewEposta('orhavak.bakimsube@gmail.com');
+                setNewNorm(NORM_OPTIONS[0].label);
+                setIsAddDialogOpen(true);
+              }}
               className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer active:scale-95"
             >
               <Plus className="w-4 h-4 text-emerald-200" />
@@ -815,26 +1220,53 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
           </div>
         </div>
 
-        {/* DATA TABLE */}
+        {/* DATA TABLE (Çift Tıkla Düzenleme & Listeden Norm Seçimi) */}
         <div className="flex-1 overflow-auto bg-slate-100/50 p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden min-w-[1000px]">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden min-w-[1100px]">
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="bg-[#0b3d1d] text-white font-black uppercase text-[11px] tracking-wider border-b border-[#072612]">
                   <th className="py-3 px-3 text-center w-12 border-r border-emerald-900/60">#</th>
-                  <th className="py-3 px-4 border-r border-emerald-900/60">SORUMLU BİRİM / ALT BİRİM</th>
-                  <th className="py-3 px-4 border-r border-emerald-900/60">ADI SOYADI</th>
-                  <th className="py-3 px-4 border-r border-emerald-900/60">E-POSTA ADRESİ</th>
-                  <th className="py-3 px-3 text-center border-r border-emerald-900/60 bg-slate-900 text-emerald-300">
+                  <th className="py-3 px-4 border-r border-emerald-900/60 w-52">
+                    <div className="flex items-center justify-between">
+                      <span>SORUMLU BİRİM / ALT BİRİM</span>
+                      <span className="text-[9px] font-normal text-emerald-200/70 lowercase font-mono">çift tıkla</span>
+                    </div>
+                  </th>
+                  <th className="py-3 px-4 border-r border-emerald-900/60 w-40">
+                    <div className="flex items-center justify-between">
+                      <span>ADI SOYADI</span>
+                      <span className="text-[9px] font-normal text-emerald-200/70 lowercase font-mono">çift tıkla</span>
+                    </div>
+                  </th>
+                  <th className="py-3 px-4 border-r border-emerald-900/60 w-56">
+                    <div className="flex items-center justify-between">
+                      <span>E-POSTA ADRESİ</span>
+                      <span className="text-[9px] font-normal text-emerald-200/70 lowercase font-mono">çift tıkla</span>
+                    </div>
+                  </th>
+                  <th className="py-3 px-4 border-r border-emerald-900/60 w-80 bg-emerald-950 text-emerald-200">
+                    <div className="flex items-center justify-between">
+                      <span>TAKİP EDİLECEK NORM</span>
+                      <span className="text-[9px] font-bold text-emerald-300 lowercase font-mono">listeden seç</span>
+                    </div>
+                  </th>
+                  <th className="py-3 px-3 text-center border-r border-emerald-900/60 bg-slate-900 text-emerald-300 w-44">
                     BİLDİRİM VE TAKİP DURUMU
                   </th>
-                  <th className="py-3 px-3 text-center border-r border-emerald-900/60">SON BİLDİRİM</th>
-                  <th className="py-3 px-3 text-center w-40">İŞLEMLER</th>
+                  <th className="py-3 px-3 text-center border-r border-emerald-900/60 w-32">SON BİLDİRİM</th>
+                  <th className="py-3 px-3 text-center w-36">İŞLEMLER</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 font-medium text-slate-700">
                 {filteredList.map((item, idx) => {
-                  const stats = getBirimStats(item.birim);
+                  const stats = getBirimStats(item.birim, item.norm);
+                  const displayNorm = item.norm || getDefaultNormForBirim(item.birim);
+
+                  const isEditingBirim = editingCell?.index === idx && editingCell.field === 'birim';
+                  const isEditingAd = editingCell?.index === idx && editingCell.field === 'adSoyad';
+                  const isEditingMail = editingCell?.index === idx && editingCell.field === 'eposta';
+                  const isEditingMailDate = editingCell?.index === idx && editingCell.field === 'mail90';
 
                   return (
                     <tr
@@ -848,110 +1280,188 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                         {idx + 1}
                       </td>
 
-                      {/* Birim / Alt Birim */}
-                      <td className="py-2.5 px-4 font-black text-slate-900 border-r border-slate-200">
-                        <div className="flex items-center gap-2">
-                          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-900 text-[11px] font-mono font-bold border border-emerald-200">
-                            {item.birim}
+                      {/* Sorumlu Birim / Alt Birim (Çift Tıkla Düzenlenebilir) */}
+                      <td
+                        onDoubleClick={() => setEditingCell({ index: idx, field: 'birim' })}
+                        className="py-2 px-3 font-black text-slate-900 border-r border-slate-200 cursor-pointer group hover:bg-emerald-50/40 transition-all"
+                        title="Çift tıklayarak birim adını düzenleyebilirsiniz"
+                      >
+                        {isEditingBirim ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={item.birim}
+                            onChange={(e) => handleUpdateItemField(item.birim, 'birim', e.target.value.toUpperCase())}
+                            onBlur={handleCellBlurOrEnter}
+                            onKeyDown={(e) => e.key === 'Enter' && handleCellBlurOrEnter()}
+                            className="w-full px-2 py-1 bg-white border border-emerald-600 rounded-lg text-xs font-mono font-bold text-slate-900 shadow-sm focus:outline-none"
+                          />
+                        ) : (
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-900 text-[11px] font-mono font-bold border border-emerald-200">
+                              {item.birim}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono font-semibold">
+                              ({isLiveFetching ? '...' : stats.totalCount})
+                            </span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Adı Soyadı (Çift Tıkla Düzenlenebilir) */}
+                      <td
+                        onDoubleClick={() => setEditingCell({ index: idx, field: 'adSoyad' })}
+                        className="py-2 px-3 border-r border-slate-200 cursor-pointer group hover:bg-emerald-50/40 transition-all"
+                        title="Çift tıklayarak adı soyadı düzenleyebilirsiniz"
+                      >
+                        {isEditingAd ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={item.adSoyad}
+                            onChange={(e) => handleUpdateItemField(item.birim, 'adSoyad', e.target.value)}
+                            onBlur={handleCellBlurOrEnter}
+                            onKeyDown={(e) => e.key === 'Enter' && handleCellBlurOrEnter()}
+                            className="w-full px-2 py-1 bg-white border border-emerald-600 rounded-lg text-xs font-semibold text-slate-900 shadow-sm focus:outline-none"
+                          />
+                        ) : (
+                          <span className="text-xs font-semibold text-slate-800">
+                            {item.adSoyad || 'Sorumlu Personel'}
                           </span>
-                          <span className="text-[10px] text-slate-400 font-mono font-semibold">
-                            ({stats.totalCount} Ürün)
+                        )}
+                      </td>
+
+                      {/* E-posta Adresi (Çift Tıkla Düzenlenebilir) */}
+                      <td
+                        onDoubleClick={() => setEditingCell({ index: idx, field: 'eposta' })}
+                        className="py-2 px-3 border-r border-slate-200 cursor-pointer group hover:bg-emerald-50/40 transition-all"
+                        title="Çift tıklayarak e-posta adresini düzenleyebilirsiniz"
+                      >
+                        {isEditingMail ? (
+                          <input
+                            type="email"
+                            autoFocus
+                            value={item.eposta}
+                            onChange={(e) => handleUpdateItemField(item.birim, 'eposta', e.target.value)}
+                            onBlur={handleCellBlurOrEnter}
+                            onKeyDown={(e) => e.key === 'Enter' && handleCellBlurOrEnter()}
+                            className="w-full px-2 py-1 bg-white border border-emerald-600 rounded-lg text-xs font-mono font-medium text-slate-900 shadow-sm focus:outline-none"
+                          />
+                        ) : (
+                          <span className="text-xs font-mono text-slate-700">
+                            {item.eposta || 'orhavak.bakimsube@gmail.com'}
                           </span>
+                        )}
+                      </td>
+
+                      {/* TAKİP EDİLECEK NORM (LİSTEDEN SEÇMELİ DROPDOWN - CANLI KAYDEDER) */}
+                      <td className="py-2 px-3 border-r border-slate-200 bg-emerald-50/20">
+                        <div className="relative flex items-center">
+                          <select
+                            value={displayNorm}
+                            onChange={(e) => handleSelectNorm(item.birim, e.target.value)}
+                            className="w-full py-1.5 pl-2 pr-6 bg-white hover:bg-emerald-50/40 border border-emerald-300 focus:border-emerald-600 rounded-xl text-[11px] font-bold text-slate-800 focus:outline-none transition-all cursor-pointer shadow-2xs appearance-none leading-tight"
+                            title="Takip edilecek norm kuralını listeden seçiniz"
+                          >
+                            {NORM_OPTIONS.map(opt => (
+                              <option key={opt.id} value={opt.label}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="w-3.5 h-3.5 text-emerald-600 absolute right-2 pointer-events-none" />
                         </div>
                       </td>
 
-                      {/* Adı Soyadı */}
-                      <td className="py-2.5 px-4 border-r border-slate-200">
-                        <input
-                          type="text"
-                          value={item.adSoyad}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setList(prev => prev.map(p => p.birim === item.birim ? { ...p, adSoyad: val } : p));
-                          }}
-                          className="w-full px-2.5 py-1 bg-transparent hover:bg-slate-100 focus:bg-white border border-transparent focus:border-[#0b3d1d] rounded-lg text-xs font-semibold text-slate-800 transition-all"
-                          placeholder="Ad Soyad giriniz..."
-                        />
-                      </td>
-
-                      {/* E-posta */}
-                      <td className="py-2.5 px-4 border-r border-slate-200">
-                        <input
-                          type="email"
-                          value={item.eposta}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setList(prev => prev.map(p => p.birim === item.birim ? { ...p, eposta: val } : p));
-                          }}
-                          className="w-full px-2.5 py-1 bg-transparent hover:bg-slate-100 focus:bg-white border border-transparent focus:border-[#0b3d1d] rounded-lg text-xs font-mono font-medium text-slate-800 transition-all"
-                          placeholder="orhavak@ogm.gov.tr"
-                        />
-                      </td>
-
-                      {/* Bildirim Durumu: GERÇEK VERİYE GÖRE HESAPLANIR */}
+                      {/* BİLDİRİM VE TAKİP DURUMU (Gerçek Veri & Norm Analizine Göre Hesaplanır) */}
                       <td className="py-2.5 px-3 text-center border-r border-slate-200">
-                        {stats.totalCount === 0 ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-300">
+                        {isLiveFetching ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 animate-pulse">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                            <span>İnceleniyor...</span>
+                          </span>
+                        ) : stats.totalCount === 0 ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10.5px] font-bold bg-slate-100 text-slate-600 border border-slate-300">
                             <Check className="w-3 h-3 text-slate-500" />
                             <span>Kayıt Yok (Sorun Yok)</span>
                           </span>
                         ) : stats.overdueCount > 0 ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black bg-rose-100 text-rose-800 border border-rose-300 shadow-xs">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10.5px] font-black bg-rose-100 text-rose-800 border border-rose-300 shadow-xs">
                             <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse"></span>
                             <span>{stats.overdueCount} Kalem Günü Geçti</span>
                           </span>
                         ) : stats.upcomingCount > 0 ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
                             <Clock className="w-3 h-3 text-amber-600" />
                             <span>{stats.upcomingCount} Kalem Yaklaşıyor</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
+                          <span className="inline-flex items-center gap-1 text-[10.5px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                             <span>Tümü Güncel (Sorun Yok)</span>
                           </span>
                         )}
                       </td>
 
-                      {/* Son Bildirim Tarihi */}
-                      <td className="py-2.5 px-3 text-center border-r border-slate-200">
-                        {item.mail90 ? (
-                          <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 text-[11px] font-mono font-bold">
+                      {/* Son Bildirim Tarihi (Çift Tıkla Düzenlenebilir) */}
+                      <td
+                        onDoubleClick={() => setEditingCell({ index: idx, field: 'mail90' })}
+                        className="py-2.5 px-3 text-center border-r border-slate-200 cursor-pointer group hover:bg-emerald-50/40"
+                        title="Çift tıklayarak son bildirim tarihini düzenleyebilirsiniz"
+                      >
+                        {isEditingMailDate ? (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={item.mail90 || ''}
+                            onChange={(e) => handleUpdateItemField(item.birim, 'mail90', e.target.value)}
+                            onBlur={handleCellBlurOrEnter}
+                            onKeyDown={(e) => e.key === 'Enter' && handleCellBlurOrEnter()}
+                            className="w-full px-2 py-1 bg-white border border-emerald-600 rounded-lg text-xs font-mono font-medium text-slate-900 shadow-sm focus:outline-none"
+                            placeholder="GG.AA.YYYY"
+                          />
+                        ) : item.mail90 ? (
+                          <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-900 border border-emerald-200 text-[10.5px] font-mono font-bold">
                             <span>📅 {item.mail90}</span>
                           </div>
                         ) : (
-                          <span className="text-slate-400 text-[11px] font-mono italic">Beklemede</span>
+                          <span className="text-slate-400 text-[10.5px] font-mono italic">Beklemede</span>
                         )}
                       </td>
 
-                      {/* İşlemler */}
+                      {/* İşlemler (Canlı İnceleme & Sil) */}
                       <td className="py-2.5 px-3 text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedBirimDetails({ birim: item, stats });
-                              setDetailFilter('all');
-                              setDetailSearch('');
-                            }}
-                            className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer font-bold text-[11px] flex items-center gap-1.5 active:scale-95 shadow-xs ${
-                              stats.overdueCount > 0
-                                ? 'bg-rose-700 hover:bg-rose-800 text-white'
-                                : stats.upcomingCount > 0
-                                ? 'bg-amber-600 hover:bg-amber-700 text-white'
-                                : 'bg-slate-800 hover:bg-slate-700 text-white'
-                            }`}
-                            title="Bu birimin teçhizat ve bildirim detaylarını incele"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-emerald-300" />
-                            <span>
-                              {stats.totalCount === 0
-                                ? 'İncele (0)'
-                                : stats.approachingItems.length > 0
-                                ? `Bildirim (${stats.approachingItems.length})`
-                                : `İncele (${stats.totalCount})`}
-                            </span>
-                          </button>
+                          {isLiveFetching ? (
+                            <div className="flex items-center justify-center gap-1.5 py-1 px-3 rounded-xl bg-slate-100 text-slate-500 font-bold text-[10.5px] animate-pulse">
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                              <span>Veri Alınıyor...</span>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedBirimDetails({ birim: item, stats });
+                                setDetailFilter('all');
+                                setDetailSearch('');
+                              }}
+                              className={`px-2.5 py-1 rounded-xl transition-all cursor-pointer font-bold text-[10.5px] flex items-center gap-1 active:scale-95 shadow-xs ${
+                                stats.overdueCount > 0
+                                  ? 'bg-rose-700 hover:bg-rose-800 text-white'
+                                  : stats.upcomingCount > 0
+                                  ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                  : 'bg-slate-800 hover:bg-slate-700 text-white'
+                              }`}
+                              title="Norm kurallarına uymayan ve yaklaşan kayıtları detaylı incele"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-emerald-300" />
+                              <span>
+                                {stats.approachingItems.length > 0
+                                  ? `İncele (${stats.approachingItems.length})`
+                                  : `İncele (0)`}
+                              </span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleDeleteBirim(idx)}
@@ -973,23 +1483,22 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         {/* FOOTER INFO BAR */}
         <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-medium shrink-0">
           <div className="flex items-center gap-2">
-            <span className="font-black text-slate-800">Toplam {list.length} Birim Kayıtlı.</span>
-            <span>(Filtrelenen: {filteredList.length})</span>
+            <span className="font-black text-slate-800">Toplam {list.length} Birim Takip Ediliyor.</span>
+            <span>(Normu listeden anında değiştirebilir, hücrelere çift tıklayarak düzenleyebilirsiniz)</span>
           </div>
           <div className="flex items-center gap-2 text-[11px] text-slate-600">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span>Otomatik Takip: Bakım/kontrol günü geçen teçhizatlar her sabah 09:00'da onay sormadan arka planda bildirilir.</span>
+            <span>Otomatik Takip: Her gün 09:00'da tüm Drive verileri taranır, günü geçen veya yaklaşımlar E-Tabloya ve maile otomatik yansıtılır.</span>
           </div>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* ŞIK VE GELİŞMİŞ BİLDİRİM AYRINTILARI TABLO MODALI (ANA PANEL GÖRÜNÜMÜNDE) */}
+      {/* ŞIK VE GELİŞMİŞ BİLDİRİM AYRINTILARI TABLO MODALI (UYMAYANLARI LİSTELEME) */}
       {/* ========================================================================= */}
       {selectedBirimDetails && (() => {
         const { birim, stats } = selectedBirimDetails;
 
-        // Detay içi filtreleme
         const filteredItems = stats.approachingItems.filter(item => {
           if (detailFilter === 'overdue' && item.daysDiff > 0) return false;
           if (detailFilter === 'upcoming' && item.daysDiff <= 0) return false;
@@ -1019,15 +1528,15 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                     <h3 className="text-base font-black text-white flex items-center gap-2.5 flex-wrap">
                       <span>{birim.birim}</span>
                       <span className="text-[11px] bg-slate-800 text-emerald-300 font-mono px-2.5 py-0.5 rounded-full border border-slate-700 font-bold">
-                        Toplam Kayıtlı: {stats.totalCount} Malzeme
+                        Toplam Taranan: {stats.totalCount} Malzeme/Kayıt
                       </span>
                       {stats.approachingItems.length > 0 ? (
                         <span className="text-[11px] bg-rose-950 text-rose-300 font-mono px-2.5 py-0.5 rounded-full border border-rose-800 font-bold">
-                          {stats.overdueCount} Günü Geçti &bull; {stats.upcomingCount} Yaklaşan
+                          {stats.overdueCount} Günü Geçti &bull; {stats.upcomingCount} Yaklaşan Norm
                         </span>
                       ) : (
                         <span className="text-[11px] bg-emerald-950 text-emerald-300 font-mono px-2.5 py-0.5 rounded-full border border-emerald-800 font-bold">
-                          Sorun Yok (Güvenli)
+                          Norma Uygun (Tümü Güncel ve Güvenli)
                         </span>
                       )}
                     </h3>
@@ -1043,7 +1552,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                       type="button"
                       onClick={() => handleExportSingleBirimExcel(birim.birim, stats.approachingItems)}
                       className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-bold rounded-xl border border-slate-700 flex items-center gap-1.5 transition-all cursor-pointer"
-                      title="Bu tablodaki bildirim listesini Excel olarak indir"
+                      title="Bu tablodaki uymayan bildirim listesini Excel olarak indir"
                     >
                       <Download className="w-4 h-4 text-emerald-400" />
                       <span className="hidden sm:inline">Excel İndir</span>
@@ -1059,10 +1568,20 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                 </div>
               </div>
 
+              {/* TAKİP NORMU BİLGİLENDİRME BANTI */}
+              <div className="px-6 py-2.5 bg-emerald-950 text-emerald-200 text-xs flex items-center justify-between border-b border-emerald-900 shrink-0 font-medium">
+                <div className="flex items-center gap-2">
+                  <Info className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span><strong>Uygulanan Takip Normu:</strong> {birim.norm || getDefaultNormForBirim(birim.birim)}</span>
+                </div>
+                <span className="text-[10.5px] font-mono text-emerald-300 bg-emerald-900/60 px-2 py-0.5 rounded border border-emerald-800">
+                  Canlı Drive & Server Taraması
+                </span>
+              </div>
+
               {/* TOOLBAR FOR DETAIL TABLE */}
               {stats.approachingItems.length > 0 && (
                 <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
-                  {/* Filter Tabs */}
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -1099,157 +1618,117 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                     </button>
                   </div>
 
-                  {/* Search Input */}
-                  <div className="relative w-56">
+                  <div className="relative w-60">
                     <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
                       type="text"
-                      placeholder="Tabloda Ara (Malzeme, P/N, S/N)..."
+                      placeholder="Malzeme, P/N, S/N veya Yer Ara..."
                       value={detailSearch}
                       onChange={(e) => setDetailSearch(e.target.value)}
-                      className="w-full pl-8 pr-3 py-1.5 bg-white text-xs text-slate-800 placeholder:text-slate-400 border border-slate-200 rounded-xl focus:outline-none focus:border-[#0b3d1d] font-medium"
+                      className="w-full pl-8 pr-3 py-1 bg-white text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-[#0b3d1d]"
                     />
                   </div>
                 </div>
               )}
 
-              {/* MODAL BODY */}
-              <div className="flex-1 overflow-auto p-4 bg-slate-50">
-                {stats.totalCount === 0 ? (
-                  /* DURUM 1: Bu birimde kayıtlı 0 ürün var (Örn: T-70 DEPO) */
-                  <div className="py-16 px-6 text-center flex flex-col items-center justify-center gap-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
-                    <div className="w-16 h-16 rounded-3xl bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center shadow-inner">
-                      <ShieldCheck className="w-8 h-8 text-emerald-600" />
-                    </div>
-                    <div>
-                      <h4 className="text-base font-black text-slate-800 uppercase tracking-wider">
-                        KAYITLI MALZEME BULUNMUYOR &bull; SORUN YOK
-                      </h4>
-                      <p className="text-xs text-slate-500 font-medium max-w-lg mt-1.5 leading-relaxed">
-                        <strong>"{birim.birim}"</strong> birimine ait sistemde henüz kayıtlı bir envanter / teçhizat bulunmamaktadır. Dolayısıyla herhangi bir bakım gecikmesi veya bildirim riski yoktur (Güvenilirlik Tamdır).
-                      </p>
-                    </div>
-                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-100/60 text-emerald-900 border border-emerald-300 text-xs font-bold">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                      <span>Sistem Durumu: GÜVENLİ (SORUN YOK)</span>
-                    </div>
-                  </div>
-                ) : stats.approachingItems.length === 0 ? (
-                  /* DURUM 2: Kayıtlı ürünler var ama hiçbirinin günü geçmemiş ve <=90 gün kalmamış */
-                  <div className="py-16 px-6 text-center flex flex-col items-center justify-center gap-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
-                    <div className="w-16 h-16 rounded-3xl bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center shadow-inner">
+              {/* DETAIL CONTENT AREA */}
+              <div className="flex-1 overflow-auto p-6 bg-slate-100/50">
+                {stats.approachingItems.length === 0 ? (
+                  <div className="py-16 text-center flex flex-col items-center justify-center bg-white border border-slate-200 rounded-2xl shadow-xs">
+                    <div className="w-16 h-16 rounded-3xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-3 text-2xl font-black">
                       <CheckCircle2 className="w-8 h-8 text-emerald-600" />
                     </div>
-                    <div>
-                      <h4 className="text-base font-black text-slate-800 uppercase tracking-wider">
-                        TÜM BAKIM VE KONTROLLER GÜNCEL &bull; SORUN YOK
-                      </h4>
-                      <p className="text-xs text-slate-500 font-medium max-w-lg mt-1.5 leading-relaxed">
-                        <strong>"{birim.birim}"</strong> birimindeki kayıtlı <strong>{stats.totalCount}</strong> malzemenin hiçbirinde günü geçen veya 90 günden az kalan bakım bulunmamaktadır. Tüm kalibrasyon ve kontroller güvenli periyottadır.
-                      </p>
-                    </div>
-                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-100/60 text-emerald-900 border border-emerald-300 text-xs font-bold">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                      <span>{stats.totalCount} Malzeme Güvenli Aralıkta (Sorun Yok)</span>
-                    </div>
-                  </div>
-                ) : filteredItems.length === 0 ? (
-                  /* DURUM 3: Filtreye uyan kayıt yok */
-                  <div className="py-12 text-center text-slate-400 font-bold text-xs">
-                    Arama kriterlerine uygun bildirim kaydı bulunamadı.
+                    <h4 className="text-sm font-black text-slate-800 uppercase tracking-wide">
+                      TÜM KAYITLAR NORM KURALLARINA UYGUNDUR
+                    </h4>
+                    <p className="text-xs text-slate-500 max-w-md mt-1 font-medium">
+                      Bu birimde kayıtlı {stats.totalCount} malzeme/teçhizat/personel taranmış olup, norm kurallarına uymayan (günü geçen veya yaklaşan) hiçbir kayıt bulunmamaktadır. Tüm kayıtlar güncel ve güvenlidir.
+                    </p>
                   </div>
                 ) : (
-                  /* DURUM 4: ANA PANEL GÖRÜNÜMÜNDE ŞIK, NET, OKUNAKLI TEÇHİZAT BİLDİRİM TABLOSU */
-                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <table className="w-full text-left text-xs border-collapse">
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                    <table className="w-full border-collapse text-left text-xs">
                       <thead>
-                        <tr className="bg-slate-900 text-slate-200 font-black text-[10px] uppercase font-mono tracking-wider border-b border-slate-800">
+                        <tr className="bg-slate-900 text-white font-black uppercase text-[10.5px] tracking-wider border-b border-slate-800">
                           <th className="py-3 px-3 text-center w-12 border-r border-slate-800">#</th>
-                          <th className="py-3 px-4 border-r border-slate-800">TEÇHİZAT / MALZEME ADI</th>
-                          <th className="py-3 px-3 border-r border-slate-800">P/N & S/N</th>
-                          <th className="py-3 px-3 border-r border-slate-800 text-center">BÖLÜM</th>
+                          <th className="py-3 px-4 border-r border-slate-800">TEÇHİZAT / MALZEME / PERSONEL ADI</th>
+                          <th className="py-3 px-3 border-r border-slate-800">P/N VEYA SİCİL NO</th>
+                          <th className="py-3 px-3 border-r border-slate-800">SERİ NO / ÜNVAN</th>
+                          <th className="py-3 px-3 border-r border-slate-800">NORM KAPSAMI</th>
                           <th className="py-3 px-3 border-r border-slate-800">BULUNDUĞU YER</th>
-                          <th className="py-3 px-3 border-r border-slate-800 text-center">SON KONTROL</th>
-                          <th className="py-3 px-3 border-r border-slate-800 text-center">GELECEK KONTROL</th>
-                          <th className="py-3 px-3 text-center border-r border-slate-800">KALAN / GEÇEN SÜRE</th>
-                          <th className="py-3 px-3 text-center w-28">DURUM</th>
+                          <th className="py-3 px-3 text-center border-r border-slate-800">SON İŞLEM</th>
+                          <th className="py-3 px-3 text-center border-r border-slate-800">GELECEK TARİH</th>
+                          <th className="py-3 px-3 text-center border-r border-slate-800">KALAN GÜN</th>
+                          <th className="py-3 px-3 text-center">BİLDİRİM DURUMU</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredItems.map((item, i) => {
+                      <tbody className="divide-y divide-slate-200 font-medium text-slate-700">
+                        {filteredItems.map((item, idx) => {
                           const isOverdue = item.daysDiff <= 0;
+
                           return (
                             <tr
-                              key={i}
-                              className={`transition-colors ${
-                                isOverdue ? 'bg-rose-50/40 hover:bg-rose-100/50' : 'hover:bg-amber-50/40 odd:bg-white even:bg-slate-50/40'
+                              key={item.techName + idx}
+                              className={`hover:bg-slate-50 transition-colors ${
+                                isOverdue ? 'bg-rose-50/40' : idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
                               }`}
                             >
-                              {/* Sıra */}
-                              <td className="py-2.5 px-3 text-center font-mono text-slate-400 font-bold border-r border-slate-100">
-                                {i + 1}
+                              <td className="py-2.5 px-3 text-center font-mono text-slate-400 font-bold border-r border-slate-200">
+                                {idx + 1}
                               </td>
 
-                              {/* Malzeme Adı */}
-                              <td className="py-2.5 px-4 font-bold text-slate-900 border-r border-slate-100">
-                                <div className="leading-tight">
-                                  <span className="text-slate-900 font-black">{item.techName}</span>
-                                  {item.miktar && item.miktar !== '1' && (
-                                    <span className="ml-1.5 text-[10px] text-slate-500 font-mono">
-                                      (Miktar: {item.miktar})
-                                    </span>
-                                  )}
-                                </div>
+                              <td className="py-2.5 px-4 font-bold text-slate-900 border-r border-slate-200">
+                                {item.techName}
                               </td>
 
-                              {/* P/N & S/N */}
-                              <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700 border-r border-slate-100 whitespace-nowrap">
-                                <div><strong className="text-slate-500 text-[10px]">P/N:</strong> {item.partNo}</div>
-                                <div><strong className="text-slate-500 text-[10px]">S/N:</strong> {item.seriNo}</div>
+                              <td className="py-2.5 px-3 font-mono text-slate-700 border-r border-slate-200">
+                                {item.partNo}
                               </td>
 
-                              {/* Bölüm */}
-                              <td className="py-2.5 px-3 text-center border-r border-slate-100">
-                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-mono text-[10px] font-bold border border-slate-200">
+                              <td className="py-2.5 px-3 font-mono text-slate-700 border-r border-slate-200">
+                                {item.seriNo}
+                              </td>
+
+                              <td className="py-2.5 px-3 border-r border-slate-200">
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[10.5px] font-mono font-bold border border-slate-200">
                                   {item.subSection}
                                 </span>
                               </td>
 
-                              {/* Bulunduğu Yer */}
-                              <td className="py-2.5 px-3 text-slate-700 font-medium border-r border-slate-100 text-[11px]">
+                              <td className="py-2.5 px-3 text-slate-700 border-r border-slate-200">
                                 {item.location}
                               </td>
 
-                              {/* Son Kontrol */}
-                              <td className="py-2.5 px-3 text-center font-mono text-slate-600 text-[11px] border-r border-slate-100">
+                              <td className="py-2.5 px-3 text-center font-mono text-slate-600 border-r border-slate-200">
                                 {item.sonTarih || '-'}
                               </td>
 
-                              {/* Gelecek Kontrol */}
-                              <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-900 border-r border-slate-100">
+                              <td className="py-2.5 px-3 text-center font-mono font-black text-slate-900 border-r border-slate-200">
                                 {item.gelecekTarih}
                               </td>
 
-                              {/* Kalan / Geçen Süre */}
-                              <td className="py-2.5 px-3 text-center border-r border-slate-100">
+                              <td className="py-2.5 px-3 text-center font-mono font-black border-r border-slate-200">
                                 {isOverdue ? (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-600 text-white text-[10px] font-black shadow-xs">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping"></span>
-                                    <span>{Math.abs(item.daysDiff)} GÜN GEÇTİ</span>
+                                  <span className="text-rose-700 font-black">
+                                    {Math.abs(item.daysDiff)} GÜN GEÇTİ
                                   </span>
                                 ) : (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500 text-white text-[10px] font-black shadow-xs">
-                                    <Clock className="w-3 h-3 text-white" />
-                                    <span>{item.daysDiff} GÜN KALDI</span>
+                                  <span className="text-amber-700 font-bold">
+                                    {item.daysDiff} GÜN KALDI
                                   </span>
                                 )}
                               </td>
 
-                              {/* Durumu */}
                               <td className="py-2.5 px-3 text-center">
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-[10px] font-bold border border-emerald-200">
-                                  {item.status || 'Faal'}
-                                </span>
+                                {isOverdue ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-black bg-rose-700 text-white shadow-xs">
+                                    🔴 OTOMATİK BİLDİRİMDE
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                    🟡 TAKİPTE (YAKLAŞAN)
+                                  </span>
+                                )}
                               </td>
                             </tr>
                           );
@@ -1260,21 +1739,12 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                 )}
               </div>
 
-              {/* MODAL FOOTER */}
-              <div className="px-6 py-3 bg-slate-100 border-t border-slate-200 flex items-center justify-between shrink-0">
-                <div className="text-xs text-slate-600 font-medium">
-                  {stats.totalCount > 0 ? (
-                    <span>
-                      Bu birimde kayıtlı <strong>{stats.totalCount}</strong> teçhizattan <strong>{stats.approachingItems.length}</strong> tanesi bildirim kapsamındadır.
-                    </span>
-                  ) : (
-                    <span>Bu birimde henüz kayıtlı teçhizat yoktur. Durum güvenlidir.</span>
-                  )}
-                </div>
+              <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-medium shrink-0">
+                <span>Görüntülenen {filteredItems.length} Kalem Uymayan Kayıt.</span>
                 <button
                   type="button"
                   onClick={() => setSelectedBirimDetails(null)}
-                  className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl cursor-pointer transition-all active:scale-95"
+                  className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition-all cursor-pointer"
                 >
                   Kapat
                 </button>
@@ -1284,72 +1754,104 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         );
       })()}
 
-      {/* MODAL: ADD NEW SUB-UNIT */}
+      {/* ========================================================================= */}
+      {/* YENİ BİRİM / ALT BİRİM EKLEME DİYALOĞU */}
+      {/* ========================================================================= */}
       {isAddDialogOpen && (
-        <div className="fixed inset-0 z-[850] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-200 flex flex-col gap-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                <Plus className="w-4 h-4 text-emerald-700" />
+        <div className="fixed inset-0 z-[880] flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-slate-200 overflow-hidden font-sans">
+            <div className="px-6 py-4 bg-[#0b3d1d] text-white flex items-center justify-between">
+              <h3 className="text-sm font-black flex items-center gap-2">
+                <Plus className="w-4 h-4 text-emerald-300" />
                 <span>YENİ BİRİM / ALT BİRİM EKLE</span>
               </h3>
               <button
                 onClick={() => setIsAddDialogOpen(false)}
-                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+                className="text-emerald-200 hover:text-white"
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="flex flex-col gap-3">
+            <div className="p-6 space-y-4">
               <div>
-                <label className="text-[11px] font-bold text-slate-600 block mb-1">
-                  Birim / Alt Birim Adı (Örn: AT-802 DEPO, T-70 ÖZEL ALET):
+                <label className="block text-xs font-black text-slate-700 uppercase mb-1">
+                  BİRİM / ALT BİRİM ADI:
                 </label>
                 <input
                   type="text"
                   value={newBirimName}
-                  onChange={(e) => setNewBirimName(e.target.value)}
-                  placeholder="Örn: AT-802 ÖZEL ALET"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    setNewBirimName(name);
+                    setNewNorm(getDefaultNormForBirim(name));
+                  }}
+                  placeholder="Örn: AT-802 YAŞAM DESTEK, PERSONEL BİLGİ SİSTEMİ..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:border-[#0b3d1d]"
                 />
               </div>
 
               <div>
-                <label className="text-[11px] font-bold text-slate-600 block mb-1">Sorumlu Adı Soyadı:</label>
+                <label className="block text-xs font-black text-slate-700 uppercase mb-1">
+                  SORUMLU ADI SOYADI:
+                </label>
                 <input
                   type="text"
                   value={newAdSoyad}
                   onChange={(e) => setNewAdSoyad(e.target.value)}
-                  placeholder="Örn: Bakım Sorumlusu"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                  placeholder="Örn: Sorumlu Teknisyen"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:outline-none focus:border-[#0b3d1d]"
                 />
               </div>
 
               <div>
-                <label className="text-[11px] font-bold text-slate-600 block mb-1">E-Posta Adresi:</label>
+                <label className="block text-xs font-black text-slate-700 uppercase mb-1">
+                  E-POSTA ADRESİ:
+                </label>
                 <input
                   type="email"
                   value={newEposta}
                   onChange={(e) => setNewEposta(e.target.value)}
                   placeholder="orhavak.bakimsube@gmail.com"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:border-[#0b3d1d]"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-mono focus:outline-none focus:border-[#0b3d1d]"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-black text-slate-700 uppercase mb-1">
+                  TAKİP EDİLECEK NORM:
+                </label>
+                <div className="relative">
+                  <select
+                    value={newNorm}
+                    onChange={(e) => setNewNorm(e.target.value)}
+                    className="w-full py-2 pl-3 pr-8 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:border-[#0b3d1d] bg-white appearance-none"
+                  >
+                    {NORM_OPTIONS.map(opt => (
+                      <option key={opt.id} value={opt.label}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-slate-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setIsAddDialogOpen(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
+                className="px-4 py-2 rounded-xl border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100"
               >
-                Vazgeç
+                İptal
               </button>
               <button
+                type="button"
                 onClick={handleAddNewBirim}
-                className="px-4 py-2 bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black rounded-xl cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-[#0b3d1d] hover:bg-[#072612] text-white text-xs font-black uppercase tracking-wider cursor-pointer"
               >
-                Ekle
+                BİRİMİ KAYDET
               </button>
             </div>
           </div>

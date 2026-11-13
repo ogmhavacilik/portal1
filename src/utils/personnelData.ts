@@ -96,7 +96,7 @@ const STORAGE_KEY = 'ogm_personel_teknisyen_list_v2';
  */
 export function getStoredPersonnelList(): string[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = null;
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -144,7 +144,7 @@ export async function syncPersonnelListFromScript(): Promise<string[]> {
 
       if (names.length > 0) {
         const merged = Array.from(new Set([...DEFAULT_TEKNISYEN_PERSONEL_NAMES, ...names])).sort();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        void 0;
         return merged;
       }
     }

@@ -68,7 +68,7 @@ export function publishCrossSystemEvent(type: CrossSystemEvent['type'], sender: 
 
   // Also dispatch window storage event fallback for maximum reliability
   try {
-    localStorage.setItem('hangar_cross_sys_event_bus', JSON.stringify(event));
+    void 0;
   } catch (e) {
     // ignore
   }
@@ -193,7 +193,7 @@ export function searchDepoSparePartsSync(query: string): DepoSearchResultItem[] 
 
   // 1. Search in excel_techizat_hangar_data (Main Hangar Warehouse Inventory)
   try {
-    const hangarRaw = localStorage.getItem('excel_techizat_hangar_data');
+    const hangarRaw = null;
     if (hangarRaw) {
       const rows: string[][] = JSON.parse(hangarRaw);
       if (Array.isArray(rows)) {
@@ -241,7 +241,7 @@ export function searchDepoSparePartsSync(query: string): DepoSearchResultItem[] 
   const units = ['at802', 'bell429', 't70', 'b360', 'c650'];
   units.forEach(u => {
     try {
-      const raw = localStorage.getItem(`excel_techizat_${u}_data`);
+      const raw = null;
       if (raw) {
         const rows: string[][] = JSON.parse(raw);
         if (Array.isArray(rows)) {
@@ -317,7 +317,7 @@ export function getCrossSystemCounts(): {
   const units = ['at802', 'bell429', 't70', 't70_bumbi_backet', 't70_helitak', 'b360', 'c650'];
   units.forEach(u => {
     try {
-      const raw = localStorage.getItem(`excel_techizat_${u}_data`);
+      const raw = null;
       if (raw) {
         const rows: string[][] = JSON.parse(raw);
         if (Array.isArray(rows)) {
@@ -336,7 +336,7 @@ export function getCrossSystemCounts(): {
 
   // 2. Depo counts
   try {
-    const raw = localStorage.getItem('excel_techizat_hangar_data');
+    const raw = null;
     if (raw) {
       const rows: string[][] = JSON.parse(raw);
       if (Array.isArray(rows)) {
@@ -354,7 +354,7 @@ export function getCrossSystemCounts(): {
 
   // 3. Kara Araçları counts
   try {
-    const raw = localStorage.getItem('excel_techizat_kara_araclari_data') || localStorage.getItem('techizat_kara_araclari_data');
+    const raw: string | null = null;
     if (raw) {
       const rows: string[][] = JSON.parse(raw);
       if (Array.isArray(rows)) {

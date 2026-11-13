@@ -35,12 +35,53 @@ import {
   ShieldCheck,
   Plane,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  Camera,
+  Crop,
+  Printer,
+  Globe,
+  Image as ImageIcon,
+  Link2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import * as XLSX from 'xlsx';
 import { GOOGLE_SCRIPT_URL, fileToBase64 } from '../App';
 import { cachePdfBase64, getCachedPdfBlobUrl } from '../utils/pdfCache';
+import { unmergeAndFillWorksheet, isHeaderLikeRow } from '../utils/driveExcelSync';
+import { fetchExcelFromDrive as remoteFetchExcelFromDrive, DRIVE_FOLDER_ID, DIRECT_GAS_URLS } from '../utils/remoteDriveSync';
 import JSZip from 'jszip';
+
+export const OGM_BULUT_AT802_URL = 'https://bulut.ogm.gov.tr/app/tr-TR/Klasor/Paylas/OGMDrive/0b7eb51b-6174-4314-89bc-c26d74d78acc';
+export const OGM_EXTENSION_STORE_URL = 'https://chromewebstore.google.com/detail/iframe-unlocker-%E2%80%93-remove/jkijbninecngmcipaijcnibjhbejaoch?pli=1';
+
+// Resmi OGM & Havacılık dairesel amblem SVG veri URI'leri (Yazdırma ve Word indirme için)
+const OGM_LEFT_SEAL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><circle cx="60" cy="60" r="56" fill="#f0fdf4" stroke="#166534" stroke-width="5"/><circle cx="60" cy="60" r="46" fill="none" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2"/><path d="M60 26 L44 56 H54 L40 80 H80 L66 56 H76 Z" fill="#15803d"/><rect x="56" y="80" width="8" height="12" fill="#78350f"/><text x="60" y="20" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#14532d" font-family="Arial,sans-serif">ORMAN GENEL MÜDÜRLÜĞÜ</text><text x="60" y="106" text-anchor="middle" font-size="7.5" font-weight="bold" fill="#14532d" font-family="Arial,sans-serif">T.C. TARIM VE ORMAN BAKANLIĞI</text></svg>`;
+const OGM_RIGHT_SEAL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><circle cx="60" cy="60" r="56" fill="#fefce8" stroke="#ca8a04" stroke-width="5"/><circle cx="60" cy="60" r="46" fill="#fffbeb" stroke="#166534" stroke-width="2"/><path d="M28 66 Q60 40 92 66 Q60 56 28 66 Z" fill="#15803d"/><path d="M60 32 L54 52 H66 Z" fill="#166534"/><circle cx="60" cy="70" r="10" fill="#ca8a04" opacity="0.25"/><text x="60" y="21" text-anchor="middle" font-size="8" font-weight="bold" fill="#14532d" font-family="Arial,sans-serif">HAVACILIK DAİRESİ BŞK.</text><text x="60" y="104" text-anchor="middle" font-size="8" font-weight="bold" fill="#854d0e" font-family="Arial,sans-serif">1839 • OGM</text></svg>`;
+const OGM_LEFT_SEAL_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(OGM_LEFT_SEAL_SVG)}`;
+const OGM_RIGHT_SEAL_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(OGM_RIGHT_SEAL_SVG)}`;
+
+export interface ZeroReportRow {
+  siraNo: number;
+  parcaAdi: string;
+  parcaNo: string;
+  alternatifPn: string;
+  istenenMiktar: string;
+  oncelik: 'Yüksek' | 'Normal' | 'Düşük' | '';
+}
+
+export interface ZeroReportFormState {
+  havaAraciTipi: string;
+  selectedTypes: {
+    at802: boolean;
+    t70: boolean;
+    bell429: boolean;
+    b360: boolean;
+  };
+  rows: ZeroReportRow[];
+  ekNotlar: string;
+  talepYapanAdSoyad: string;
+  date: string;
+}
 
 export interface TechPublication {
   id: string;
@@ -225,15 +266,22 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
   const [editRevision, setEditRevision] = useState<string>('Rev. 01');
   const [editNotes, setEditNotes] = useState<string>('');
 
-  // Depo live search & Drawer state
+  // Depo live search, Autocomplete & Drawer state
   const [depoSearchQuery, setDepoSearchQuery] = useState<string>('');
+  const [isDepoAutocompleteOpen, setIsDepoAutocompleteOpen] = useState<boolean>(false);
+  const [autocompleteActiveIdx, setAutocompleteActiveIdx] = useState<number>(-1);
+  const viewerSearchWrapperRef = useRef<HTMLDivElement>(null);
+  const globalSearchWrapperRef = useRef<HTMLDivElement>(null);
+  const [liveSarfDepoItems, setLiveSarfDepoItems] = useState<any[]>([]);
+  const [isDepotLoading, setIsDepotLoading] = useState<boolean>(false);
+
   const [isStockDrawerOpen, setIsStockDrawerOpen] = useState<boolean>(false);
   const [drawerHeight, setDrawerHeight] = useState<number>(240);
   const isDraggingRef = useRef<boolean>(false);
   const startYRef = useRef<number>(0);
   const startHeightRef = useRef<number>(240);
 
-  // Zero Report Modal
+  // Zero Report Modal & 2-page form state
   const [zeroReportModalOpen, setZeroReportModalOpen] = useState<boolean>(false);
   const [zeroReportData, setZeroReportData] = useState<{
     query: string;
@@ -241,6 +289,43 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     date: string;
     items: DepotItem[];
   } | null>(null);
+  const [zeroReportForm, setZeroReportForm] = useState<ZeroReportFormState>({
+    havaAraciTipi: 'AT-802F',
+    selectedTypes: { at802: true, t70: false, bell429: false, b360: false },
+    rows: Array.from({ length: 20 }, (_, i) => ({
+      siraNo: i + 1,
+      parcaAdi: '',
+      parcaNo: '',
+      alternatifPn: '',
+      istenenMiktar: '',
+      oncelik: ''
+    })),
+    ekNotlar: '',
+    talepYapanAdSoyad: '',
+    date: ''
+  });
+  const [capturedCatalogImage, setCapturedCatalogImage] = useState<string>('');
+  const [rawScreenshotDataUrl, setRawScreenshotDataUrl] = useState<string | null>(null);
+  const [isCropOverlayOpen, setIsCropOverlayOpen] = useState<boolean>(false);
+  const [cropBox, setCropBox] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  const [isCroppingDrag, setIsCroppingDrag] = useState<boolean>(false);
+  const [annotationTool, setAnnotationTool] = useState<'crop' | 'pen' | 'highlighter' | 'eraser'>('crop');
+  const [annotationColor, setAnnotationColor] = useState<string>('#ec4899');
+  const [annotationZoom, setAnnotationZoom] = useState<number>(1);
+  const [annotationStrokes, setAnnotationStrokes] = useState<{
+    id: string;
+    tool: 'pen' | 'highlighter';
+    color: string;
+    widthNorm: number;
+    points: { x: number; y: number }[];
+  }[]>([]);
+  const [cropBaseWidth, setCropBaseWidth] = useState<number>(920);
+  const isDrawingAnnotationRef = useRef<boolean>(false);
+  const activeStrokeIdRef = useRef<string | null>(null);
+  const openZeroReportAfterCropRef = useRef<boolean>(false);
+  const annotationCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cropImgRef = useRef<HTMLImageElement>(null);
+  const catalogFileInputRef = useRef<HTMLInputElement>(null);
 
   // Global Depo Sorgusu Modal / Fullscreen Drawer
   const [isGlobalDepoModalOpen, setIsGlobalDepoModalOpen] = useState<boolean>(false);
@@ -255,11 +340,30 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     }, 4000);
   };
 
-  // Drive sync states
+  // Drive sync & OGM Bulut viewer states
   const [isDriveLoading, setIsDriveLoading] = useState<boolean>(false);
   const [lastDriveSyncTime, setLastDriveSyncTime] = useState<string>('');
   const [loadingActivePdf, setLoadingActivePdf] = useState<boolean>(false);
   const [downloadedBlobUrl, setDownloadedBlobUrl] = useState<string>('');
+  const [driveFallbackPreviewUrl, setDriveFallbackPreviewUrl] = useState<string>('');
+  const [pdfRenderError, setPdfRenderError] = useState<string>('');
+  const [bulutCheckStatus, setBulutCheckStatus] = useState<'idle' | 'checking' | 'proxy_ok' | 'geo_blocked'>('idle');
+  const [bulutIframeMode, setBulutIframeMode] = useState<'proxy' | 'direct'>('proxy');
+  const [bulutOpenedPdf, setBulutOpenedPdf] = useState<{
+    url: string;
+    fileName: string;
+    blobUrl?: string;
+    loading?: boolean;
+    error?: string;
+  } | null>(null);
+  const [isBulutPdfOverlayOpen, setIsBulutPdfOverlayOpen] = useState<boolean>(false);
+  const [bulutOverlayUrlInput, setBulutOverlayUrlInput] = useState<string>('');
+  const [bulutOverlayDragActive, setBulutOverlayDragActive] = useState<boolean>(false);
+  const [showExtensionReloadBanner, setShowExtensionReloadBanner] = useState<boolean>(false);
+  const [hideExtensionHelperStrip, setHideExtensionHelperStrip] = useState<boolean>(false);
+  const awaitingExtensionInstallRef = useRef<boolean>(false);
+  const wasBulutIframeFocusedRef = useRef<boolean>(false);
+  const bulutOverlayInputRef = useRef<HTMLInputElement | null>(null);
 
   // Save publications helper (strips heavy base64 to prevent localStorage quota crash)
   const savePublications = (newList: TechPublication[]) => {
@@ -269,7 +373,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
         const { base64Data, ...rest } = item;
         return rest;
       });
-      localStorage.setItem('ha_bakim_technical_publications_v2', JSON.stringify(lightweight));
+      void 0;
     } catch (err) {
       console.error('Yayınlar yerel depolamaya yazılamadı:', err);
     }
@@ -328,7 +432,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
       // Load deleted tombstone list
       let deletedSet = new Set<string>();
       try {
-        const rawDel = localStorage.getItem('ha_bakim_deleted_tech_pubs');
+        const rawDel = null;
         if (rawDel) {
           const arr = JSON.parse(rawDel);
           if (Array.isArray(arr)) {
@@ -434,37 +538,314 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     }
   };
 
-  // Load saved publications from localStorage on open AND sync from Drive
+  // Load live depot Excel data (Zero localStorage cache) & publications from Drive on open
   useEffect(() => {
     if (!isOpen) return;
 
     setDepoSearchQuery('');
     setPubSearchQuery('');
     setIsStockDrawerOpen(false);
-
-    try {
-      const saved = localStorage.getItem('ha_bakim_technical_publications_v2');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const cleanLocal = parsed.filter(item => isGenuineTechPub(item));
-          setPublications(cleanLocal);
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
+    setIsDepoAutocompleteOpen(false);
 
     fetchDrivePublications(false);
+
+    let cancelled = false;
+    const loadLiveDepots = async () => {
+      setIsDepotLoading(true);
+      const unitConfigs: Array<{ unit: string; unitLabel: string; cat: 'sarf' | 'kimyasal'; fileName: string; candidates: string[] }> = [
+        { unit: 'at802', unitLabel: 'AT-802F DEPO', cat: 'sarf', fileName: 'at-802_sarf_ve_parca_deposu.xlsx', candidates: ['at_802_sarf_ve_parca_deposu.xlsx'] },
+        { unit: 'at802', unitLabel: 'AT-802F DEPO', cat: 'kimyasal', fileName: 'at-802_kimyasal_depo.xlsx', candidates: ['at_802_kimyasal_depo.xlsx'] },
+        { unit: 'bell429', unitLabel: 'BELL 429 DEPO', cat: 'sarf', fileName: 'bell-429_sarf_ve_parca_deposu.xlsx', candidates: ['bell_429_sarf_ve_parca_deposu.xlsx'] },
+        { unit: 'bell429', unitLabel: 'BELL 429 DEPO', cat: 'kimyasal', fileName: 'bell-429_kimyasal_depo.xlsx', candidates: ['bell_429_kimyasal_depo.xlsx'] },
+        { unit: 't70', unitLabel: 'T-70 DEPO', cat: 'sarf', fileName: 't-70_sarf_ve_parca_deposu.xlsx', candidates: ['t_70_sarf_ve_parca_deposu.xlsx'] },
+        { unit: 't70', unitLabel: 'T-70 DEPO', cat: 'kimyasal', fileName: 't-70_kimyasal_depo.xlsx', candidates: ['t_70_kimyasal_depo.xlsx'] },
+        { unit: 'c650', unitLabel: 'C-650 DEPO', cat: 'sarf', fileName: 'c-650_sarf_ve_parca_deposu.xlsx', candidates: ['c_650_sarf_ve_parca_deposu.xlsx'] },
+        { unit: 'c650', unitLabel: 'C-650 DEPO', cat: 'kimyasal', fileName: 'c-650_kimyasal_depo.xlsx', candidates: ['c_650_kimyasal_depo.xlsx'] },
+        { unit: 'b360', unitLabel: 'B-360 DEPO', cat: 'sarf', fileName: 'b-360_sarf_ve_parca_deposu.xlsx', candidates: ['b_360_sarf_ve_parca_deposu.xlsx'] },
+        { unit: 'b360', unitLabel: 'B-360 DEPO', cat: 'kimyasal', fileName: 'b-360_kimyasal_depo.xlsx', candidates: ['b_360_kimyasal_depo.xlsx'] },
+        { unit: 'hangar', unitLabel: 'HANGAR DEPO', cat: 'sarf', fileName: 'hangar_sarf_ve_parca_deposu.xlsx', candidates: ['hangar-sarf-ve-parca-deposu.xlsx'] },
+        { unit: 'hangar', unitLabel: 'HANGAR DEPO', cat: 'kimyasal', fileName: 'hangar_kimyasal_depo.xlsx', candidates: ['hangar-kimyasal-depo.xlsx'] }
+      ];
+
+      const parseExcelB64 = (base64: string, unit: string, unitLabel: string, cat: 'sarf' | 'kimyasal') => {
+        try {
+          const binaryString = atob(base64);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+          const workbook = XLSX.read(bytes, { type: 'array' });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          unmergeAndFillWorksheet(sheet);
+          const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+          if (!rawRows || rawRows.length <= 1) return [];
+
+          let headerRowIdx = 0;
+          for (let r = 0; r < Math.min(20, rawRows.length); r++) {
+            const rowStr = (rawRows[r] || []).map(c => String(c || '').toUpperCase().trim()).join(' ');
+            if (rowStr.includes('MALZEME') || rowStr.includes('DESCRIPTION') || rowStr.includes('PARÇA') || rowStr.includes('P/N')) {
+              headerRowIdx = r;
+              break;
+            }
+          }
+          const headerRow = (rawRows[headerRowIdx] || []).map(c => String(c || '').toUpperCase().trim());
+          const normHeader = headerRow.map(c => c.replace(/Ç/g, 'C').replace(/Ğ/g, 'G').replace(/İ/g, 'I').replace(/Ö/g, 'O').replace(/Ş/g, 'S').replace(/Ü/g, 'U'));
+
+          const descCol = normHeader.findIndex(c => c === 'DESCRIPTION' || c.includes('DESCRIPTION') || c.includes('MALZEME') || c === 'TANIM');
+          const pnCol = normHeader.findIndex(c => c.includes('P/N') || c.includes('PART NUMBER') || c.includes('PARCA NO') || c.includes('PART'));
+          const snCol = normHeader.findIndex(c => c.includes('SERI') || c.includes('MUKERRER') || c.includes('S/N'));
+          const locCol = normHeader.findIndex(c => c.includes('LOKASYON') || c.includes('RAF') || c.includes('KONUM'));
+          const gelenCol = normHeader.findIndex(c => c === 'GELEN' || c.includes('GELEN') || c.includes('MIKTAR'));
+          const toplamStokCol = normHeader.findIndex(c => c.includes('TOPLAM STOK'));
+          const ankaraMevcutCol = normHeader.findIndex(c => c.includes('ANKARA MEVCUT'));
+          const karainMevcutCol = normHeader.findIndex(c => c.includes('KARAIN MEVCUT'));
+          const canakkaleMevcutCol = normHeader.findIndex(c => c.includes('CANAKKALE MEVCUT'));
+          const milasMevcutCol = normHeader.findIndex(c => c.includes('MILAS MEVCUT'));
+          const bursaMevcutCol = normHeader.findIndex(c => c.includes('BURSA MEVCUT'));
+
+          const parsed: any[] = [];
+          for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+            const row = rawRows[r];
+            if (!row || row.length === 0) continue;
+            const desc = String(row[descCol >= 0 ? descCol : 0] || '').trim();
+            if (!desc || isHeaderLikeRow(row) || desc.toUpperCase() === 'DESCRIPTION' || desc.toUpperCase() === 'MALZEME ADI' || desc.toUpperCase() === 'TANIM') continue;
+
+            const pn = String(row[pnCol >= 0 ? pnCol : 1] ?? '-').trim() || '-';
+            const sn = snCol >= 0 ? String(row[snCol] ?? '-').trim() || '-' : '-';
+            const loc = locCol >= 0 ? String(row[locCol] ?? (cat === 'kimyasal' ? 'KİMYASAL DEPO' : '-')).trim() || '-' : (cat === 'kimyasal' ? 'KİMYASAL DEPO' : '-');
+            const ankaraMevcut = ankaraMevcutCol >= 0 ? (Number(row[ankaraMevcutCol]) || 0) : 0;
+            const karainMevcut = karainMevcutCol >= 0 ? (Number(row[karainMevcutCol]) || 0) : 0;
+            const canakkaleMevcut = canakkaleMevcutCol >= 0 ? (Number(row[canakkaleMevcutCol]) || 0) : 0;
+            const milasMevcut = milasMevcutCol >= 0 ? (Number(row[milasMevcutCol]) || 0) : 0;
+            const bursaMevcut = bursaMevcutCol >= 0 ? (Number(row[bursaMevcutCol]) || 0) : 0;
+            const gelen = gelenCol >= 0 ? (Number(row[gelenCol]) || 0) : 0;
+            const toplamStok = toplamStokCol >= 0 ? (Number(row[toplamStokCol]) || 0) : (ankaraMevcut + karainMevcut + canakkaleMevcut + milasMevcut + bursaMevcut || gelen);
+
+            parsed.push({
+              unit,
+              unitLabel,
+              category: cat,
+              description: desc,
+              name: desc,
+              partNumber: pn,
+              pn,
+              serialAndNotes: sn,
+              sn,
+              lokasyonNo: loc,
+              location: loc,
+              gelen,
+              ankaraMevcut,
+              karainMevcut,
+              canakkaleMevcut,
+              milasMevcut,
+              bursaMevcut,
+              toplamStok
+            });
+          }
+          return parsed;
+        } catch {
+          return [];
+        }
+      };
+
+      const collected: any[] = [];
+      const results = await Promise.allSettled(
+        unitConfigs.map(async (cfg) => {
+          try {
+            const res = await remoteFetchExcelFromDrive(cfg.fileName, cfg.candidates, DRIVE_FOLDER_ID);
+            if (res && res.status === 'success' && res.base64) {
+              return parseExcelB64(res.base64, cfg.unit, cfg.unitLabel, cfg.cat);
+            }
+          } catch {}
+          if (cfg.unit === 'at802' && cfg.cat === 'sarf') {
+            try {
+              const apiRes = await fetch('/api/at802-sarf-depo');
+              if (apiRes.ok) {
+                const json = await apiRes.json();
+                if (json && Array.isArray(json.items)) {
+                  return json.items.map((it: any) => ({ ...it, unit: 'at802', unitLabel: 'AT-802F DEPO', category: 'sarf' }));
+                }
+              }
+            } catch {}
+          }
+          return [];
+        })
+      );
+
+      for (const r of results) {
+        if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+          collected.push(...r.value);
+        }
+      }
+
+      if (!cancelled) {
+        setLiveSarfDepoItems(collected);
+        setIsDepotLoading(false);
+      }
+    };
+
+    loadLiveDepots();
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
-  // On-demand background fetching of PDF blob when active publication is opened (screen is blurred until download completes)
+  // Close autocomplete dropdown on outside click
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const inViewer = viewerSearchWrapperRef.current && viewerSearchWrapperRef.current.contains(target);
+      const inGlobal = globalSearchWrapperRef.current && globalSearchWrapperRef.current.contains(target);
+      if (!inViewer && !inGlobal) {
+        setIsDepoAutocompleteOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  // Helper: fetch a URL/fileId and ensure valid %PDF- bytes
+  const openExternalPdfInSameViewer = async (pdfUrl: string, fileName: string) => {
+    setBulutOpenedPdf({ url: pdfUrl, fileName: fileName || 'OGM_Dokuman.pdf', loading: true });
+    const isOgmUrl = /bulut\.ogm\.gov\.tr/i.test(pdfUrl);
+    if (!(isOgmUrl && bulutCheckStatus === 'geo_blocked')) {
+      try {
+        const proxyEndpoint = `/api/pdf-proxy?url=${encodeURIComponent(pdfUrl)}&fileName=${encodeURIComponent(fileName || 'OGM_Dokuman.pdf')}`;
+        const resp = await fetch(proxyEndpoint);
+        if (resp.ok) {
+          const rawBlob = await resp.blob();
+          const head = await rawBlob.slice(0, 16).text();
+          if (head.trimStart().startsWith('%PDF-')) {
+            const pdfBlob = new Blob([rawBlob], { type: 'application/pdf' });
+            const blobUrl = URL.createObjectURL(pdfBlob);
+            setBulutOpenedPdf({ url: pdfUrl, fileName: fileName || 'OGM_Dokuman.pdf', blobUrl, loading: false });
+            return;
+          }
+        }
+      } catch {}
+    }
+    // Direct URL fallback (for browser with Chrome extension / same-network access)
+    setBulutOpenedPdf({
+      url: pdfUrl,
+      fileName: fileName || 'OGM_Dokuman.pdf',
+      blobUrl: pdfUrl,
+      loading: false
+    });
+  };
+
+  // Listen for double-click PDF events & background switches posted from OGM Bulut iframe
+  useEffect(() => {
+    const handleOgmMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'OGM_OPEN_PDF' && (data.url || data.proxyUrl)) {
+        const targetUrl = String(data.url || data.proxyUrl);
+        const fName = String(data.fileName || targetUrl.split('/').pop() || 'OGM_Teknik_Yayin.pdf');
+        showNotification(`📄 PDF görüntüleyicide açılıyor: ${fName}`, 'info');
+        openExternalPdfInSameViewer(targetUrl, fName);
+      } else if (data.type === 'OGM_SWITCH_DIRECT') {
+        setBulutIframeMode('direct');
+      }
+    };
+    window.addEventListener('message', handleOgmMessage);
+    return () => window.removeEventListener('message', handleOgmMessage);
+  }, [bulutCheckStatus]);
+
+  // Detect new-tab opens from OGM Bulut iframe (immediate blur + PDF/link loader) & return from Extension Store (reload warning)
+  useEffect(() => {
+    if (!isOpen || !isViewerActive || activePub?.id !== 'ogm_bulut_at802_folder') {
+      wasBulutIframeFocusedRef.current = false;
+      return;
+    }
+
+    const handleWindowBlur = () => {
+      if (document.activeElement && document.activeElement.id === 'tech-pub-ogm-bulut-iframe') {
+        wasBulutIframeFocusedRef.current = true;
+      }
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'hidden') {
+        const activeId = document.activeElement?.id || '';
+        if (!awaitingExtensionInstallRef.current && !bulutOpenedPdf && (activeId === 'tech-pub-ogm-bulut-iframe' || wasBulutIframeFocusedRef.current)) {
+          setBulutOverlayUrlInput('');
+          setIsBulutPdfOverlayOpen(true);
+        }
+        return;
+      }
+
+      if (awaitingExtensionInstallRef.current) {
+        awaitingExtensionInstallRef.current = false;
+        setShowExtensionReloadBanner(true);
+        showNotification('Eklenti yüklendiyse değişikliklerin aktif olması için sayfayı yenileyin.', 'info');
+        return;
+      }
+
+      if (isBulutPdfOverlayOpen) {
+        setTimeout(() => {
+          bulutOverlayInputRef.current?.focus();
+        }, 60);
+      }
+    };
+
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [isOpen, isViewerActive, activePub?.id, bulutOpenedPdf, isBulutPdfOverlayOpen]);
+
+  // On-demand fetching of PDF blob (or OGM Bulut check) when active publication is opened
   useEffect(() => {
     if (!activePub) {
       setDownloadedBlobUrl('');
+      setDriveFallbackPreviewUrl('');
+      setPdfRenderError('');
       setLoadingActivePdf(false);
+      setBulutOpenedPdf(null);
+      setIsBulutPdfOverlayOpen(false);
+      setBulutOverlayUrlInput('');
+      setBulutCheckStatus('idle');
       return;
     }
+
+    // Special Case: OGM Bulut External Folder
+    if (activePub.id === 'ogm_bulut_at802_folder') {
+      setDownloadedBlobUrl('');
+      setDriveFallbackPreviewUrl('');
+      setPdfRenderError('');
+      setLoadingActivePdf(false);
+      setBulutOpenedPdf(null);
+      setIsBulutPdfOverlayOpen(false);
+      setBulutOverlayUrlInput('');
+      setBulutCheckStatus('checking');
+      let cancelled = false;
+      fetch(`/api/ogm-bulut-check?url=${encodeURIComponent(OGM_BULUT_AT802_URL)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (cancelled) return;
+          if (data && data.reachable) {
+            setBulutCheckStatus('proxy_ok');
+            setBulutIframeMode('proxy');
+          } else {
+            setBulutCheckStatus('geo_blocked');
+            setBulutIframeMode('direct');
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setBulutCheckStatus('geo_blocked');
+            setBulutIframeMode('direct');
+          }
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setDriveFallbackPreviewUrl('');
+    setPdfRenderError('');
 
     if (activePub.base64Data) {
       try {
@@ -494,6 +875,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
 
     if (!targetFileId) {
       setLoadingActivePdf(false);
+      setPdfRenderError('PDF kimliği bulunamadı.');
       return;
     }
 
@@ -518,36 +900,73 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
       return;
     }
 
-    // Background download without blocking UI with blurred screen
     setDownloadedBlobUrl('');
     setLoadingActivePdf(true);
 
     let isMounted = true;
+    const applyVerifiedPdfBlob = (rawBlob: Blob) => {
+      const typedBlob = rawBlob.type === 'application/pdf' ? rawBlob : new Blob([rawBlob], { type: 'application/pdf' });
+      const url = URL.createObjectURL(typedBlob);
+      if (isMounted) {
+        setDownloadedBlobUrl(url);
+        setLoadingActivePdf(false);
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (isMounted && reader.result) {
+          const base64Str = String(reader.result);
+          pdfBase64Cache.set(targetFileId!, base64Str);
+          setActivePub(prev => prev && (prev.driveFileId === targetFileId || prev.id === activePub.id) ? { ...prev, base64Data: base64Str } : prev);
+        }
+      };
+      reader.readAsDataURL(typedBlob);
+    };
+
     const fetchBackgroundBase64 = async () => {
       try {
-        const resp = await fetch(`/api/pdf-proxy?fileId=${targetFileId}`);
+        const resp = await fetch(`/api/pdf-proxy?fileId=${encodeURIComponent(targetFileId!)}&fileName=${encodeURIComponent(activePub.fileName || 'publication.pdf')}`);
         if (resp.ok) {
-          const blob = await resp.blob();
-          if (isMounted) {
-            const url = URL.createObjectURL(blob);
-            setDownloadedBlobUrl(url);
-            setLoadingActivePdf(false);
+          const rawBlob = await resp.blob();
+          const headText = await rawBlob.slice(0, 16).text();
+          if (headText.trimStart().startsWith('%PDF-')) {
+            applyVerifiedPdfBlob(rawBlob);
+            return;
           }
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            if (isMounted && reader.result) {
-              const base64Str = String(reader.result);
-              pdfBase64Cache.set(targetFileId, base64Str);
-              setActivePub(prev => prev && (prev.driveFileId === targetFileId || prev.id === activePub.id) ? { ...prev, base64Data: base64Str } : prev);
-            }
-          };
-          reader.readAsDataURL(blob);
-        } else {
-          if (isMounted) setLoadingActivePdf(false);
         }
       } catch (err) {
-        console.warn('Arka plan PDF indirme uyarısı:', err);
-        if (isMounted) setLoadingActivePdf(false);
+        console.warn('Server PDF proxy uyarısı:', err);
+      }
+
+      // Fallback 1: Direct GAS getPdfBase64
+      for (const gasBase of DIRECT_GAS_URLS) {
+        try {
+          const gasRes = await fetch(`${gasBase}?action=getPdfBase64&fileId=${encodeURIComponent(targetFileId!)}`);
+          if (gasRes.ok) {
+            const txt = await gasRes.text();
+            if (txt && !txt.trimStart().startsWith('<')) {
+              const json = JSON.parse(txt);
+              const b64 = json?.base64 || json?.data;
+              if (b64) {
+                const clean = String(b64).replace(/^data:[^;]+;base64,/, '');
+                const binary = atob(clean);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const blob = new Blob([bytes], { type: 'application/pdf' });
+                const head = await blob.slice(0, 16).text();
+                if (head.trimStart().startsWith('%PDF-')) {
+                  applyVerifiedPdfBlob(blob);
+                  return;
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
+      // Fallback 2: Google Drive embed /preview (Never show broken plugin icon!)
+      if (isMounted) {
+        setDriveFallbackPreviewUrl(`https://drive.google.com/file/d/${targetFileId}/preview`);
+        setLoadingActivePdf(false);
       }
     };
 
@@ -557,6 +976,194 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
       isMounted = false;
     };
   }, [activePub?.id, activePub?.driveFileId, activePub?.viewUrl]);
+
+
+  // Capture screenshot of current viewer tab & open Crop + Highlight Studio for Page 2 of Zero Report
+  const handleCaptureCatalogScreenshot = async (openZeroReportAfter: boolean = false) => {
+    openZeroReportAfterCropRef.current = openZeroReportAfter;
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        showNotification('Tarayıcınız ekran yakalamayı desteklemiyor. Zero Report formuna yönlendiriliyorsunuz.', 'info');
+        if (openZeroReportAfter) setZeroReportModalOpen(true);
+        return;
+      }
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser' } as any,
+        audio: false,
+        preferCurrentTab: true
+      } as any);
+
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+
+      await new Promise(resolve => setTimeout(resolve, 180));
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      }
+      stream.getTracks().forEach(t => t.stop());
+
+      const dataUrl = canvas.toDataURL('image/png');
+      const availW = Math.min(window.innerWidth - 96, 1080);
+      setCropBaseWidth(Math.max(420, availW));
+      setRawScreenshotDataUrl(dataUrl);
+      setCropBox(null);
+      setAnnotationStrokes([]);
+      setAnnotationZoom(1);
+      setAnnotationTool('crop');
+      setIsCropOverlayOpen(true);
+    } catch (err: any) {
+      if (openZeroReportAfter) {
+        setZeroReportModalOpen(true);
+        if (err?.name === 'AbortError' || err?.name === 'NotAllowedError') {
+          showNotification('Ekran yakalama atlandı. Zero Report formu açıldı; görseli form içinden de ekleyebilirsiniz.', 'info');
+        } else {
+          showNotification('Ekran görüntüsü alınamadı. Zero Report formundan görsel ekleyebilirsiniz.', 'info');
+        }
+      } else if (err?.name !== 'AbortError' && err?.name !== 'NotAllowedError') {
+        showNotification('Ekran görüntüsü alınamadı. Panodan yapıştırabilir veya dosya seçebilirsiniz.', 'info');
+      }
+    }
+  };
+
+  // Render live annotation strokes onto overlay canvas whenever strokes or zoom change
+  useEffect(() => {
+    if (!isCropOverlayOpen || !rawScreenshotDataUrl || !annotationCanvasRef.current || !cropImgRef.current) return;
+    const img = cropImgRef.current;
+    const canvas = annotationCanvasRef.current;
+    const renderCanvas = () => {
+      const w = img.clientWidth || img.naturalWidth;
+      const h = img.clientHeight || img.naturalHeight;
+      if (!w || !h) return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      for (const stroke of annotationStrokes) {
+        if (stroke.points.length === 0) continue;
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = stroke.color;
+        ctx.globalAlpha = stroke.tool === 'highlighter' ? 0.42 : 0.95;
+        ctx.lineWidth = Math.max(2, stroke.widthNorm * w);
+        ctx.beginPath();
+        const p0 = stroke.points[0];
+        ctx.moveTo(p0.x * w, p0.y * h);
+        if (stroke.points.length === 1) {
+          ctx.lineTo(p0.x * w + 0.5, p0.y * h + 0.5);
+        } else {
+          for (let i = 1; i < stroke.points.length; i++) {
+            ctx.lineTo(stroke.points[i].x * w, stroke.points[i].y * h);
+          }
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    };
+    renderCanvas();
+    const ro = new ResizeObserver(renderCanvas);
+    ro.observe(img);
+    return () => ro.disconnect();
+  }, [isCropOverlayOpen, rawScreenshotDataUrl, annotationStrokes, annotationZoom]);
+
+  // Composite screenshot + strokes (and optional cropBox) into high-res PNG
+  const buildCompositeAnnotatedCanvas = (): HTMLCanvasElement | null => {
+    if (!rawScreenshotDataUrl || !cropImgRef.current) return null;
+    const img = cropImgRef.current;
+    const natW = img.naturalWidth || 1280;
+    const natH = img.naturalHeight || 720;
+
+    const fullCanvas = document.createElement('canvas');
+    fullCanvas.width = natW;
+    fullCanvas.height = natH;
+    const fCtx = fullCanvas.getContext('2d');
+    if (!fCtx) return null;
+    fCtx.drawImage(img, 0, 0, natW, natH);
+
+    for (const stroke of annotationStrokes) {
+      if (stroke.points.length === 0) continue;
+      fCtx.save();
+      fCtx.lineCap = 'round';
+      fCtx.lineJoin = 'round';
+      fCtx.strokeStyle = stroke.color;
+      fCtx.globalAlpha = stroke.tool === 'highlighter' ? 0.42 : 0.95;
+      fCtx.lineWidth = Math.max(2, stroke.widthNorm * natW);
+      fCtx.beginPath();
+      const p0 = stroke.points[0];
+      fCtx.moveTo(p0.x * natW, p0.y * natH);
+      if (stroke.points.length === 1) {
+        fCtx.lineTo(p0.x * natW + 0.5, p0.y * natH + 0.5);
+      } else {
+        for (let i = 1; i < stroke.points.length; i++) {
+          fCtx.lineTo(stroke.points[i].x * natW, stroke.points[i].y * natH);
+        }
+      }
+      fCtx.stroke();
+      fCtx.restore();
+    }
+
+    const rect = img.getBoundingClientRect();
+    const hasCrop = cropBox && rect.width > 0 && rect.height > 0 && Math.abs(cropBox.endX - cropBox.startX) >= 15 && Math.abs(cropBox.endY - cropBox.startY) >= 15;
+    if (!hasCrop || !cropBox) return fullCanvas;
+
+    const scaleX = natW / rect.width;
+    const scaleY = natH / rect.height;
+    const sx = Math.max(0, Math.round(Math.min(cropBox.startX, cropBox.endX) * scaleX));
+    const sy = Math.max(0, Math.round(Math.min(cropBox.startY, cropBox.endY) * scaleY));
+    const sw = Math.max(10, Math.round(Math.abs(cropBox.endX - cropBox.startX) * scaleX));
+    const sh = Math.max(10, Math.round(Math.abs(cropBox.endY - cropBox.startY) * scaleY));
+
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = sw;
+    outCanvas.height = sh;
+    const oCtx = outCanvas.getContext('2d');
+    if (oCtx) {
+      oCtx.drawImage(fullCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    }
+    return outCanvas;
+  };
+
+  // Crop selected area in-place & switch directly to Highlighter mode so user can zoom in & highlight
+  const handleCropInPlaceAndAnnotate = () => {
+    const outCanvas = buildCompositeAnnotatedCanvas();
+    if (!outCanvas) return;
+    const croppedUrl = outCanvas.toDataURL('image/png');
+    setRawScreenshotDataUrl(croppedUrl);
+    setCropBox(null);
+    setAnnotationStrokes([]);
+    setAnnotationZoom(1);
+    setAnnotationTool('highlighter');
+    showNotification('✂️ Alan kırpıldı! Fare tekerleği ile yakınlaştırıp parça numarasını vurgulayabilirsiniz.', 'success');
+  };
+
+  const handleApplyCrop = () => {
+    const outCanvas = buildCompositeAnnotatedCanvas();
+    if (!outCanvas) return;
+    setCapturedCatalogImage(outCanvas.toDataURL('image/png'));
+    const shouldOpenForm = openZeroReportAfterCropRef.current;
+    openZeroReportAfterCropRef.current = false;
+    setIsCropOverlayOpen(false);
+    setRawScreenshotDataUrl(null);
+    setCropBox(null);
+    setAnnotationStrokes([]);
+    setAnnotationZoom(1);
+    if (shouldOpenForm) {
+      setZeroReportModalOpen(true);
+      showNotification('📸 Katalog görseli eklendi! 2 sayfalık Zero Report formunu doldurabilirsiniz.', 'success');
+    } else {
+      showNotification('📸 İşaretlenmiş katalog görseli form ekine kaydedildi.', 'success');
+    }
+  };
 
   // Last detected clipboard text ref to prevent duplicate triggers
   const lastClipboardTextRef = useRef<string>('');
@@ -785,70 +1392,57 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     processUnit('b360', 'B-360', data.b360);
     processUnit('hangar', 'HANGAR YER DESTEK', data.hangar);
 
-    // Add AT-802 Sarf & Kimyasal inventory from storage (MERGE logic)
+    // Add LIVE Sarf & Kimyasal inventory fetched directly from Drive (Zero localStorage cache)
     try {
-      const stored = localStorage.getItem('ogm_depo_inventory_v5');
-      if (stored) {
-        const sarfInventory = JSON.parse(stored);
-        if (Array.isArray(sarfInventory)) {
-          sarfInventory.forEach((item: any, idx: number) => {
-            const pn = item.partNumber || item.pn || '-';
-            const pnKey = pn !== '-' ? pn.toLowerCase().replace(/[^a-z0-9]/g, '') : null;
-            
-            const sarfItem: DepotItem = {
-              unitKey: item.unit || 'at802',
-              unitTitle: (item.unit || 'at802').toUpperCase() + ' DEPO',
-              section: (item.category || 'sarf').toUpperCase() + ' DEPOSU',
-              siraNo: String(idx + 1),
-              adi: item.description || item.name || '',
-              parcaNo: pn,
-              seriNo: item.serialAndNotes || item.sn || '-',
-              miktar: String(item.toplamStok || item.gelen || '0'),
-              miktarNum: Number(item.toplamStok || item.gelen || 0),
-              yer: item.lokasyonNo || item.location || '-',
-              durumu: 'FAAL',
-              sonKontrol: '',
-              gelecekKontrol: '',
-              firma: '',
-              aciklama: '',
-              ankaraMevcut: item.ankaraMevcut,
-              milasMevcut: item.milasMevcut,
-              karainMevcut: item.karainMevcut,
-              canakkaleMevcut: item.canakkaleMevcut,
-              bursaMevcut: item.bursaMevcut,
-              toplamStok: item.toplamStok,
-              isSarfItem: true
-            };
+      if (Array.isArray(liveSarfDepoItems) && liveSarfDepoItems.length > 0) {
+        liveSarfDepoItems.forEach((item: any, idx: number) => {
+          const pn = item.partNumber || item.pn || '-';
+          const pnKey = pn !== '-' ? pn.toLowerCase().replace(/[^a-z0-9]/g, '') : null;
+          const unitKey = String(item.unit || 'at802').toLowerCase();
+          const mapKey = pnKey ? `${unitKey}_${pnKey}` : null;
 
-            if (pnKey) {
-                if (itemsMap.has(pnKey)) {
-                    // Update existing item with sarf detailed info
-                    const existing = itemsMap.get(pnKey)!;
-                    itemsMap.set(pnKey, {
-                        ...existing,
-                        ...sarfItem,
-                        // Combine titles if they are different units
-                        unitTitle: existing.unitKey === sarfItem.unitKey ? sarfItem.unitTitle : `${existing.unitTitle} & ${sarfItem.unitTitle}`
-                    });
-                } else {
-                    itemsMap.set(pnKey, sarfItem);
-                }
-            } else {
-                genericItems.push(sarfItem);
-            }
-          });
-        }
+          const sarfItem: DepotItem = {
+            unitKey,
+            unitTitle: item.unitLabel || (unitKey.toUpperCase() + ' DEPO'),
+            section: (item.category || 'sarf').toUpperCase() + ' DEPOSU',
+            siraNo: String(idx + 1),
+            adi: item.description || item.name || '',
+            parcaNo: pn,
+            seriNo: item.serialAndNotes || item.sn || '-',
+            miktar: String(item.toplamStok ?? item.gelen ?? '0'),
+            miktarNum: Number(item.toplamStok ?? item.gelen ?? 0),
+            yer: item.lokasyonNo || item.location || '-',
+            durumu: 'FAAL',
+            sonKontrol: '',
+            gelecekKontrol: '',
+            firma: '',
+            aciklama: '',
+            ankaraMevcut: item.ankaraMevcut,
+            milasMevcut: item.milasMevcut,
+            karainMevcut: item.karainMevcut,
+            canakkaleMevcut: item.canakkaleMevcut,
+            bursaMevcut: item.bursaMevcut,
+            toplamStok: item.toplamStok,
+            isSarfItem: true
+          };
+
+          if (mapKey) {
+            itemsMap.set(mapKey, sarfItem);
+          } else {
+            genericItems.push(sarfItem);
+          }
+        });
       }
     } catch (e) {}
 
     return [...Array.from(itemsMap.values()), ...genericItems];
-  }, [allUnitData]);
+  }, [allUnitData, liveSarfDepoItems]);
 
-  // Filtered depot items based on search query
+  // Filtered depot items based on search query (ranked: exact/prefix P/N first)
   const matchedDepotItems = useMemo(() => {
     const q = depoSearchQuery.trim().toLowerCase();
     if (!q) return [];
-    return allDepotItems.filter(item => {
+    const matches = allDepotItems.filter(item => {
       const matchAdi = item.adi.toLowerCase().includes(q);
       const matchPn = item.parcaNo.toLowerCase().includes(q);
       const matchSn = item.seriNo.toLowerCase().includes(q);
@@ -857,7 +1451,31 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
       const matchSection = item.section.toLowerCase().includes(q);
       return matchAdi || matchPn || matchSn || matchYer || matchUnit || matchSection;
     });
+    return matches.sort((a, b) => {
+      const aPn = a.parcaNo.toLowerCase();
+      const bPn = b.parcaNo.toLowerCase();
+      const score = (pn: string, adi: string) => {
+        if (pn === q) return 0;
+        if (pn.startsWith(q)) return 1;
+        if (pn.includes(q)) return 2;
+        if (adi.toLowerCase().startsWith(q)) return 3;
+        return 4;
+      };
+      return score(aPn, a.adi) - score(bPn, b.adi);
+    });
   }, [allDepotItems, depoSearchQuery]);
+
+  const autocompleteSuggestions = useMemo(() => {
+    return matchedDepotItems.slice(0, 15);
+  }, [matchedDepotItems]);
+
+  const handleSelectAutocompleteItem = (item: DepotItem) => {
+    const fillVal = (item.parcaNo && item.parcaNo !== '-') ? item.parcaNo : item.adi;
+    setDepoSearchQuery(fillVal);
+    setIsDepoAutocompleteOpen(false);
+    setAutocompleteActiveIdx(-1);
+    setIsStockDrawerOpen(true);
+  };
 
   // Total positive stock quantity count across matched items
   const matchedTotalStockQuantity = useMemo(() => {
@@ -1140,14 +1758,12 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
           setIsViewerActive(false);
         }
 
-        // Add to persistent tombstone list so Drive sync never brings it back
         try {
-          const rawDel = localStorage.getItem('ha_bakim_deleted_tech_pubs');
+          const rawDel = null;
           const delList: string[] = rawDel ? JSON.parse(rawDel) : [];
           if (targetId) delList.push(targetId);
           if (passwordTargetPub.driveFileId) delList.push(passwordTargetPub.driveFileId);
-          if (passwordTargetPub.fileName) delList.push(passwordTargetPub.fileName);
-          localStorage.setItem('ha_bakim_deleted_tech_pubs', JSON.stringify(Array.from(new Set(delList))));
+          void 0;
         } catch (e) {
           console.warn('Tombstone save error:', e);
         }
@@ -1287,19 +1903,295 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     }
   };
 
-  // Open Zero Report generator
+  // Helper to build 2-page HAVA ARACI YEDEK PARÇA TALEP FORMU HTML (for Print & Word .doc)
+  const buildZeroReportDocumentHtml = (form: ZeroReportFormState, catalogImgDataUrl: string, forWord: boolean = false) => {
+    const esc = (s: string) =>
+      String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+    const cb = (checked: boolean) => (checked ? '&#9745;' : '&#9744;');
+    const logoLeft = OGM_LEFT_SEAL_DATA_URI;
+    const logoRight = OGM_RIGHT_SEAL_DATA_URI;
+
+    const headerBannerHtml = `
+      <table style="width:100%; border-collapse:collapse; border:1.5px solid #334155; margin-bottom:10px;">
+        <tr>
+          <td style="width:18%; text-align:center; padding:6px; vertical-align:middle;">
+            <img src="${logoLeft}" width="54" height="54" style="width:54px; height:54px; object-fit:contain;" />
+          </td>
+          <td style="width:64%; text-align:center; vertical-align:middle; padding:6px;">
+            <div style="font-size:13pt; font-weight:bold; color:#64748b; letter-spacing:0.6px; font-family:Calibri,Arial,sans-serif;">
+              HAVA ARACI YEDEK PARÇA TALEP FORMU
+            </div>
+          </td>
+          <td style="width:18%; text-align:center; padding:6px; vertical-align:middle;">
+            <img src="${logoRight}" width="54" height="54" style="width:54px; height:54px; object-fit:contain;" />
+          </td>
+        </tr>
+      </table>`;
+
+    const rowsHtml = form.rows
+      .map(
+        (r) => `
+      <tr>
+        <td style="border:1px solid #000; padding:3px 5px; text-align:center; font-weight:bold; font-size:9pt; height:21px;">${r.siraNo}</td>
+        <td style="border:1px solid #000; padding:3px 6px; font-size:9pt;">${esc(r.parcaAdi)}</td>
+        <td style="border:1px solid #000; padding:3px 6px; font-size:9pt; font-family:Consolas,Calibri,monospace;">${esc(r.parcaNo)}</td>
+        <td style="border:1px solid #000; padding:3px 6px; font-size:9pt; font-family:Consolas,Calibri,monospace;">${esc(r.alternatifPn)}</td>
+        <td style="border:1px solid #000; padding:3px 6px; text-align:center; font-size:9pt;">${esc(r.istenenMiktar)}</td>
+        <td style="border:1px solid #000; padding:3px 6px; text-align:center; font-size:9pt; font-weight:bold; color:${
+          r.oncelik === 'Yüksek' ? '#dc2626' : r.oncelik === 'Normal' ? '#ca8a04' : r.oncelik === 'Düşük' ? '#16a34a' : '#000'
+        };">${esc(r.oncelik)}</td>
+      </tr>`
+      )
+      .join('');
+
+    const wordAttrs = forWord
+      ? 'xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"'
+      : '';
+
+    return `<!DOCTYPE html>
+<html ${wordAttrs}>
+<head>
+  <meta charset="utf-8" />
+  <title>HAVA ARACI YEDEK PARÇA TALEP FORMU</title>
+  <style>
+    @page { size: A4 portrait; margin: 12mm 14mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 0; font-family: Calibri, Arial, sans-serif; color: #000; background: #fff; font-size: 9.5pt; }
+    .a4-page { width: 100%; page-break-after: always; padding: 4px 0; }
+    .a4-page:last-child { page-break-after: auto; }
+    table { border-collapse: collapse; width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="a4-page">
+    ${headerBannerHtml}
+
+    <table style="width:100%; border-collapse:collapse; border:1.5px solid #000; margin-bottom:14px;">
+      <tr>
+        <td style="width:62%; background:#d9d9d9; border:1px solid #000; padding:4px 8px; font-weight:bold; font-size:9.5pt;">1. Hava Aracı Bilgileri</td>
+        <td style="width:38%; background:#d9d9d9; border:1px solid #000; padding:4px 8px;"></td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #000; padding:8px 10px; vertical-align:top; height:72px; font-size:9.5pt;">
+          1. Hava Aracı Tipi : <strong>${esc(form.havaAraciTipi)}</strong>
+        </td>
+        <td style="border:1px solid #000; padding:6px 12px; vertical-align:middle; font-size:9.5pt; line-height:1.45;">
+          <div>${cb(form.selectedTypes.at802)} AT-802</div>
+          <div>${cb(form.selectedTypes.t70)} T-70</div>
+          <div>${cb(form.selectedTypes.bell429)} Bell-429</div>
+          <div>${cb(form.selectedTypes.b360)} B-360</div>
+        </td>
+      </tr>
+    </table>
+
+    <table style="width:100%; border-collapse:collapse; border:1.5px solid #000;">
+      <tr>
+        <td colspan="6" style="background:#d9d9d9; border:1px solid #000; padding:4px 8px; font-weight:bold; font-size:9.5pt;">2-Talep Edilen Malzemeler</td>
+      </tr>
+      <tr style="background:#f3f4f6;">
+        <th style="border:1px solid #000; padding:5px 4px; width:7%; text-align:center; font-size:8.5pt;">Sıra<br/>No</th>
+        <th style="border:1px solid #000; padding:5px 6px; width:24%; text-align:left; font-size:8.5pt;">Parça Adı/Tanımı</th>
+        <th style="border:1px solid #000; padding:5px 6px; width:19%; text-align:left; font-size:8.5pt;">Parça Numarası<br/>(Part Number)</th>
+        <th style="border:1px solid #000; padding:5px 6px; width:20%; text-align:left; font-size:8.5pt;">Alternatif Parça<br/>Numaraları<br/>(Eğer biliniyorsa)</th>
+        <th style="border:1px solid #000; padding:5px 4px; width:14%; text-align:center; font-size:8.5pt;">İstenen Miktar</th>
+        <th style="border:1px solid #000; padding:5px 4px; width:16%; text-align:center; font-size:8.5pt;">Parçanın Öncelik<br/>Derecesi</th>
+      </tr>
+      ${rowsHtml}
+      <tr>
+        <td colspan="6" style="background:#d9d9d9; border:1px solid #000; padding:4px 8px; text-align:center; font-weight:bold; font-size:9pt;">
+          Parcanın Öncelik Derecesi kısmına yazılacaklar
+        </td>
+      </tr>
+      <tr>
+        <td colspan="6" style="border:1px solid #000; padding:4px 8px; font-size:9pt;">
+          <span style="color:#dc2626; font-weight:bold;">Yüksek</span> – Kısa Sürede Gerekli (Arıza vb)
+        </td>
+      </tr>
+      <tr>
+        <td colspan="6" style="border:1px solid #000; padding:4px 8px; font-size:9pt;">
+          <span style="color:#eab308; font-weight:bold;">Normal</span> – Planlı Bakım İçin
+        </td>
+      </tr>
+      <tr>
+        <td colspan="6" style="border:1px solid #000; padding:4px 8px; font-size:9pt;">
+          <span style="color:#16a34a; font-weight:bold;">Düşük</span> – Depo Miktarını Tamamlamak İçin
+        </td>
+      </tr>
+      <tr>
+        <td colspan="6" style="border:1px solid #000; padding:5px 8px; font-size:8.5pt; font-style:italic;">
+          *Ek satırlara ihtiyaç duyulması halinde bu bölümü çoğaltabilirsiniz.*
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  ${forWord ? '<br clear="all" style="page-break-before:always;" />' : ''}
+
+  <div class="a4-page">
+    ${headerBannerHtml}
+
+    <table style="width:100%; border-collapse:collapse; border:1.5px solid #000; margin-bottom:14px;">
+      <tr>
+        <td style="background:#d9d9d9; border:1px solid #000; padding:4px 8px; font-weight:bold; font-size:9.5pt;">3. Parça Kataloğu Görseli</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #000; padding:10px; vertical-align:top; height:430px;">
+          <div style="font-size:9.5pt; margin-bottom:10px; line-height:1.4;">
+            Lütfen istenen parçanın katalogdan alınmış görselini formun ekine ekleyiniz.<br/>
+            Doğru parçanın tespit edilmesine yardımcı olacaktır.
+          </div>
+          ${
+            catalogImgDataUrl
+              ? `<div style="text-align:center; margin-top:8px;"><img src="${catalogImgDataUrl}" style="max-width:100%; max-height:355px; border:1px solid #cbd5e1; object-fit:contain;" /></div>`
+              : ''
+          }
+        </td>
+      </tr>
+    </table>
+
+    <table style="width:100%; border-collapse:collapse; border:1.5px solid #000;">
+      <tr>
+        <td colspan="2" style="background:#d9d9d9; border:1px solid #000; padding:4px 8px; font-weight:bold; font-size:9.5pt;">4. Ek Notlar/Açıklamalar</td>
+      </tr>
+      <tr>
+        <td colspan="2" style="border:1px solid #000; padding:8px 10px; vertical-align:top; height:160px;">
+          <div style="font-size:9.5pt; margin-bottom:6px;">Parçanın özel gereksinimlerini belirten ek bilgiler var ise:</div>
+          <div style="font-size:9.5pt; white-space:pre-wrap; margin-top:6px;">${esc(form.ekNotlar)}</div>
+        </td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #000; padding:8px 10px; width:50%; font-size:9.5pt; height:36px;">
+          Talep Yapan Personel Adı Soyadı:
+        </td>
+        <td style="border:1px solid #000; padding:8px 10px; width:50%; font-size:9.5pt; font-weight:bold;">
+          ${esc(form.talepYapanAdSoyad)}
+        </td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #000; padding:8px 10px; width:50%; font-size:9.5pt; height:44px;">
+          Talep Sahibi İmza:
+        </td>
+        <td style="border:1px solid #000; padding:8px 10px; width:50%;"></td>
+      </tr>
+    </table>
+  </div>
+</body>
+</html>`;
+  };
+
+  const handlePrintZeroReport = () => {
+    const html = buildZeroReportDocumentHtml(zeroReportForm, capturedCatalogImage, false);
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (doc) {
+      doc.open();
+      doc.write(html);
+      doc.close();
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } finally {
+          setTimeout(() => {
+            if (document.body.contains(iframe)) document.body.removeChild(iframe);
+          }, 1500);
+        }
+      }, 250);
+    }
+  };
+
+  const handleDownloadZeroReportWord = () => {
+    const html = buildZeroReportDocumentHtml(zeroReportForm, capturedCatalogImage, true);
+    const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const pnTag = (zeroReportForm.rows[0]?.parcaNo || 'Talep').replace(/[^a-zA-Z0-9_-]/g, '_');
+    a.download = `OGM_Hava_Araci_Yedek_Parca_Talep_Formu_${pnTag}.doc`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showNotification('📄 HAVA ARACI YEDEK PARÇA TALEP FORMU Word (.doc) olarak indirildi!', 'success');
+  };
+
+  // Step-by-step Zero Report launcher: Step 1 -> Capture & Annotate screenshot, Step 2 -> Open 2-page form
   const handleOpenZeroReport = () => {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
     const dateStr = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
+    const activeUnitKey = String(activePub?.unitKey || activePub?.unit || selectedUnitFilter || 'at802').toLowerCase();
+    const unitLabel = activePub?.unitLabel || UNIT_FOLDER_OPTIONS.find(u => u.key === activeUnitKey)?.label || 'AT-802F';
+
+    const selectedTypes = {
+      at802: activeUnitKey.includes('at802'),
+      t70: activeUnitKey.includes('t70'),
+      bell429: activeUnitKey.includes('bell') || activeUnitKey.includes('429'),
+      b360: activeUnitKey.includes('b360')
+    };
+
+    const seedRows: ZeroReportRow[] = Array.from({ length: 20 }, (_, i) => ({
+      siraNo: i + 1,
+      parcaAdi: '',
+      parcaNo: '',
+      alternatifPn: '',
+      istenenMiktar: '',
+      oncelik: ''
+    }));
+
+    if (matchedDepotItems.length > 0) {
+      matchedDepotItems.slice(0, 20).forEach((it, idx) => {
+        seedRows[idx] = {
+          siraNo: idx + 1,
+          parcaAdi: it.adi || '',
+          parcaNo: it.parcaNo !== '-' ? it.parcaNo : depoSearchQuery.trim(),
+          alternatifPn: '',
+          istenenMiktar: '1',
+          oncelik: 'Yüksek'
+        };
+      });
+    } else if (depoSearchQuery.trim()) {
+      seedRows[0] = {
+        siraNo: 1,
+        parcaAdi: '',
+        parcaNo: depoSearchQuery.trim(),
+        alternatifPn: '',
+        istenenMiktar: '1',
+        oncelik: 'Yüksek'
+      };
+    }
+
+    setZeroReportForm({
+      havaAraciTipi: unitLabel,
+      selectedTypes,
+      rows: seedRows,
+      ekNotlar: '',
+      talepYapanAdSoyad: '',
+      date: dateStr
+    });
+
     setZeroReportData({
       query: depoSearchQuery.trim(),
-      targetUnit: activePub?.unitLabel || 'TÜM HAVA ARAÇLARI',
+      targetUnit: unitLabel,
       date: dateStr,
       items: matchedDepotItems
     });
-    setZeroReportModalOpen(true);
+    setIsDepoAutocompleteOpen(false);
+    // Start Step 1 automatically: Screen capture -> Crop & Highlight -> Form
+    handleCaptureCatalogScreenshot(true);
   };
 
   // Helper to open a publication in Viewer Mode
@@ -1307,9 +2199,30 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     setDepoSearchQuery('');
     setPubSearchQuery('');
     setIsStockDrawerOpen(false);
+    setIsDepoAutocompleteOpen(false);
+    setBulutOpenedPdf(null);
     lastClipboardTextRef.current = '';
     setActivePub(pub);
     setIsViewerActive(true);
+  };
+
+  // Helper to open OGM Bulut live AT-802F folder in Viewer Mode
+  const handleOpenOgmBulutFolderInViewer = () => {
+    openPublicationInViewer({
+      id: 'ogm_bulut_at802_folder',
+      unit: 'at802',
+      unitKey: 'at802',
+      unitLabel: 'AT-802F',
+      category: 'CANLI KLASÖR',
+      revision: 'OGM Bulut',
+      section: 'AT-802F OGM BULUT AÇIK BAĞLANTI KAYNAĞI',
+      title: 'AT-802F OGM BULUT TEKNİK YAYINLAR KLASÖRÜ (OGMDrive)',
+      fileName: 'OGMDrive_AT802_Teknik_Yayinlar',
+      fileSize: 'Canlı Arşiv',
+      uploadDate: 'Canlı',
+      viewUrl: OGM_BULUT_AT802_URL,
+      notes: 'OGM Bulut açık bağlantı kaynağı'
+    });
   };
 
   if (!isOpen) return null;
@@ -1354,6 +2267,14 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
               <button
                 id="btn-back-to-catalog"
                 onClick={() => {
+                  if (activePub?.id === 'ogm_bulut_at802_folder' && (bulutOpenedPdf || isBulutPdfOverlayOpen)) {
+                    setBulutOpenedPdf(null);
+                    setIsBulutPdfOverlayOpen(false);
+                    setBulutOverlayUrlInput('');
+                    setIsStockDrawerOpen(false);
+                    wasBulutIframeFocusedRef.current = false;
+                    return;
+                  }
                   setIsViewerActive(false);
                   setDepoSearchQuery('');
                   setPubSearchQuery('');
@@ -1361,6 +2282,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                   lastClipboardTextRef.current = '';
                 }}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg flex items-center gap-1.5 text-xs font-black uppercase tracking-wider transition-all cursor-pointer border border-slate-700 active:scale-95"
+                title={activePub?.id === 'ogm_bulut_at802_folder' && (bulutOpenedPdf || isBulutPdfOverlayOpen) ? 'OGM Bulut linkine geri dön' : 'Teknik yayın listesine dön'}
               >
                 <ArrowLeft className="w-4 h-4" />
                 <span>GERİ</span>
@@ -1372,24 +2294,13 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
               </div>
             </div>
 
-            {/* Right Action Buttons: NO Drive'da Gör / Drive'da Aç button as instructed */}
+            {/* Right Action Buttons */}
             <div className="flex items-center gap-2">
-              <button
-                id="btn-viewer-open-web"
-                onClick={() => {
-                  if (activePdfBlobUrl) window.open(activePdfBlobUrl, '_blank');
-                }}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer border border-slate-700"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>TARAYICIDA AÇ (WEB)</span>
-              </button>
-
-              {activePdfBlobUrl && (
+              {(activePdfBlobUrl || bulutOpenedPdf?.blobUrl) && (
                 <a
                   id="btn-viewer-download-pdf"
-                  href={activePdfBlobUrl}
-                  download={activePub.fileName}
+                  href={bulutOpenedPdf?.blobUrl || activePdfBlobUrl}
+                  download={bulutOpenedPdf?.fileName || activePub.fileName}
                   className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer shadow-sm"
                 >
                   <Download className="w-3.5 h-3.5" />
@@ -1409,36 +2320,82 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
           </div>
 
           {/* Sub-Header: File Title & Live Depo Search Bar (Üstteki Arama Kısmı) */}
-          <div className="bg-slate-900 border-b border-slate-800 px-5 py-2 flex items-center justify-between gap-4 shrink-0 flex-wrap z-20">
-            {/* Left: Document File Name */}
+          <div className="bg-slate-900 border-b border-slate-800 px-5 py-2 flex items-center justify-between gap-4 shrink-0 flex-wrap z-30 relative">
+            {/* Left: Document File Name + Back to OGM Bulut button when viewing a PDF opened from OGM Bulut */}
             <div className="flex items-center gap-2 text-slate-300 min-w-0">
+              {activePub.id === 'ogm_bulut_at802_folder' && bulutOpenedPdf && (
+                <button
+                  type="button"
+                  onClick={() => setBulutOpenedPdf(null)}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer shrink-0"
+                >
+                  <ArrowLeft className="w-3 h-3" />
+                  <span>OGM Bulut Klasörüne Dön</span>
+                </button>
+              )}
               <span className="font-mono text-xs font-black text-white uppercase tracking-wide truncate max-w-[280px]">
-                {activePub.fileName.toUpperCase()}
+                {(bulutOpenedPdf?.fileName || activePub.fileName).toUpperCase()}
               </span>
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                {activePub.category || 'IPC'}
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                {bulutOpenedPdf ? 'OGM BULUT PDF' : (activePub.category || 'IPC')}
               </span>
+              {isDepotLoading && (
+                <span className="text-[10px] text-emerald-400 font-semibold animate-pulse">
+                  Depo verileri yükleniyor...
+                </span>
+              )}
             </div>
 
-            {/* Center / Right: Live Depo Search Bar in Top Section */}
+            {/* Center / Right: Live Depo Search Bar + Autocomplete Dropdown */}
             <div className="flex items-center gap-2.5 flex-1 max-w-2xl justify-end">
-              <div className="relative flex-1 max-w-lg flex items-center gap-2">
+              <div ref={viewerSearchWrapperRef} className="relative flex-1 max-w-lg flex items-center gap-2">
                 <div className="relative flex-1">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     id="input-viewer-depo-search"
                     type="text"
                     value={depoSearchQuery}
+                    onFocus={() => {
+                      if (depoSearchQuery.trim().length > 0) setIsDepoAutocompleteOpen(true);
+                    }}
                     onChange={e => {
-                      setDepoSearchQuery(e.target.value);
+                      const val = e.target.value;
+                      setDepoSearchQuery(val);
+                      setAutocompleteActiveIdx(-1);
+                      setIsDepoAutocompleteOpen(val.trim().length > 0);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'ArrowDown' && autocompleteSuggestions.length > 0) {
+                        e.preventDefault();
+                        setIsDepoAutocompleteOpen(true);
+                        setAutocompleteActiveIdx(prev => Math.min(prev + 1, autocompleteSuggestions.length - 1));
+                      } else if (e.key === 'ArrowUp' && autocompleteSuggestions.length > 0) {
+                        e.preventDefault();
+                        setAutocompleteActiveIdx(prev => Math.max(prev - 1, 0));
+                      } else if (e.key === 'Enter') {
+                        if (isDepoAutocompleteOpen && autocompleteActiveIdx >= 0 && autocompleteSuggestions[autocompleteActiveIdx]) {
+                          e.preventDefault();
+                          handleSelectAutocompleteItem(autocompleteSuggestions[autocompleteActiveIdx]);
+                        } else if (depoSearchQuery.trim()) {
+                          setIsDepoAutocompleteOpen(false);
+                          setIsStockDrawerOpen(true);
+                        }
+                      } else if (e.key === 'Escape') {
+                        setIsDepoAutocompleteOpen(false);
+                      }
                     }}
                     placeholder="Parça No (P/N), Seri No veya Malzeme Adı ile Canlı Depo Ara..."
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-16 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-14 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                    autoComplete="off"
                   />
                   <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
                     {depoSearchQuery && (
                       <button
-                        onClick={() => setDepoSearchQuery('')}
+                        type="button"
+                        onClick={() => {
+                          setDepoSearchQuery('');
+                          setIsDepoAutocompleteOpen(false);
+                        }}
                         className="p-1 text-slate-400 hover:text-white"
                         title="Aramayı Temizle"
                       >
@@ -1446,16 +2403,83 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                       </button>
                     )}
                   </div>
+
+                  {/* Live Autocomplete Dropdown */}
+                  {isDepoAutocompleteOpen && depoSearchQuery.trim().length > 0 && (
+                    <div
+                      id="viewer-depo-autocomplete-dropdown"
+                      className="absolute left-0 right-0 top-full mt-1.5 bg-slate-900 border border-emerald-500/40 rounded-2xl shadow-2xl overflow-hidden z-[100] max-h-80 overflow-y-auto"
+                    >
+                      {autocompleteSuggestions.length === 0 ? (
+                        <div className="p-3 text-xs text-slate-400 flex items-center justify-between gap-2">
+                          <span>&ldquo;{depoSearchQuery}&rdquo; için depoda eşleşen kayıt bulunamadı.</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsDepoAutocompleteOpen(false);
+                              handleOpenZeroReport();
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-[10px] shrink-0 cursor-pointer"
+                          >
+                            ZERO REPORT
+                          </button>
+                        </div>
+                      ) : (
+                        autocompleteSuggestions.map((item, idx) => {
+                          const qty = item.toplamStok ?? item.miktarNum ?? 0;
+                          const isActive = idx === autocompleteActiveIdx;
+                          return (
+                            <button
+                              key={`${item.unitKey}_${item.parcaNo}_${idx}`}
+                              type="button"
+                              onClick={() => handleSelectAutocompleteItem(item)}
+                              className={`w-full px-3.5 py-2 text-left border-b border-slate-800/80 last:border-b-0 transition-colors flex items-center justify-between gap-3 cursor-pointer ${
+                                isActive ? 'bg-emerald-900/50' : 'hover:bg-slate-800/90'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 mb-0.5">
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[9px] font-black uppercase shrink-0">
+                                    {item.unitTitle}
+                                  </span>
+                                  <span className="text-xs font-bold text-white truncate">{item.adi || item.parcaNo}</span>
+                                </div>
+                                <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2.5 flex-wrap">
+                                  <span>P/N: <strong className="text-emerald-300">{item.parcaNo}</strong></span>
+                                  {item.seriNo && item.seriNo !== '-' && <span>S/N: {item.seriNo}</span>}
+                                  {item.yer && item.yer !== '-' && <span>Konum: <strong className="text-amber-300">{item.yer}</strong></span>}
+                                </div>
+                              </div>
+                              <span
+                                className={`px-2 py-0.5 rounded-lg text-[10px] font-black font-mono shrink-0 ${
+                                  qty > 0
+                                    ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
+                                    : 'bg-amber-950 text-amber-300 border border-amber-700/60'
+                                }`}
+                              >
+                                Stok: {qty}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
                 </div>
+
                 <button
                   type="button"
+                  onClick={() => {
+                    setIsDepoAutocompleteOpen(false);
+                    setIsStockDrawerOpen(true);
+                  }}
                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase rounded-xl transition shadow-sm cursor-pointer active:scale-95 shrink-0"
                 >
                   ARA
                 </button>
               </div>
 
-              {/* Matched count indicator badge & drawer toggle (Green if in stock > 0, Orange if in stock == 0, Red if not found) */}
+              {/* Matched count indicator badge & drawer toggle */}
               <button
                 id="btn-toggle-stock-drawer"
                 type="button"
@@ -1491,7 +2515,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                 {isStockDrawerOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
               </button>
 
-              {/* Zero Report Button (Appears only when eligible: 0 stock or not found) */}
+              {/* Zero Report Button */}
               {isZeroReportEligible && (
                 <button
                   id="btn-viewer-zero-report"
@@ -1507,9 +2531,269 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
             </div>
           </div>
 
-          {/* Main Area: Direct Native PDF Viewer via Blob URL (Never Drive preview iframe) */}
+          {/* Main Area: OGM Bulut Unlocker Iframe OR Direct Verified PDF Viewer */}
           <div className="flex-1 bg-slate-950 overflow-hidden relative flex flex-col">
-            {loadingActivePdf ? (
+            {activePub.id === 'ogm_bulut_at802_folder' ? (
+              <>
+                {/* Return-from-Store Page Reload Banner */}
+                {showExtensionReloadBanner && (
+                  <div
+                    id="ogm-extension-reload-banner"
+                    className="bg-amber-500 text-slate-950 px-5 py-2.5 flex items-center justify-between gap-3 shrink-0 z-40 shadow-lg"
+                  >
+                    <div className="flex items-center gap-2.5 text-xs font-black">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>Eklenti kurulumunu tamamladıysanız bağlantının açılması için lütfen sayfayı yenileyin.</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        id="btn-reload-after-extension"
+                        type="button"
+                        onClick={() => window.location.reload()}
+                        className="px-3.5 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-white text-xs font-black uppercase flex items-center gap-1.5 cursor-pointer shadow-sm"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Sayfayı Yenile</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowExtensionReloadBanner(false)}
+                        className="p-1 rounded hover:bg-amber-600/30 text-slate-900 cursor-pointer"
+                        title="Kapat"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {bulutOpenedPdf && (
+                  bulutOpenedPdf.loading ? (
+                    <div className="flex-1 w-full flex flex-col items-center justify-center p-8 text-center bg-slate-950 text-slate-300">
+                      <RefreshCw className="w-10 h-10 mb-3 text-emerald-400 animate-spin" />
+                      <p className="text-sm font-bold text-white mb-1">OGM Bulut PDF Dökümanı Yükleniyor...</p>
+                      <p className="text-xs text-slate-400">{bulutOpenedPdf.fileName}</p>
+                    </div>
+                  ) : (
+                    <iframe
+                      src={(() => {
+                        const raw = bulutOpenedPdf.blobUrl || bulutOpenedPdf.url;
+                        return raw.includes('#') ? raw : `${raw}#toolbar=1&view=FitH`;
+                      })()}
+                      className="flex-1 w-full h-full border-0 bg-slate-950"
+                      title={bulutOpenedPdf.fileName}
+                      id="tech-pub-bulut-pdf-iframe"
+                    />
+                  )
+                )}
+
+                <div className={bulutOpenedPdf ? 'hidden' : 'flex-1 flex flex-col overflow-hidden relative'}>
+                  {/* Connection-Refused Helper Strip (Eklenti Yükle) */}
+                  {bulutCheckStatus === 'geo_blocked' && !hideExtensionHelperStrip && (
+                    <div className="bg-slate-900/95 border-b border-slate-800 px-4 py-1.5 flex items-center justify-between gap-3 text-xs shrink-0 flex-wrap">
+                      <div className="flex items-center gap-2 text-slate-300">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>Bağlantı reddedildi hatası alıyorsanız eklentiyi yükleyip sayfayı yenileyin:</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <a
+                          id="btn-install-iframe-extension"
+                          href={OGM_EXTENSION_STORE_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() => {
+                            awaitingExtensionInstallRef.current = true;
+                          }}
+                          className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black uppercase flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Eklenti Yükle</span>
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => setIsBulutPdfOverlayOpen(true)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Upload className="w-3 h-3" />
+                          <span>PDF / Bağlantı Aç</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHideExtensionHelperStrip(true)}
+                          className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                          title="Gizle"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Embedded OGM Bulut Iframe */}
+                  <div className="flex-1 relative bg-white overflow-hidden">
+                    {bulutCheckStatus === 'checking' ? (
+                      <div className="h-full w-full flex flex-col items-center justify-center p-8 text-center bg-slate-950 text-slate-300">
+                        <RefreshCw className="w-10 h-10 mb-3 text-emerald-400 animate-spin" />
+                        <p className="text-sm font-bold text-white mb-1">OGM Bulut Arşivi Yükleniyor...</p>
+                        <p className="text-xs text-slate-400">AT-802F teknik doküman klasörü hazırlanıyor.</p>
+                      </div>
+                    ) : (
+                      <iframe
+                        key={`${bulutIframeMode}_${bulutCheckStatus}`}
+                        src={
+                          bulutIframeMode === 'proxy'
+                            ? `/api/ogm-bulut-proxy?url=${encodeURIComponent(OGM_BULUT_AT802_URL)}`
+                            : OGM_BULUT_AT802_URL
+                        }
+                        onError={() => setHideExtensionHelperStrip(false)}
+                        className={`w-full h-full border-0 bg-white transition-all duration-200 ${
+                          isBulutPdfOverlayOpen ? 'blur-md scale-[1.01] pointer-events-none select-none' : ''
+                        }`}
+                        title="AT-802F OGM Bulut Teknik Yayınlar"
+                        id="tech-pub-ogm-bulut-iframe"
+                        allow="clipboard-read; clipboard-write"
+                      />
+                    )}
+
+                    {/* Blurred PDF / Link Loader Overlay (triggered automatically when new tab opens) */}
+                    {isBulutPdfOverlayOpen && (
+                      <div
+                        id="ogm-bulut-pdf-blur-overlay"
+                        className="absolute inset-0 z-30 bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-6"
+                      >
+                        <div className="max-w-lg w-full bg-[#071a10] border border-emerald-500/40 rounded-2xl p-6 shadow-2xl text-slate-100 space-y-5">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className="text-base font-black text-white">PDF / Bağlantı Açma Alanı</h3>
+                              <p className="text-xs text-slate-400 mt-1">
+                                Yeni sekmede açılan PDF bağlantısını yapıştırıp <strong className="text-emerald-300">Bağlantıyı Aç</strong>&apos;a basın veya indirdiğiniz PDF dosyasını yükleyin.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsBulutPdfOverlayOpen(false);
+                                setBulutOverlayUrlInput('');
+                                wasBulutIframeFocusedRef.current = false;
+                              }}
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                              title="OGM Bulut Klasörüne Dön"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          {/* URL Input + Bağlantıyı Aç */}
+                          <div className="space-y-2">
+                            <label className="block text-[11px] font-black uppercase tracking-wider text-emerald-300">
+                              PDF Bağlantısı (URL)
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <input
+                                ref={bulutOverlayInputRef}
+                                id="input-bulut-overlay-url"
+                                type="text"
+                                value={bulutOverlayUrlInput}
+                                onChange={e => setBulutOverlayUrlInput(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' && bulutOverlayUrlInput.trim()) {
+                                    const u = bulutOverlayUrlInput.trim();
+                                    setIsBulutPdfOverlayOpen(false);
+                                    openExternalPdfInSameViewer(u, decodeURIComponent(u.split('?')[0].split('/').pop() || 'OGM_Dokuman.pdf'));
+                                  }
+                                }}
+                                placeholder="https://bulut.ogm.gov.tr/..."
+                                className="flex-1 bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 outline-none"
+                              />
+                              <button
+                                id="btn-bulut-overlay-open-url"
+                                type="button"
+                                disabled={!bulutOverlayUrlInput.trim()}
+                                onClick={() => {
+                                  const u = bulutOverlayUrlInput.trim();
+                                  if (!u) return;
+                                  setIsBulutPdfOverlayOpen(false);
+                                  openExternalPdfInSameViewer(u, decodeURIComponent(u.split('?')[0].split('/').pop() || 'OGM_Dokuman.pdf'));
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-black uppercase flex items-center gap-1.5 cursor-pointer shrink-0 shadow-md"
+                              >
+                                <Link2 className="w-3.5 h-3.5" />
+                                <span>Bağlantıyı Aç</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* PDF File Dropzone */}
+                          <div
+                            onDragOver={e => {
+                              e.preventDefault();
+                              setBulutOverlayDragActive(true);
+                            }}
+                            onDragLeave={() => setBulutOverlayDragActive(false)}
+                            onDrop={e => {
+                              e.preventDefault();
+                              setBulutOverlayDragActive(false);
+                              const f = e.dataTransfer.files?.[0];
+                              if (f) {
+                                const url = URL.createObjectURL(f);
+                                setBulutOpenedPdf({ url, blobUrl: url, fileName: f.name, loading: false });
+                                setIsBulutPdfOverlayOpen(false);
+                                setBulutOverlayUrlInput('');
+                              }
+                            }}
+                            className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors ${
+                              bulutOverlayDragActive
+                                ? 'border-emerald-400 bg-emerald-500/15'
+                                : 'border-slate-700 bg-slate-950/60 hover:border-emerald-500/50'
+                            }`}
+                          >
+                            <Upload className="w-7 h-7 text-emerald-400 mx-auto mb-2" />
+                            <p className="text-xs font-bold text-white mb-1">PDF Dosyasını Buraya Sürükleyin</p>
+                            <p className="text-[11px] text-slate-400 mb-3">veya bilgisayarınızdan indirdiğiniz PDF dosyasını seçin</p>
+                            <label className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black uppercase cursor-pointer shadow-sm">
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>PDF Yükle / Seç</span>
+                              <input
+                                type="file"
+                                accept=".pdf,application/pdf"
+                                className="hidden"
+                                onChange={e => {
+                                  const f = e.target.files?.[0];
+                                  if (f) {
+                                    const url = URL.createObjectURL(f);
+                                    setBulutOpenedPdf({ url, blobUrl: url, fileName: f.name, loading: false });
+                                    setIsBulutPdfOverlayOpen(false);
+                                    setBulutOverlayUrlInput('');
+                                  }
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                          </div>
+
+                          {/* Return to Bulut Link */}
+                          <div className="pt-1 flex items-center justify-end border-t border-slate-800/80">
+                            <button
+                              id="btn-bulut-overlay-back"
+                              type="button"
+                              onClick={() => {
+                                setIsBulutPdfOverlayOpen(false);
+                                setBulutOverlayUrlInput('');
+                                wasBulutIframeFocusedRef.current = false;
+                              }}
+                              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-black uppercase flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <ArrowLeft className="w-3.5 h-3.5" />
+                              <span>Geri Dön (OGM Bulut Linki)</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : loadingActivePdf ? (
               <div className="h-full w-full flex flex-col items-center justify-center p-8 text-center bg-slate-950 text-slate-300 select-none">
                 <RefreshCw className="w-10 h-10 mb-3 text-emerald-400 animate-spin" />
                 <p className="text-sm font-bold text-white mb-1 font-sans">PDF Dökümanı Arka Planda İndiriliyor...</p>
@@ -1522,10 +2806,18 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
                 title={activePub.title}
                 id="tech-pub-iframe"
               />
+            ) : driveFallbackPreviewUrl ? (
+              <iframe
+                src={driveFallbackPreviewUrl}
+                className="w-full h-full border-0 bg-slate-950"
+                title={activePub.title}
+                id="tech-pub-iframe"
+                allow="autoplay"
+              />
             ) : (
               <div className="h-full w-full flex flex-col items-center justify-center p-8 text-center bg-slate-950 text-slate-400 select-none">
                 <FileText className="w-12 h-12 mb-3 text-slate-600" />
-                <p className="text-xs font-mono text-slate-300">Döküman indirilemedi veya erişim sağlanamadı.</p>
+                <p className="text-xs font-mono text-slate-300">{pdfRenderError || 'Döküman indirilemedi veya erişim sağlanamadı.'}</p>
               </div>
             )}
           </div>
@@ -1938,6 +3230,61 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
 
               {/* Publications Cards List (Image 1) */}
               <div className="flex-1 overflow-y-auto p-6 space-y-3">
+                {/* AT-802F OGM BULUT AÇIK BAĞLANTI KAYNAĞI SATIRI */}
+                {selectedUnitFilter === 'at802' && (
+                  <div
+                    id="pub-card-ogm-bulut-at802"
+                    onDoubleClick={handleOpenOgmBulutFolderInViewer}
+                    onClick={handleOpenOgmBulutFolderInViewer}
+                    className="p-4 rounded-2xl bg-gradient-to-r from-[#0b3d1d] to-[#12542a] border-2 border-emerald-500/70 hover:border-amber-400 hover:shadow-lg transition-all flex items-center justify-between gap-4 group cursor-pointer text-white"
+                  >
+                    <div className="flex items-center gap-4 min-w-0">
+                      <div className="relative shrink-0">
+                        <div className="w-12 h-12 rounded-2xl bg-emerald-400/20 border border-emerald-300/40 text-emerald-200 flex items-center justify-center shadow-sm">
+                          <Globe className="w-6 h-6" />
+                        </div>
+                        <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center shadow-xs">
+                          <Link2 className="w-3 h-3" />
+                        </div>
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                          <span className="px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black text-[10px] uppercase">
+                            AT-802F
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-400/20 text-emerald-200 font-black text-[10px] uppercase border border-emerald-300/40">
+                            AÇIK BAĞLANTI KAYNAĞI
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md bg-sky-500/20 text-sky-200 font-bold text-[10px] uppercase border border-sky-400/40">
+                            OGM BULUT CANLI ARŞİV
+                          </span>
+                        </div>
+                        <h3 className="text-sm font-black text-white group-hover:text-amber-300 transition-colors truncate">
+                          AT-802F OGM BULUT TEKNİK YAYINLARI (CANLI KLASÖR)
+                        </h3>
+                        <p className="text-[11px] text-emerald-200/80 font-mono truncate">
+                          {OGM_BULUT_AT802_URL}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenOgmBulutFolderInViewer();
+                        }}
+                        className="px-4 py-2 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition-all flex items-center gap-1.5 shadow-md cursor-pointer active:scale-95"
+                      >
+                        <Eye className="w-4 h-4" />
+                        <span>KLASÖRÜ AÇ & ARA</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {filteredPublications.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-500">
                     <div className="w-16 h-16 rounded-3xl bg-slate-200 flex items-center justify-center text-slate-400 mb-3">
@@ -2072,17 +3419,56 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
               </button>
             </div>
 
-            <div className="p-4 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center gap-3">
-              <div className="relative flex-1 min-w-[260px]">
+            <div className="p-4 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center gap-3 relative z-30">
+              <div ref={globalSearchWrapperRef} className="relative flex-1 min-w-[260px]">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={depoSearchQuery}
-                  onChange={e => setDepoSearchQuery(e.target.value)}
+                  onFocus={() => {
+                    if (depoSearchQuery.trim().length > 0) setIsDepoAutocompleteOpen(true);
+                  }}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setDepoSearchQuery(val);
+                    setAutocompleteActiveIdx(-1);
+                    setIsDepoAutocompleteOpen(val.trim().length > 0);
+                  }}
                   placeholder="Parça No (P/N), Seri No veya Malzeme Adı giriniz..."
                   className="w-full bg-slate-950 border border-slate-700 rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                   autoFocus
+                  autoComplete="off"
                 />
+                {isDepoAutocompleteOpen && depoSearchQuery.trim().length > 0 && autocompleteSuggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 bg-slate-900 border border-emerald-500/40 rounded-2xl shadow-2xl overflow-hidden z-[100] max-h-64 overflow-y-auto">
+                    {autocompleteSuggestions.map((item, idx) => {
+                      const qty = item.toplamStok ?? item.miktarNum ?? 0;
+                      return (
+                        <button
+                          key={`global_${item.unitKey}_${item.parcaNo}_${idx}`}
+                          type="button"
+                          onClick={() => handleSelectAutocompleteItem(item)}
+                          className="w-full px-3.5 py-2 text-left border-b border-slate-800/80 last:border-b-0 hover:bg-slate-800/90 transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[9px] font-black uppercase">
+                                {item.unitTitle}
+                              </span>
+                              <span className="text-xs font-bold text-white truncate">{item.adi || item.parcaNo}</span>
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400">
+                              P/N: <strong className="text-emerald-300">{item.parcaNo}</strong> &bull; Konum: {item.yer}
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-lg text-[10px] font-black font-mono bg-slate-950 text-emerald-300 border border-emerald-700/60">
+                            Stok: {qty}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Status Badge */}
@@ -2780,63 +4166,770 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
       )}
 
       {/* ========================================================================= */}
-      {/* ZERO REPORT / MALZEME TALEP RAPORU MODAL                                  */}
+      {/* SCREENSHOT CROP & ANNOTATION STUDIO (STEP 1 FOR ZERO REPORT CATALOG)      */}
       {/* ========================================================================= */}
-      {zeroReportModalOpen && zeroReportData && (
-        <div className="fixed inset-0 z-[10004] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden text-slate-100">
-            <div className="px-6 py-4 bg-amber-950/40 border-b border-amber-500/30 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center justify-center">
-                  <AlertTriangle className="w-5 h-5" />
+      {isCropOverlayOpen && rawScreenshotDataUrl && (
+        <div className="fixed inset-0 z-[10006] bg-slate-950/95 backdrop-blur-md flex flex-col p-3 sm:p-4 select-none">
+          {/* Top Toolbar: Pen, Highlighter, Eraser, Colors, Mouse Wheel Zoom, Crop */}
+          <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-2xl mb-3 shrink-0 shadow-xl">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 pr-3 border-r border-slate-700">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center justify-center">
+                  <Crop className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-amber-300 uppercase">ZERO REPORT &bull; MALZEME TALEP RAPORU</h3>
-                  <p className="text-xs text-slate-400">Depo stoğu bulunmayan veya tükenen parça için resmi talep fişi</p>
+                  <h3 className="text-xs font-black text-white uppercase tracking-wide">ADIM 1: GÖRSEL KIRPMA & VURGULAMA</h3>
+                  <p className="text-[10px] text-slate-400">Fare tekerleği ile yakınlaştırın, kalem/vurgulayıcı ile parça yerini işaretleyin</p>
                 </div>
               </div>
-              <button onClick={() => setZeroReportModalOpen(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="p-6 overflow-y-auto space-y-4 flex-1 text-xs">
-              <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                <div className="flex justify-between border-b border-slate-800 pb-2">
-                  <span className="text-slate-400 font-bold">TALEP EDİLEN PARÇA NO / TANIM:</span>
-                  <span className="font-mono text-emerald-400 font-black">{zeroReportData.query}</span>
-                </div>
-                <div className="flex justify-between border-b border-slate-800 pb-2">
-                  <span className="text-slate-400 font-bold">HEDEF HAVA ARACI:</span>
-                  <span className="text-white font-bold">{zeroReportData.targetUnit}</span>
-                </div>
-                <div className="flex justify-between border-b border-slate-800 pb-2">
-                  <span className="text-slate-400 font-bold">MEVCUT DEPO STOK DURUMU:</span>
-                  <span className="text-rose-400 font-black">0 ADET (STOKTA YOK VEYA TÜKENDİ)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400 font-bold">RAPOR TARİHİ:</span>
-                  <span className="text-slate-300">{zeroReportData.date}</span>
-                </div>
+              {/* Tool Buttons: Crop | Pen | Highlighter | Eraser (matching reference icons) */}
+              <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setAnnotationTool('crop')}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1.5 cursor-pointer transition-all ${
+                    annotationTool === 'crop'
+                      ? 'bg-amber-500 text-slate-950 shadow-sm'
+                      : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                  title="Kırpma Alanı Seç"
+                >
+                  <Crop className="w-3.5 h-3.5" />
+                  <span>Kırp</span>
+                </button>
+
+                {/* Pen Tool (Kalem) */}
+                <button
+                  type="button"
+                  onClick={() => setAnnotationTool('pen')}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1.5 cursor-pointer transition-all ${
+                    annotationTool === 'pen'
+                      ? 'bg-sky-500/20 text-white border border-sky-400 shadow-sm'
+                      : 'text-slate-300 hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title="Kalem (Çizim / İşaret)"
+                >
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 19l7-7-4-4-7 7-2 6 6-2z" />
+                    <path d="M15 8l4 4" stroke={annotationColor} strokeWidth="3" />
+                  </svg>
+                  <span>Kalem</span>
+                </button>
+
+                {/* Highlighter Tool (Fosforlu Vurgulayıcı) */}
+                <button
+                  type="button"
+                  onClick={() => setAnnotationTool('highlighter')}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1.5 cursor-pointer transition-all ${
+                    annotationTool === 'highlighter'
+                      ? 'bg-pink-500/25 text-white border border-pink-400 shadow-sm'
+                      : 'text-slate-300 hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title="Fosforlu Vurgulayıcı (Parça No / Şekil Vurgula)"
+                >
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none">
+                    <rect x="6" y="4" width="12" height="5" rx="1" fill={annotationColor} stroke="currentColor" strokeWidth="1.5" />
+                    <path d="M8 9h8l-1 6-5 3-1-3L8 9z" fill={annotationColor} fillOpacity="0.65" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                  <span>Vurgula</span>
+                </button>
+
+                {/* Eraser Tool (Silgi) */}
+                <button
+                  type="button"
+                  onClick={() => setAnnotationTool('eraser')}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1.5 cursor-pointer transition-all ${
+                    annotationTool === 'eraser'
+                      ? 'bg-rose-500/25 text-white border border-rose-400 shadow-sm'
+                      : 'text-slate-300 hover:bg-slate-800 border border-transparent'
+                  }`}
+                  title="Silgi (Çizilen İşareti Sil)"
+                >
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M7 21h10" />
+                    <path d="M5.5 13.5l8.5-8.5a2 2 0 0 1 2.8 0l2.7 2.7a2 2 0 0 1 0 2.8L11 19H7l-1.5-1.5a2.8 2.8 0 0 1 0-4z" />
+                  </svg>
+                  <span>Silgi</span>
+                </button>
               </div>
+
+              {/* Color Swatches */}
+              <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800">
+                {['#ec4899', '#facc15', '#ef4444', '#22c55e', '#38bdf8'].map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => {
+                      setAnnotationColor(c);
+                      if (annotationTool === 'crop' || annotationTool === 'eraser') {
+                        setAnnotationTool('highlighter');
+                      }
+                    }}
+                    className={`w-5 h-5 rounded-full cursor-pointer transition-transform ${
+                      annotationColor === c ? 'ring-2 ring-white scale-110' : 'opacity-75 hover:opacity-100'
+                    }`}
+                    style={{ backgroundColor: c }}
+                    title="Vurgulama Rengi"
+                  />
+                ))}
+              </div>
+
+              {/* Zoom Controls + Mouse Wheel Support */}
+              <div className="flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-xl border border-slate-800 text-xs font-mono">
+                <button
+                  type="button"
+                  onClick={() => setAnnotationZoom(z => Math.max(0.5, Number((z - 0.25).toFixed(2))))}
+                  className="px-2 py-1 rounded hover:bg-slate-800 text-slate-300 font-black cursor-pointer"
+                  title="Uzaklaştır"
+                >
+                  -
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnnotationZoom(1)}
+                  className="px-2 py-1 rounded hover:bg-slate-800 text-emerald-300 font-bold cursor-pointer min-w-[52px] text-center"
+                  title="Yakınlaştırmayı Sıfırla (%100)"
+                >
+                  %{Math.round(annotationZoom * 100)}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnnotationZoom(z => Math.min(5, Number((z + 0.25).toFixed(2))))}
+                  className="px-2 py-1 rounded hover:bg-slate-800 text-slate-300 font-black cursor-pointer"
+                  title="Yakınlaştır"
+                >
+                  +
+                </button>
+              </div>
+
+              {/* Undo / Clear Strokes */}
+              {annotationStrokes.length > 0 && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setAnnotationStrokes(prev => prev.slice(0, -1))}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] font-bold text-slate-200 cursor-pointer"
+                  >
+                    Geri Al
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAnnotationStrokes([])}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-900/60 text-[11px] font-bold text-rose-300 cursor-pointer"
+                  >
+                    Temizle
+                  </button>
+                </div>
+              )}
             </div>
 
-            <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-end gap-3">
+            {/* Right Finish / Crop Action Buttons */}
+            <div className="flex items-center gap-2 shrink-0">
+              {cropBox && Math.abs(cropBox.endX - cropBox.startX) >= 15 && Math.abs(cropBox.endY - cropBox.startY) >= 15 && (
+                <button
+                  type="button"
+                  onClick={handleCropInPlaceAndAnnotate}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  <Crop className="w-3.5 h-3.5" />
+                  <span>Seçili Alanı Kırp & Vurgula</span>
+                </button>
+              )}
               <button
-                onClick={() => setZeroReportModalOpen(false)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold"
-              >
-                Kapat
-              </button>
-              <button
+                type="button"
                 onClick={() => {
-                  window.print();
+                  setIsCropOverlayOpen(false);
+                  setRawScreenshotDataUrl(null);
+                  setCropBox(null);
+                  setAnnotationStrokes([]);
+                  setAnnotationZoom(1);
+                  if (openZeroReportAfterCropRef.current) {
+                    openZeroReportAfterCropRef.current = false;
+                    setZeroReportModalOpen(true);
+                  }
                 }}
-                className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg"
+                className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 cursor-pointer"
               >
-                <Download className="w-4 h-4" />
-                <span>Raporu Yazdır / PDF İndir</span>
+                {openZeroReportAfterCropRef.current ? 'Görselsiz Devam Et' : 'İptal'}
               </button>
+              <button
+                type="button"
+                onClick={handleApplyCrop}
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-black text-white flex items-center gap-1.5 shadow-lg cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>
+                  {openZeroReportAfterCropRef.current
+                    ? 'Onayla & Zero Report Formunu Aç'
+                    : cropBox
+                    ? 'Seçili Alanı Kaydet'
+                    : 'Görseli Kaydet'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Interactive Zoomable Viewport (Mouse Wheel Zoom + Draw / Highlight / Erase / Crop) */}
+          <div
+            onWheel={e => {
+              e.preventDefault();
+              const delta = e.deltaY < 0 ? 0.2 : -0.2;
+              setAnnotationZoom(z => Math.max(0.5, Math.min(5, Number((z + delta).toFixed(2)))));
+            }}
+            className="flex-1 overflow-auto bg-slate-900/70 rounded-2xl border border-slate-800 p-4 flex items-start justify-center"
+          >
+            <div
+              className={`relative inline-block select-none my-auto ${
+                annotationTool === 'crop'
+                  ? 'cursor-crosshair'
+                  : annotationTool === 'eraser'
+                  ? 'cursor-cell'
+                  : 'cursor-crosshair'
+              }`}
+              style={{ width: `${Math.round(cropBaseWidth * annotationZoom)}px`, maxWidth: 'none' }}
+              onMouseDown={e => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                if (!rect.width || !rect.height) return;
+                const px = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+                const py = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+                const nx = px / rect.width;
+                const ny = py / rect.height;
+
+                if (annotationTool === 'crop') {
+                  setIsCroppingDrag(true);
+                  setCropBox({ startX: px, startY: py, endX: px, endY: py });
+                  return;
+                }
+
+                if (annotationTool === 'eraser') {
+                  isDrawingAnnotationRef.current = true;
+                  const threshold = 0.025 / Math.max(1, annotationZoom * 0.6);
+                  setAnnotationStrokes(prev =>
+                    prev.filter(st => !st.points.some(pt => Math.hypot(pt.x - nx, pt.y - ny) < threshold))
+                  );
+                  return;
+                }
+
+                const newId = `st_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+                activeStrokeIdRef.current = newId;
+                isDrawingAnnotationRef.current = true;
+                const widthNorm = annotationTool === 'highlighter' ? 0.024 : 0.0045;
+                setAnnotationStrokes(prev => [
+                  ...prev,
+                  {
+                    id: newId,
+                    tool: annotationTool,
+                    color: annotationColor,
+                    widthNorm,
+                    points: [{ x: nx, y: ny }]
+                  }
+                ]);
+              }}
+              onMouseMove={e => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                if (!rect.width || !rect.height) return;
+                const px = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+                const py = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+                const nx = px / rect.width;
+                const ny = py / rect.height;
+
+                if (annotationTool === 'crop') {
+                  if (!isCroppingDrag) return;
+                  setCropBox(prev => (prev ? { ...prev, endX: px, endY: py } : null));
+                  return;
+                }
+
+                if (!isDrawingAnnotationRef.current) return;
+
+                if (annotationTool === 'eraser') {
+                  const threshold = 0.025 / Math.max(1, annotationZoom * 0.6);
+                  setAnnotationStrokes(prev =>
+                    prev.filter(st => !st.points.some(pt => Math.hypot(pt.x - nx, pt.y - ny) < threshold))
+                  );
+                  return;
+                }
+
+                const activeId = activeStrokeIdRef.current;
+                if (!activeId) return;
+                setAnnotationStrokes(prev =>
+                  prev.map(st => (st.id === activeId ? { ...st, points: [...st.points, { x: nx, y: ny }] } : st))
+                );
+              }}
+              onMouseUp={() => {
+                setIsCroppingDrag(false);
+                isDrawingAnnotationRef.current = false;
+                activeStrokeIdRef.current = null;
+              }}
+              onMouseLeave={() => {
+                setIsCroppingDrag(false);
+                isDrawingAnnotationRef.current = false;
+                activeStrokeIdRef.current = null;
+              }}
+            >
+              <img
+                ref={cropImgRef}
+                src={rawScreenshotDataUrl}
+                alt="Ekran Görüntüsü"
+                className="w-full h-auto block rounded-lg shadow-2xl pointer-events-none select-none"
+                draggable={false}
+              />
+              <canvas
+                ref={annotationCanvasRef}
+                className="absolute inset-0 w-full h-full pointer-events-none rounded-lg"
+              />
+              {cropBox && (
+                <div
+                  className="absolute border-2 border-amber-400 bg-amber-400/15 shadow-[0_0_0_9999px_rgba(2,6,23,0.55)] pointer-events-none"
+                  style={{
+                    left: Math.min(cropBox.startX, cropBox.endX),
+                    top: Math.min(cropBox.startY, cropBox.endY),
+                    width: Math.abs(cropBox.endX - cropBox.startX),
+                    height: Math.abs(cropBox.endY - cropBox.startY)
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ZERO REPORT / HAVA ARACI YEDEK PARÇA TALEP FORMU (EXACT 2-PAGE OGM FORM)  */}
+      {/* ========================================================================= */}
+      {zeroReportModalOpen && zeroReportData && (
+        <div
+          className="fixed inset-0 z-[10004] bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4"
+          onPaste={e => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            for (let i = 0; i < items.length; i++) {
+              if (items[i].type.startsWith('image/')) {
+                const file = items[i].getAsFile();
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = ev => {
+                    if (ev.target?.result) {
+                      setCapturedCatalogImage(String(ev.target.result));
+                      showNotification('📋 Panodaki katalog görseli formun 3. bölümüne eklendi!', 'success');
+                    }
+                  };
+                  reader.readAsDataURL(file);
+                }
+              }
+            }
+          }}
+        >
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl w-full max-w-[1180px] h-[94vh] flex flex-col shadow-2xl overflow-hidden text-slate-100">
+            {/* Modal Top Toolbar */}
+            <div className="px-5 py-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 flex-wrap shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center justify-center">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-amber-300 uppercase">HAVA ARACI YEDEK PARÇA TALEP FORMU (ZERO REPORT)</h3>
+                  <p className="text-[11px] text-slate-400">
+                    2 Sayfalık Resmi OGM Talep Formu &bull; Alanlara tıklayarak düzenleyebilir, Katalog Görseli ekleyip Yazdır / Word (.doc) indirebilirsiniz
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => handleCaptureCatalogScreenshot(false)}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 text-xs font-black flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Ekran / Katalog Yakala</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadZeroReportWord}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Word (.doc) İndir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintZeroReport}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Yazdır / PDF Kaydet</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZeroReportModalOpen(false)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* 2-Page Live Editable Sheet Canvas */}
+            <div className="flex-1 overflow-y-auto bg-slate-300 p-4 sm:p-6">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 max-w-[1120px] mx-auto items-start">
+
+                {/* ==================== SAYFA 1 ==================== */}
+                <div className="bg-white text-black shadow-2xl border border-slate-400 p-6 min-h-[760px] flex flex-col justify-between font-sans">
+                  <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mb-1 flex justify-between">
+                      <span>Sayfa 1 / 2</span>
+                      <span>Tarih: {zeroReportForm.date}</span>
+                    </div>
+
+                    {/* Top Header Box (Logos + Title) */}
+                    <div className="border border-slate-700 px-3 py-2 flex items-center justify-between mb-4">
+                      <img src={OGM_LEFT_SEAL_DATA_URI} alt="OGM Amblem" className="w-12 h-12 object-contain shrink-0" />
+                      <div className="text-center font-bold text-slate-500 tracking-wide text-sm sm:text-base px-2">
+                        HAVA ARACI YEDEK PARÇA TALEP FORMU
+                      </div>
+                      <img src={OGM_RIGHT_SEAL_DATA_URI} alt="Havacılık Amblem" className="w-12 h-12 object-contain shrink-0" />
+                    </div>
+
+                    {/* 1. Hava Aracı Bilgileri */}
+                    <table className="w-full border-collapse border border-black mb-4 text-xs">
+                      <thead>
+                        <tr className="bg-[#d9d9d9]">
+                          <th className="border border-black px-2 py-1 text-left font-bold w-[60%]">1. Hava Aracı Bilgileri</th>
+                          <th className="border border-black px-2 py-1 text-left font-bold w-[40%]"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="border border-black px-2.5 py-2 align-top">
+                            <div className="flex items-center gap-1.5">
+                              <span className="shrink-0">1. Hava Aracı Tipi :</span>
+                              <input
+                                type="text"
+                                value={zeroReportForm.havaAraciTipi}
+                                onChange={e => setZeroReportForm(prev => ({ ...prev, havaAraciTipi: e.target.value }))}
+                                className="w-full border-b border-dotted border-slate-400 focus:border-blue-600 outline-none font-bold text-xs px-1 bg-transparent"
+                              />
+                            </div>
+                          </td>
+                          <td className="border border-black px-3 py-1.5 text-[11px] space-y-0.5">
+                            {[
+                              { key: 'at802', label: 'AT-802' },
+                              { key: 't70', label: 'T-70' },
+                              { key: 'bell429', label: 'Bell-429' },
+                              { key: 'b360', label: 'B-360' }
+                            ].map(opt => (
+                              <label key={opt.key} className="flex items-center gap-1.5 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={(zeroReportForm.selectedTypes as any)[opt.key]}
+                                  onChange={e =>
+                                    setZeroReportForm(prev => ({
+                                      ...prev,
+                                      selectedTypes: { ...prev.selectedTypes, [opt.key]: e.target.checked }
+                                    }))
+                                  }
+                                  className="w-3.5 h-3.5 accent-emerald-700 cursor-pointer"
+                                />
+                                <span>{opt.label}</span>
+                              </label>
+                            ))}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+
+                    {/* 2-Talep Edilen Malzemeler (20 Rows) */}
+                    <table className="w-full border-collapse border border-black text-[11px]">
+                      <thead>
+                        <tr className="bg-[#d9d9d9]">
+                          <th colSpan={6} className="border border-black px-2 py-1 text-left font-bold text-xs">
+                            2-Talep Edilen Malzemeler
+                          </th>
+                        </tr>
+                        <tr className="bg-[#f3f4f6]">
+                          <th className="border border-black px-1 py-1 text-center font-bold w-[7%]">Sıra<br/>No</th>
+                          <th className="border border-black px-1.5 py-1 text-left font-bold w-[23%]">Parça Adı/Tanımı</th>
+                          <th className="border border-black px-1.5 py-1 text-left font-bold w-[20%]">Parça Numarası<br/>(Part Number)</th>
+                          <th className="border border-black px-1.5 py-1 text-left font-bold w-[20%]">Alternatif Parça Numaraları<br/>(Eğer biliniyorsa)</th>
+                          <th className="border border-black px-1 py-1 text-center font-bold w-[13%]">İstenen Miktar</th>
+                          <th className="border border-black px-1 py-1 text-center font-bold w-[17%]">Parçanın Öncelik Derecesi</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {zeroReportForm.rows.map((row, rIdx) => (
+                          <tr key={row.siraNo} className="hover:bg-amber-50/40">
+                            <td className="border border-black px-1 py-0.5 text-center font-bold">{row.siraNo}</td>
+                            <td className="border border-black p-0">
+                              <input
+                                type="text"
+                                value={row.parcaAdi}
+                                onChange={e => {
+                                  const v = e.target.value;
+                                  setZeroReportForm(prev => ({
+                                    ...prev,
+                                    rows: prev.rows.map((r, i) => (i === rIdx ? { ...r, parcaAdi: v } : r))
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-0.5 text-[10.5px] bg-transparent outline-none focus:bg-blue-50"
+                              />
+                            </td>
+                            <td className="border border-black p-0">
+                              <input
+                                type="text"
+                                value={row.parcaNo}
+                                onChange={e => {
+                                  const v = e.target.value;
+                                  setZeroReportForm(prev => ({
+                                    ...prev,
+                                    rows: prev.rows.map((r, i) => (i === rIdx ? { ...r, parcaNo: v } : r))
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-0.5 text-[10.5px] font-mono font-bold bg-transparent outline-none focus:bg-blue-50"
+                              />
+                            </td>
+                            <td className="border border-black p-0">
+                              <input
+                                type="text"
+                                value={row.alternatifPn}
+                                onChange={e => {
+                                  const v = e.target.value;
+                                  setZeroReportForm(prev => ({
+                                    ...prev,
+                                    rows: prev.rows.map((r, i) => (i === rIdx ? { ...r, alternatifPn: v } : r))
+                                  }));
+                                }}
+                                className="w-full px-1.5 py-0.5 text-[10.5px] font-mono bg-transparent outline-none focus:bg-blue-50"
+                              />
+                            </td>
+                            <td className="border border-black p-0">
+                              <input
+                                type="text"
+                                value={row.istenenMiktar}
+                                onChange={e => {
+                                  const v = e.target.value;
+                                  setZeroReportForm(prev => ({
+                                    ...prev,
+                                    rows: prev.rows.map((r, i) => (i === rIdx ? { ...r, istenenMiktar: v } : r))
+                                  }));
+                                }}
+                                className="w-full px-1 py-0.5 text-center text-[10.5px] font-bold bg-transparent outline-none focus:bg-blue-50"
+                              />
+                            </td>
+                            <td className="border border-black p-0">
+                              <select
+                                value={row.oncelik}
+                                onChange={e => {
+                                  const v = e.target.value as ZeroReportRow['oncelik'];
+                                  setZeroReportForm(prev => ({
+                                    ...prev,
+                                    rows: prev.rows.map((r, i) => (i === rIdx ? { ...r, oncelik: v } : r))
+                                  }));
+                                }}
+                                className={`w-full px-1 py-0.5 text-center text-[10.5px] font-bold bg-transparent outline-none cursor-pointer ${
+                                  row.oncelik === 'Yüksek'
+                                    ? 'text-red-600'
+                                    : row.oncelik === 'Normal'
+                                    ? 'text-amber-600'
+                                    : row.oncelik === 'Düşük'
+                                    ? 'text-emerald-700'
+                                    : ''
+                                }`}
+                              >
+                                <option value="">-</option>
+                                <option value="Yüksek">Yüksek</option>
+                                <option value="Normal">Normal</option>
+                                <option value="Düşük">Düşük</option>
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                        <tr className="bg-[#d9d9d9]">
+                          <td colSpan={6} className="border border-black px-2 py-0.5 text-center font-bold text-[10.5px]">
+                            Parcanın Öncelik Derecesi kısmına yazılacaklar
+                          </td>
+                        </tr>
+                        <tr>
+                          <td colSpan={6} className="border border-black px-2 py-1 text-[10.5px]">
+                            <span className="text-red-600 font-bold">Yüksek</span> – Kısa Sürede Gerekli (Arıza vb)
+                          </td>
+                        </tr>
+                        <tr>
+                          <td colSpan={6} className="border border-black px-2 py-1 text-[10.5px]">
+                            <span className="text-amber-500 font-bold">Normal</span> – Planlı Bakım İçin
+                          </td>
+                        </tr>
+                        <tr>
+                          <td colSpan={6} className="border border-black px-2 py-1 text-[10.5px]">
+                            <span className="text-emerald-600 font-bold">Düşük</span> – Depo Miktarını Tamamlamak İçin
+                          </td>
+                        </tr>
+                        <tr>
+                          <td colSpan={6} className="border border-black px-2 py-1 text-[10px] italic">
+                            *Ek satırlara ihtiyaç duyulması halinde bu bölümü çoğaltabilirsiniz.*
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* ==================== SAYFA 2 ==================== */}
+                <div className="bg-white text-black shadow-2xl border border-slate-400 p-6 min-h-[760px] flex flex-col justify-between font-sans">
+                  <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase mb-1 flex justify-between">
+                      <span>Sayfa 2 / 2</span>
+                      <span>Parça Kataloğu &amp; Notlar</span>
+                    </div>
+
+                    {/* Top Header Box (Logos + Title repeated on Page 2) */}
+                    <div className="border border-slate-700 px-3 py-2 flex items-center justify-between mb-4">
+                      <img src={OGM_LEFT_SEAL_DATA_URI} alt="OGM Amblem" className="w-12 h-12 object-contain shrink-0" />
+                      <div className="text-center font-bold text-slate-500 tracking-wide text-sm sm:text-base px-2">
+                        HAVA ARACI YEDEK PARÇA TALEP FORMU
+                      </div>
+                      <img src={OGM_RIGHT_SEAL_DATA_URI} alt="Havacılık Amblem" className="w-12 h-12 object-contain shrink-0" />
+                    </div>
+
+                    {/* 3. Parça Kataloğu Görseli */}
+                    <table className="w-full border-collapse border border-black mb-4 text-xs">
+                      <thead>
+                        <tr className="bg-[#d9d9d9]">
+                          <th className="border border-black px-2.5 py-1 text-left font-bold">3. Parça Kataloğu Görseli</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="border border-black p-3 align-top h-[410px] relative">
+                            <p className="text-[11px] leading-snug mb-2">
+                              Lütfen istenen parçanın katalogdan alınmış görselini formun ekine ekleyiniz.<br/>
+                              Doğru parçanın tespit edilmesine yardımcı olacaktır.
+                            </p>
+
+                            {capturedCatalogImage ? (
+                              <div className="relative group mt-2 flex flex-col items-center">
+                                <img
+                                  src={capturedCatalogImage}
+                                  alt="Parça Kataloğu Görseli"
+                                  className="max-w-full max-h-[310px] object-contain border border-slate-300 shadow-xs"
+                                />
+                                <div className="mt-2 flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCaptureCatalogScreenshot(true)}
+                                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Camera className="w-3 h-3" />
+                                    <span>Yeniden Yakala</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setCapturedCatalogImage('')}
+                                    className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold cursor-pointer"
+                                  >
+                                    Görseli Kaldır
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="h-[310px] border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center text-center p-4 bg-slate-50/70">
+                                <ImageIcon className="w-9 h-9 text-slate-400 mb-2" />
+                                <p className="text-xs font-bold text-slate-600 mb-1">
+                                  Henüz Katalog Görseli Eklenmedi
+                                </p>
+                                <p className="text-[10.5px] text-slate-500 max-w-xs mb-3">
+                                  Ekran yakala butonu ile PDF sayfadan kırpabilir, <strong>Ctrl+V</strong> ile yapıştırabilir veya dosya seçebilirsiniz.
+                                </p>
+                                <div className="flex items-center gap-2 flex-wrap justify-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCaptureCatalogScreenshot(true)}
+                                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] flex items-center gap-1 cursor-pointer shadow-xs"
+                                  >
+                                    <Camera className="w-3.5 h-3.5" />
+                                    <span>PDF Sayfadan Ekran Yakala</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => catalogFileInputRef.current?.click()}
+                                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Upload className="w-3.5 h-3.5" />
+                                    <span>Görsel Yükle</span>
+                                  </button>
+                                  <input
+                                    ref={catalogFileInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={e => {
+                                      const f = e.target.files?.[0];
+                                      if (f) {
+                                        const reader = new FileReader();
+                                        reader.onload = ev => {
+                                          if (ev.target?.result) setCapturedCatalogImage(String(ev.target.result));
+                                        };
+                                        reader.readAsDataURL(f);
+                                      }
+                                      e.target.value = '';
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+
+                    {/* 4. Ek Notlar/Açıklamalar + İmza Bloğu */}
+                    <table className="w-full border-collapse border border-black text-xs">
+                      <thead>
+                        <tr className="bg-[#d9d9d9]">
+                          <th colSpan={2} className="border border-black px-2.5 py-1 text-left font-bold">
+                            4. Ek Notlar/Açıklamalar
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td colSpan={2} className="border border-black p-2.5 align-top">
+                            <div className="text-[11px] mb-1.5">Parçanın özel gereksinimlerini belirten ek bilgiler var ise:</div>
+                            <textarea
+                              rows={5}
+                              value={zeroReportForm.ekNotlar}
+                              onChange={e => setZeroReportForm(prev => ({ ...prev, ekNotlar: e.target.value }))}
+                              placeholder="Varsa özel sertifika, hızlı tedarik veya teknik notları buraya yazınız..."
+                              className="w-full text-xs bg-transparent outline-none resize-none focus:bg-blue-50/40 p-1"
+                            />
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black px-2.5 py-2 w-[50%] text-[11px]">
+                            Talep Yapan Personel Adı Soyadı:
+                          </td>
+                          <td className="border border-black p-1 w-[50%]">
+                            <input
+                              type="text"
+                              value={zeroReportForm.talepYapanAdSoyad}
+                              onChange={e => setZeroReportForm(prev => ({ ...prev, talepYapanAdSoyad: e.target.value }))}
+                              placeholder="Ad Soyad giriniz..."
+                              className="w-full px-2 py-1 text-xs font-bold bg-transparent outline-none focus:bg-blue-50"
+                            />
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black px-2.5 py-3 w-[50%] text-[11px]">
+                            Talep Sahibi İmza:
+                          </td>
+                          <td className="border border-black px-2.5 py-3 w-[50%]"></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
             </div>
           </div>
         </div>

@@ -58,7 +58,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({
       }
       
       let count = existingDataCount || 0;
-      const rawStored = localStorage.getItem(`excel_techizat_${targetKey}_data`) || localStorage.getItem(`excel_techizat_${selectedUnit}_data`);
+      const rawStored: string | null = null;
       if (rawStored) {
         const parsed = JSON.parse(rawStored);
         if (Array.isArray(parsed)) {

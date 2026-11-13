@@ -266,6 +266,8 @@ import { BarkodOkuyucuModal } from './components/BarkodOkuyucuModal';
 import { GunTakipModal } from './components/GunTakipModal';
 import { DepoSlipPrintModal } from './components/DepoSlipPrintModal';
 import { PersonelEgitimModal } from './components/PersonelEgitimModal';
+import { PersonelBilgiModal } from './components/PersonelBilgiModal';
+import { fetchExcelFromDrive, uploadExcelToDrive } from './utils/remoteDriveSync';
 
 export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec";
 export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
@@ -862,6 +864,8 @@ export default function App() {
   useEffect(() => {
     const style = document.createElement('style');
     style.innerHTML = `
+      div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(4) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(4) > button:nth-of-type(4) { display: none !important; }
+      div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(4) > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(4) > button:nth-of-type(6) { display: none !important; }
       div#root:nth-of-type(1) > div:nth-of-type(1) > div#system-modal:nth-of-type(3) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2) > button:nth-of-type(1) > div:nth-of-type(2) > button:nth-of-type(1) {
         font-weight: 800 !important;
         color: #10b981 !important;
@@ -928,14 +932,7 @@ export default function App() {
 
   // Teçhizat row edit, image upload, mission order and documents states
   const [mobileEditTab, setMobileEditTab] = useState<'form' | 'image' | 'regional' | 'documents'>('form');
-  const [hangarPdfDocs, setHangarPdfDocs] = useState<HangarPdfDoc[]>(() => {
-    try {
-      const s = localStorage.getItem('hangar_techizat_pdf_docs') || localStorage.getItem('hangar_pdf_docs');
-      return s ? JSON.parse(s) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [hangarPdfDocs, setHangarPdfDocs] = useState<HangarPdfDoc[]>([]);
   const [isUploadingDoc, setIsUploadingDoc] = useState<boolean>(false);
   const [activePdfPreview, setActivePdfPreview] = useState<{
     id: string;
@@ -1014,15 +1011,6 @@ export default function App() {
     const defaultImages = {
       "bell429_Bell_429_Çekme_Çubuğu_(Tow_Bar)_SN-9982": "https://drive.google.com/file/d/1QXCX6zN79vZ6nSk4prwH0LacFfT0WyEv/view?usp=drivesdk"
     };
-    const saved = localStorage.getItem('techizat_images');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return { ...defaultImages, ...parsed };
-      } catch (e) {
-        console.error(e);
-      }
-    }
     return defaultImages;
   });
   const [techizatImageScale, setTechizatImageScale] = useState<number>(1);
@@ -1248,25 +1236,7 @@ export default function App() {
   const [showGeEditPasswordPrompt, setShowGeEditPasswordPrompt] = useState<boolean>(false);
 
   const [karaAraclariSubTab, setKaraAraclariSubTab] = useState<'list' | 'mission_order' | 'past_records'>('list');
-  const [karaAraclariGorevEmirleri, setKaraAraclariGorevEmirleri] = useState<any[]>(() => {
-    const saved = localStorage.getItem('kara_araclari_gorev_emirleri');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // Filter out rows that are blank/empty (no Tarih, no Araç Plakası, no Sürücü Personel, no Görev Seri No)
-          return parsed.filter((row: any) => {
-            const date = String(row.date || "").trim();
-            const plate = String(row.plate || "").trim();
-            const driver = String(row.driverName || "").trim();
-            const serial = String(row.serialNo || "").trim();
-            return date !== "" || plate !== "" || driver !== "" || serial !== "";
-          });
-        }
-      } catch (e) { console.error(e); }
-    }
-    return [];
-  });
+  const [karaAraclariGorevEmirleri, setKaraAraclariGorevEmirleri] = useState<any[]>([]);
 
   const [geTarih, setGeTarih] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [gePlaka, setGePlaka] = useState<string>("");
@@ -1482,17 +1452,11 @@ export default function App() {
 
       if (data && Array.isArray(data.data)) {
         setSubmittedEbysRequests(data.data);
-        localStorage.setItem('submitted_ebys_requests', JSON.stringify(data.data));
       } else if (Array.isArray(data)) {
         setSubmittedEbysRequests(data);
-        localStorage.setItem('submitted_ebys_requests', JSON.stringify(data));
       }
     } catch (err) {
       console.error("TASKLINE TASKLINE-PARÇA LİSTESİ listesi çekme hatası:", err);
-      const saved = localStorage.getItem('submitted_ebys_requests');
-      if (saved) {
-        setSubmittedEbysRequests(JSON.parse(saved));
-      }
     } finally {
       setIsLoadingSubmitted(false);
     }
@@ -1569,28 +1533,28 @@ export default function App() {
         // Set React state and LocalStorage for local responsiveness
         if (techType === 'bell429') {
           setTechizatBell429Data(newArray);
-          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'at802') {
           setTechizatAt802Data(newArray);
-          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 't70') {
           setTechizatT70Data(newArray);
-          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 't70_bumbi_backet') {
           setTechizatT70BumbiBacketData(newArray);
-          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'b360') {
           setTechizatB360Data(newArray);
-          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'c650') {
           setTechizatC650Data(newArray);
-          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'hangar') {
           setTechizatHangarData(newArray);
-          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'kara_araclari') {
           setTechizatKaraAraclariData(newArray);
-          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(newArray));
+          void 0;
         }
 
         // Sync back to online central sheet
@@ -1740,28 +1704,28 @@ export default function App() {
         // Save back to local states
         if (techType === 'bell429') {
           setTechizatBell429Data(newArray);
-          localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'at802') {
           setTechizatAt802Data(newArray);
-          localStorage.setItem('excel_techizat_at802_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 't70') {
           setTechizatT70Data(newArray);
-          localStorage.setItem('excel_techizat_t70_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 't70_bumbi_backet') {
           setTechizatT70BumbiBacketData(newArray);
-          localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'b360') {
           setTechizatB360Data(newArray);
-          localStorage.setItem('excel_techizat_b360_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'c650') {
           setTechizatC650Data(newArray);
-          localStorage.setItem('excel_techizat_c650_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'hangar') {
           setTechizatHangarData(newArray);
-          localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(newArray));
+          void 0;
         } else if (techType === 'kara_araclari') {
           setTechizatKaraAraclariData(newArray);
-          localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(newArray));
+          void 0;
         }
 
         // Sync back to online central sheet
@@ -1813,7 +1777,6 @@ export default function App() {
     });
 
     setSubmittedEbysRequests(updatedList);
-    localStorage.setItem('submitted_ebys_requests', JSON.stringify(updatedList));
 
     try {
       showNotification("KONTROLÜ YAPAN FİRMA bilgisi e-tabloya güncelleniyor...");
@@ -1881,9 +1844,7 @@ export default function App() {
             route: row["Güzergah"] || row["Route"] || ""
           }));
 
-          // Set and sync unconditionally to correctly clear local storage/state if everything is deleted on Sheets
           setKaraAraclariGorevEmirleri(mapped);
-          localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(mapped));
         }
       }
     } catch (err) {
@@ -1934,13 +1895,7 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    localStorage.setItem('techizat_images', JSON.stringify(techizatImages));
-  }, [techizatImages]);
-
-  useEffect(() => {
-    localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(karaAraclariGorevEmirleri));
-  }, [karaAraclariGorevEmirleri]);
+  // LocalStorage effect removed
 
   // Ctrl+F Keyboard Shortcut Listener for PDF Search Input (Allows native browser Ctrl+F to open)
   useEffect(() => {
@@ -2038,7 +1993,7 @@ export default function App() {
 
   // State for Personnel Info Excel 537 rows x 12 columns
   const [excelForm5Data, setExcelForm5Data] = useState<string[][]>(() => {
-    const stored = localStorage.getItem('excel_form_5_data');
+    const stored = null;
     if (stored) {
       try {
         return JSON.parse(stored);
@@ -2105,6 +2060,7 @@ export default function App() {
   const [isBarkodOkuyucuOpen, setIsBarkodOkuyucuOpen] = useState<boolean>(false);
   const [barkodOkuyucuInitialUnit, setBarkodOkuyucuInitialUnit] = useState<string>('at802');
   const [isPersonelEgitimModalOpen, setIsPersonelEgitimModalOpen] = useState<boolean>(false);
+  const [isPersonelBilgiModalOpen, setIsPersonelBilgiModalOpen] = useState<boolean>(false);
 
   // Akıllı Teçhizat Görsel Eşleştirici: AT-802, Hangar ve tüm birimler için seri no, parça no veya isimle tam uyumlu görseli bulur
   const findRowImageUrl = (techType: string, row: string[], images: Record<string, string>): string | null => {
@@ -2582,8 +2538,41 @@ export default function App() {
       setTechizatAt802Data([]);
     } else if (actualType === 'at802_ozel_alet') {
       setTechizatAt802OzelAletData([]);
+    } else if (actualType === 'bell429') {
+      setTechizatBell429Data([]);
+    } else if (actualType === 'hangar') {
+      setTechizatHangarData([]);
+    } else if (actualType === 't70') {
+      setTechizatT70Data([]);
+    } else if (actualType === 'c650') {
+      setTechizatC650Data([]);
+    } else if (actualType === 'b360') {
+      setTechizatB360Data([]);
     }
   };
+
+  useEffect(() => {
+    // Zero-Cache compliance: Purge any legacy cached data from browser storage so state only reflects Google Drive
+    try {
+      const keysToPurge = [
+        'ogm_depo_inventory_v5',
+        'ogm_depo_transactions_v5',
+        'excel_techizat_hangar_data',
+        'excel_techizat_at802_data',
+        'excel_techizat_bell429_data',
+        'excel_techizat_t70_data',
+        'excel_techizat_c650_data',
+        'excel_techizat_b360_data',
+        'techizat_at802_data',
+        'techizat_bell429_data',
+        'techizat_hangar_data',
+        'excel_form_5_data'
+      ];
+      keysToPurge.forEach(k => {
+        try { localStorage.removeItem(k); } catch (_) {}
+      });
+    } catch (_) {}
+  }, []);
 
   // Open Depo Management Modal directly in the main system
   const openStandaloneDepo = (unitKey?: string) => {
@@ -2603,29 +2592,16 @@ export default function App() {
   // Persistence for Vehicle Documents, Depo Transactions & Audit Logs
   const [vehicleDocuments, setVehicleDocuments] = useState<VehicleDocument[]>(() => {
     try {
-      const saved = localStorage.getItem('kara_araclari_vehicle_documents');
+      const saved = null;
       if (saved) return JSON.parse(saved);
     } catch (e) { console.error(e); }
     return [];
   });
 
-  const [depoTransactions, setDepoTransactions] = useState<DepoTransaction[]>(() => {
-    try {
-      const saved = localStorage.getItem('ogm_depo_transfers_v5');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {}
-    return [];
-  });
+  const [depoTransactions, setDepoTransactions] = useState<DepoTransaction[]>([]);
 
   useEffect(() => {
-    if (depoTransactions.length > 0) {
-      try {
-        localStorage.setItem('ogm_depo_transfers_v5', JSON.stringify(depoTransactions));
-      } catch (e) {}
-    }
+    // Depo transactions now handled via Drive sync and server proxy exclusively
   }, [depoTransactions]);
 
   useEffect(() => {
@@ -2650,14 +2626,14 @@ export default function App() {
 
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() => {
     try {
-      const saved = localStorage.getItem('equipment_audit_logs');
+      const saved = null;
       if (saved) return JSON.parse(saved);
     } catch (e) { console.error(e); }
     return [];
   });
 
   const [depoCertificatePdfUrl, setDepoCertificatePdfUrl] = useState<string | null>(() => {
-    return localStorage.getItem('depo_certificate_pdf_url') || null;
+    return null;
   });
 
   const addAuditLog = (entry: Omit<AuditLogEntry, 'id' | 'timestamp'>) => {
@@ -2668,7 +2644,7 @@ export default function App() {
     };
     setAuditLogs(prev => {
       const updated = [newLog, ...prev];
-      try { localStorage.setItem('equipment_audit_logs', JSON.stringify(updated.slice(0, 500))); } catch (e) {}
+      try { void 0; } catch (e) {}
       return updated;
     });
   };
@@ -2711,7 +2687,7 @@ export default function App() {
         const rowWithIndex = [...formattedRow];
         rowWithIndex[0] = String(nextIndex);
         const updated = [...prev, rowWithIndex];
-        try { localStorage.setItem(targetKey, JSON.stringify(updated)); } catch (e) {}
+        try { void 0; } catch (e) {}
         return updated;
       });
 
@@ -4297,7 +4273,7 @@ export default function App() {
         if (result && result.status === "success" && result.images) {
           setTechizatImages(prev => {
             const merged = { ...prev, ...result.images };
-            localStorage.setItem('techizat_images', JSON.stringify(merged));
+            void 0;
             return merged;
           });
         }
@@ -4422,7 +4398,7 @@ export default function App() {
                 }
               }
             });
-            localStorage.setItem("form_update_dates", JSON.stringify(dates));
+            void 0;
             return dates;
           });
         }
@@ -4438,7 +4414,7 @@ export default function App() {
 
   // Form last update dates tracker mapping form ID or custom teçhizat string to string (e.g. "05.01.2026 15:30")
   const [formUpdateDates, setFormUpdateDates] = useState<Record<string | number, string>>(() => {
-    const saved = localStorage.getItem("form_update_dates");
+    const saved = null;
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -4456,7 +4432,7 @@ export default function App() {
     
     setFormUpdateDates(prev => {
       const updated = { ...prev, [formId]: formatted };
-      localStorage.setItem("form_update_dates", JSON.stringify(updated));
+      void 0;
       return updated;
     });
   };
@@ -4471,7 +4447,7 @@ export default function App() {
     const ts = getFormattedTimestamp();
     setFormUpdateDates(prev => {
       const next = { ...prev, [`techizat_${uKey}`]: ts };
-      try { localStorage.setItem('form_update_dates', JSON.stringify(next)); } catch(e){}
+      try { void 0; } catch(e){}
       return next;
     });
   };
@@ -4649,34 +4625,37 @@ export default function App() {
   };
   const [isSorumluModalOpen, setIsSorumluModalOpen] = useState(false);
   const [isSavingSorumlu, setIsSavingSorumlu] = useState(false);
-  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; mail90?: string; mail60?: string; mail30?: string; }[]>(() => {
+  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; norm?: string; mail90?: string; mail60?: string; mail30?: string; }[]>(() => {
     try {
-      const saved = localStorage.getItem('gun_takip_sorumlulari');
+      const saved = null;
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch(e) {}
     return [
-      { birim: "AT-802 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "AT-802 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "AT-802 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "BELL 429 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "BELL 429 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "BELL 429 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "T-70 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "T-70 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "T-70 HELİTAK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "B-360 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "B-360 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "B-360 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "C-650 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "C-650 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "C-650 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" },
-      { birim: "KARA ARAÇLARI BAKIM & MUAYENE", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", mail90: "" }
+      { birim: "AT-802 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
+      { birim: "AT-802 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "AT-802 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "AT-802 YAŞAM DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Can Yeleği, Spare Air & Kask Kit SKT / Periyodik Kontrol Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "BELL 429 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
+      { birim: "BELL 429 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "BELL 429 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "T-70 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
+      { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "T-70 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yangın Kovası Periyodik Bakım & Kontrol Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "T-70 HELİTAK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Helitak Teçhizat Kalibrasyon & Bakım Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "B-360 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
+      { birim: "B-360 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "B-360 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "C-650 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
+      { birim: "C-650 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "C-650 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Hangar Ekipmanları Son Kontrol / Kalibrasyon / Bakım Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "KARA ARAÇLARI BAKIM & MUAYENE", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Araç Bakım Tarihi & Sonraki Bakım/KM Yaklaşım Takibi (3 Ay Kala)", mail90: "" },
+      { birim: "PERSONEL BİLGİ SİSTEMİ", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "OGM Periyodik Sağlık Muayene Tarih Takibi (1 Ay Kala)", mail90: "" },
+      { birim: "PERSONEL EĞİTİM BİLİGİ SİSTEMİ", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "3 Yıllık İSG Periyodik Eğitim Yenileme Tarih Takibi (1 Ay Kala)", mail90: "" }
     ];
   });
 
@@ -5551,39 +5530,39 @@ export default function App() {
     if (techType === 'bell429') {
       updated = applyRowUpdate(techizatBell429Data);
       setTechizatBell429Data(updated);
-      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 'at802') {
       updated = applyRowUpdate(techizatAt802Data);
       setTechizatAt802Data(updated);
-      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 't70') {
       updated = applyRowUpdate(techizatT70Data);
       setTechizatT70Data(updated);
-      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 't70_bumbi_backet') {
       updated = applyRowUpdate(techizatT70BumbiBacketData);
       setTechizatT70BumbiBacketData(updated);
-      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 't70_helitak') {
       updated = applyRowUpdate(techizatT70HelitakData);
       setTechizatT70HelitakData(updated);
-      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 'b360') {
       updated = applyRowUpdate(techizatB360Data);
       setTechizatB360Data(updated);
-      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 'c650') {
       updated = applyRowUpdate(techizatC650Data);
       setTechizatC650Data(updated);
-      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 'hangar') {
       updated = applyRowUpdate(techizatHangarData);
       setTechizatHangarData(updated);
-      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updated));
+      void 0;
     } else if (techType === 'kara_araclari') {
       updated = applyRowUpdate(techizatKaraAraclariData);
       setTechizatKaraAraclariData(updated);
-      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updated));
+      void 0;
     }
 
     // Close modal immediately and show immediate responsive feedback
@@ -5622,39 +5601,39 @@ export default function App() {
     if (techType === 'bell429') {
       updatedList = filterRow(techizatBell429Data);
       setTechizatBell429Data(updatedList);
-      localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 'at802') {
       updatedList = filterRow(techizatAt802Data);
       setTechizatAt802Data(updatedList);
-      localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 't70') {
       updatedList = filterRow(techizatT70Data);
       setTechizatT70Data(updatedList);
-      localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 't70_bumbi_backet') {
       updatedList = filterRow(techizatT70BumbiBacketData);
       setTechizatT70BumbiBacketData(updatedList);
-      localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 't70_helitak') {
       updatedList = filterRow(techizatT70HelitakData);
       setTechizatT70HelitakData(updatedList);
-      localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 'b360') {
       updatedList = filterRow(techizatB360Data);
       setTechizatB360Data(updatedList);
-      localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 'c650') {
       updatedList = filterRow(techizatC650Data);
       setTechizatC650Data(updatedList);
-      localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 'hangar') {
       updatedList = filterRow(techizatHangarData);
       setTechizatHangarData(updatedList);
-      localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updatedList));
+      void 0;
     } else if (techType === 'kara_araclari') {
       updatedList = filterRow(techizatKaraAraclariData);
       setTechizatKaraAraclariData(updatedList);
-      localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedList));
+      void 0;
     }
 
     // Modal'ı hemen kapat ve kullanıcıya anında bildirim ver
@@ -5770,8 +5749,8 @@ export default function App() {
 
       // Her iki localStorage anahtarını da güncelle
       try {
-        localStorage.setItem(`excel_techizat_${techType}_data`, JSON.stringify(updatedList));
-        localStorage.setItem(`techizat_${techType}_data`, JSON.stringify(updatedList));
+        void 0;
+        void 0;
       } catch (err) {
         console.error("Storage error:", err);
       }
@@ -5869,15 +5848,15 @@ export default function App() {
     }
 
     const updated = [...currentList, newRow];
-    if (targetUnit === 'bell429') { setTechizatBell429Data(updated); localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(updated)); }
-    else if (targetUnit === 'at802') { setTechizatAt802Data(updated); localStorage.setItem('excel_techizat_at802_data', JSON.stringify(updated)); }
-    else if (targetUnit === 't70') { setTechizatT70Data(updated); localStorage.setItem('excel_techizat_t70_data', JSON.stringify(updated)); }
-    else if (targetUnit === 't70_bumbi_backet') { setTechizatT70BumbiBacketData(updated); localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(updated)); }
-    else if (targetUnit === 't70_helitak') { setTechizatT70HelitakData(updated); localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(updated)); }
-    else if (targetUnit === 'b360') { setTechizatB360Data(updated); localStorage.setItem('excel_techizat_b360_data', JSON.stringify(updated)); }
-    else if (targetUnit === 'c650') { setTechizatC650Data(updated); localStorage.setItem('excel_techizat_c650_data', JSON.stringify(updated)); }
-    else if (targetUnit === 'hangar') { setTechizatHangarData(updated); localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(updated)); }
-    else if (targetUnit === 'kara_araclari') { setTechizatKaraAraclariData(updated); localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updated)); }
+    if (targetUnit === 'bell429') { setTechizatBell429Data(updated); }
+    else if (targetUnit === 'at802') { setTechizatAt802Data(updated); }
+    else if (targetUnit === 't70') { setTechizatT70Data(updated); }
+    else if (targetUnit === 't70_bumbi_backet') { setTechizatT70BumbiBacketData(updated); }
+    else if (targetUnit === 't70_helitak') { setTechizatT70HelitakData(updated); }
+    else if (targetUnit === 'b360') { setTechizatB360Data(updated); }
+    else if (targetUnit === 'c650') { setTechizatC650Data(updated); }
+    else if (targetUnit === 'hangar') { setTechizatHangarData(updated); }
+    else if (targetUnit === 'kara_araclari') { setTechizatKaraAraclariData(updated); }
 
     setIsNewProductModalOpen(false);
     showNotification("Yeni ürün/kayıt başarıyla eklendi! Google Drive Excel dosyası güncelleniyor...");
@@ -5963,11 +5942,11 @@ export default function App() {
             }
           });
           setExcelForm5Data(gridData);
-          localStorage.setItem('excel_form_5_data', JSON.stringify(gridData));
+          void 0;
         } else {
           const newTableData = { ...tableData, [formId]: parsedRows };
           setTableData(newTableData);
-          localStorage.setItem(config.storageKey, JSON.stringify(parsedRows));
+          void 0;
         }
         // Sadece veri çekildiğinde güncelleme tarihi değiştirilmez, e-tablodaki gerçek son değişiklik tarihi okunur:
         fetchUpdateDatesFromGoogleSheet();
@@ -6657,41 +6636,19 @@ export default function App() {
         const targetFileName = UNIT_EXCEL_MAP[uKey] || `hava_araçları_yer_destek_${uKey}.xlsx`;
         const explicitFileId = UNIT_FILE_IDS[uKey] || '';
         try {
-          let result: any = null;
-          // 1. Local backend proxy'yi dene
-          try {
-            const res = await fetch('/api/read-excel-from-drive', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                fileName: targetFileName,
-                fileId: explicitFileId,
-                folderId: '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP'
-              })
-            });
-            if (res.ok) {
-              result = await res.json();
-            }
-          } catch (e) {}
-
-          // 2. Netlify / Static ortamda doğrudan Google Apps Script GET isteği ile oku (CORS problemsiz)
-          if (!result || result.status !== 'success' || !result.base64) {
-            try {
-              const gasUrl = `${GOOGLE_SCRIPT_URL}?action=readExcelFromDrive&fileName=${encodeURIComponent(targetFileName)}&folderId=1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP&t=${Date.now()}`;
-              const gasRes = await fetch(gasUrl);
-              if (gasRes.ok) {
-                result = await gasRes.json();
-              }
-            } catch (gasErr) {
-              console.warn("GAS GET readExcel error:", gasErr);
-            }
-          }
+          const candidates = [
+            targetFileName,
+            targetFileName.replace(/ç/g, 'c').replace(/ı/g, 'i'),
+            targetFileName.replace(/-/g, '_'),
+            targetFileName.replace(/_/g, '-')
+          ];
+          const result = await fetchExcelFromDrive(targetFileName, candidates, '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP');
 
           if (result && result.status === 'success' && result.base64) {
             if (result.updated) {
               setFormUpdateDates(prev => {
                 const up = { ...prev, [`techizat_${uKey}`]: result.updated };
-                localStorage.setItem("form_update_dates", JSON.stringify(up));
+                void 0;
                 return up;
               });
             }
@@ -6737,7 +6694,7 @@ export default function App() {
           keysToFetch.forEach(k => {
             next[`techizat_${k}`] = nowStr;
           });
-          try { localStorage.setItem('form_update_dates', JSON.stringify(next)); } catch(e){}
+          try { void 0; } catch(e){}
           return next;
         });
         const unitLabel = targetUnitKey && targetUnitKey !== 'all' ? targetUnitKey.toUpperCase() : 'Birimler';
@@ -6768,17 +6725,18 @@ export default function App() {
         const result = await response.json();
         if (result.status === "success" && Array.isArray(result.data)) {
           const mapped = result.data.map((row: any) => ({
-            birim: String(row["SORUMLU BİRİM"] || row["Sorumlu Birim"] || "").trim().toUpperCase(),
-            adSoyad: String(row["ADI SOYADI"] || row["Adı Soyadı"] || row["AD SOYAD"] || "").trim(),
-            eposta: String(row["E-POSTA ADRESİ"] || row["E-posta Adresi"] || row["EPOSTA ADRESI"] || "").trim(),
-            mail90: String(row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["90 Gün Uyarı Mail Gönderim Tarihi"] || row["90 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
-            mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["60 Gün Uyarı Mail Gönderim Tarihi"] || row["60 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim(),
-            mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row["30 Gün Uyarı Mail Gönderim Tarihi"] || row["30 GUN UYARISI MAIL GONDERIM TARIHI"] || "").trim()
+            birim: String(row["SORUMLU BİRİM"] || row["Sorumlu Birim"] || row[0] || "").trim().toUpperCase(),
+            adSoyad: String(row["ADI SOYADI"] || row["Adı Soyadı"] || row["AD SOYAD"] || row[1] || "").trim(),
+            eposta: String(row["E-POSTA ADRESİ"] || row["E-posta Adresi"] || row["EPOSTA ADRESI"] || row[2] || "").trim(),
+            norm: String(row["TAKİP EDİLECEK NORM"] || row["Norm"] || row["TAKIP EDILICEK NORM"] || row[3] || "").trim(),
+            mail90: String(row["SON BİLDİRİM TARİHİ"] || row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[4] || "").trim(),
+            mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[5] || "").trim(),
+            mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[6] || "").trim()
           })).filter((item: any) => item.birim);
           
           if (mapped.length > 0) {
             setGunTakipSorumlulari(mapped);
-            try { localStorage.setItem('gun_takip_sorumlulari', JSON.stringify(mapped)); } catch(e){}
+            try { void 0; } catch(e){}
           }
         }
       }
@@ -6794,6 +6752,7 @@ export default function App() {
         item.birim,
         item.adSoyad,
         item.eposta,
+        item.norm || '',
         item.mail90 || '',
         item.mail60 || '',
         item.mail30 || ''
@@ -6810,7 +6769,7 @@ export default function App() {
       const result = await response.json();
       if (result.status === "success") {
         setGunTakipSorumlulari(updatedData);
-        try { localStorage.setItem('gun_takip_sorumlulari', JSON.stringify(updatedData)); } catch(e){}
+        try { void 0; } catch(e){}
         showNotification("Sorumlu Personel (Gün Takip) Verileri Başarıyla Güncellendi!");
       } else {
         alert("E-Tablo Güncelleme Hatası: " + result.message);
@@ -6960,10 +6919,7 @@ export default function App() {
       setPasswordError(false);
 
       if (passwordActionType === 'personel_bilgi') {
-        setSelectedFormId(5);
-        setModalType('form_table');
-        setModalTitle(TABLE_CONFIGS[5].title);
-        setSearchQuery('');
+        setIsPersonelBilgiModalOpen(true);
         return;
       }
 
@@ -7010,7 +6966,7 @@ export default function App() {
     
     const newTableData = { ...tableData, [formId]: updatedRows };
     setTableData(newTableData);
-    localStorage.setItem(TABLE_CONFIGS[formId].storageKey, JSON.stringify(updatedRows));
+    void 0;
 
     // Update real-time feedback with dynamic confirm readback message
     const timeNow = new Date().toLocaleTimeString('tr-TR');
@@ -7031,7 +6987,7 @@ export default function App() {
     const updatedRows = [...(tableData[formId] || []), newRow];
     const newTableData = { ...tableData, [formId]: updatedRows };
     setTableData(newTableData);
-    localStorage.setItem(TABLE_CONFIGS[formId].storageKey, JSON.stringify(updatedRows));
+    void 0;
     
     const timeNow = new Date().toLocaleTimeString('tr-TR');
     setDataFeedback(prev => ({
@@ -7046,7 +7002,7 @@ export default function App() {
     const updatedRows = (tableData[formId] || []).filter((_, idx) => idx !== rowIndex);
     const newTableData = { ...tableData, [formId]: updatedRows };
     setTableData(newTableData);
-    localStorage.setItem(TABLE_CONFIGS[formId].storageKey, JSON.stringify(updatedRows));
+    void 0;
     
     const timeNow = new Date().toLocaleTimeString('tr-TR');
     setDataFeedback(prev => ({
@@ -7632,50 +7588,50 @@ export default function App() {
           if (techType === 'bell429') {
             setTechizatBell429Columns(finalHeaders);
             setTechizatBell429Data(finalDataToSave);
-            localStorage.setItem('excel_techizat_bell429_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_bell429_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 'at802') {
             setTechizatAt802Columns(finalHeaders);
             setTechizatAt802Data(finalDataToSave);
-            localStorage.setItem('excel_techizat_at802_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_at802_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 't70') {
             setTechizatT70Columns(finalHeaders);
             setTechizatT70Data(finalDataToSave);
-            localStorage.setItem('excel_techizat_t70_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_t70_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 't70_bumbi_backet') {
             setTechizatT70BumbiBacketColumns(finalHeaders);
             setTechizatT70BumbiBacketData(finalDataToSave);
-            localStorage.setItem('excel_techizat_t70_bumbi_backet_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_t70_bumbi_backet_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 't70_helitak') {
             setTechizatT70HelitakColumns(finalHeaders);
             setTechizatT70HelitakData(finalDataToSave);
-            localStorage.setItem('excel_techizat_t70_helitak_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_t70_helitak_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 'b360') {
             setTechizatB360Columns(finalHeaders);
             setTechizatB360Data(finalDataToSave);
-            localStorage.setItem('excel_techizat_b360_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_b360_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 'c650') {
             setTechizatC650Columns(finalHeaders);
             setTechizatC650Data(finalDataToSave);
-            localStorage.setItem('excel_techizat_c650_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_c650_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 'hangar') {
             setTechizatHangarColumns(finalHeaders);
             setTechizatHangarData(finalDataToSave);
-            localStorage.setItem('excel_techizat_hangar_cols', JSON.stringify(finalHeaders));
-            localStorage.setItem('excel_techizat_hangar_data', JSON.stringify(finalDataToSave));
+            void 0;
+            void 0;
           } else if (techType === 'kara_araclari') {
             const convertedRows = finalDataToSave.map(row => convertOldKaraAraclariRowToNew(row));
             const newCols = ["SIRA NO", "ARAÇ PLAKASI / TANIMI", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"];
             setTechizatKaraAraclariColumns(newCols);
             setTechizatKaraAraclariData(convertedRows);
-            localStorage.setItem('excel_techizat_kara_araclari_cols', JSON.stringify(newCols));
-            localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(convertedRows));
+            void 0;
+            void 0;
           }
 
           // Sync specifically to "TÜM TECHİZAT" online Google Sheet
@@ -7727,23 +7683,9 @@ export default function App() {
 
               const prettyUnitName = getCleanSyncTargetTitle(String(syncSelectedTarget));
 
-              const res = await fetch("/api/upload-techizat-excel", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                  fileName: driveFileName,
-                  targetKey: syncSelectedTarget,
-                  base64Data: base64Data,
-                  folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
-                })
-              });
-              if (res.ok) {
-                const result = await res.json();
-                if (result.status === "success") {
-                  showNotification(`'${driveFileName}' (${prettyUnitName}) güncel Excel belgesi Google Drive'a başarıyla yedeklendi!`);
-                }
+              const resOk = await uploadExcelToDrive(driveFileName, base64Data, String(syncSelectedTarget), "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP");
+              if (resOk) {
+                showNotification(`'${driveFileName}' (${prettyUnitName}) güncel Excel belgesi Google Drive'a başarıyla yedeklendi!`);
               }
             } catch (err) {
               console.error("Failed to backup Teçhizat Excel to Google Drive:", err);
@@ -7972,12 +7914,12 @@ export default function App() {
 
               // 3. Only on complete success, we write to local state and cache!
               setExcelForm5Data(gridData);
-              localStorage.setItem('excel_form_5_data', JSON.stringify(gridData));
+              void 0;
 
               const now = new Date();
               const dateStr = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
               setFormUpdateDates(prev => ({ ...prev, 5: dateStr }));
-              localStorage.setItem('form_update_dates', JSON.stringify({ ...formUpdateDates, 5: dateStr }));
+              void 0;
 
               // Mock a matching PDF metadata item so the UI registers it as loaded
               const excelPdfMeta = {
@@ -11131,7 +11073,7 @@ export default function App() {
                                 title="Google Drive klasöründeki güncel Excel dosyasından sadece bu sayfanın verilerini yeniler"
                               >
                                 <RefreshCw className={`w-4 h-4 text-emerald-300 ${isTechizatDriveLoading ? 'animate-spin' : ''}`} />
-                                <span>{isTechizatDriveLoading ? 'DRİVE BAĞLANIYOR...' : 'DRİVE İLE SENKRONİZE ET'}</span>
+                                <span>{isTechizatDriveLoading ? 'BAĞLANILIYOR...' : 'DRİVE İLE SENKRONİZE ET'}</span>
                               </button>
 
                               {activeTechizatType !== 'all' && (
@@ -11357,7 +11299,7 @@ export default function App() {
                                         className="mt-2 px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black font-mono text-sm rounded-2xl flex items-center gap-3 transition-all cursor-pointer shadow-xl shadow-emerald-950/20 border border-emerald-500"
                                       >
                                         <RefreshCw className={`w-4 h-4 text-white ${isTechizatDriveLoading ? 'animate-spin' : ''}`} />
-                                        <span>{isTechizatDriveLoading ? 'GOOGLE DRİVE BAĞLANIYOR...' : 'ARA / CANLI VERİLERİ GETİR'}</span>
+                                        <span>{isTechizatDriveLoading ? 'BAĞLANILIYOR...' : 'ARA / CANLI VERİLERİ GETİR'}</span>
                                       </button>
                                     )}
                                   </div>
@@ -12197,7 +12139,7 @@ export default function App() {
 
                                   const updatedOrders = [newOrder, ...karaAraclariGorevEmirleri];
                                   setKaraAraclariGorevEmirleri(updatedOrders);
-                                  localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updatedOrders));
+                                  void 0;
                                   pushKaraAraclariGorevEmirleri(updatedOrders);
 
                                   if (gePlaka && geReturnKm) {
@@ -12210,9 +12152,9 @@ export default function App() {
                                       return row;
                                     });
                                     setTechizatKaraAraclariData(updatedKara);
-                                    localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedKara));
-                                    localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(updatedKara));
-                                    localStorage.setItem('excel_kara_araclari_data', JSON.stringify(updatedKara));
+                                    void 0;
+                                    void 0;
+                                    void 0;
                                     syncTechizatExcelToGoogleDrive('kara_araclari', updatedKara);
                                     publishCrossSystemEvent('KARA_ARACI_UPDATED', 'portal', { count: updatedKara.length });
                                   }
@@ -13418,7 +13360,7 @@ export default function App() {
                             const newUrl = resJson.downloadUrl || resJson.viewUrl || `data:${mimeType};base64,${base64Data}`;
                             setTechizatImages(prev => {
                               const updated = { ...prev, [imageKey]: newUrl };
-                              localStorage.setItem('techizat_images', JSON.stringify(updated));
+                              void 0;
                               return updated;
                             });
                             showNotification("Görsel başarıyla Drive'a yüklendi ve güncellendi!");
@@ -13426,7 +13368,7 @@ export default function App() {
                             const dataUrl = `data:${mimeType};base64,${base64Data}`;
                             setTechizatImages(prev => {
                               const updated = { ...prev, [imageKey]: dataUrl };
-                              localStorage.setItem('techizat_images', JSON.stringify(updated));
+                              void 0;
                               return updated;
                             });
                             showNotification("Görsel yerel hafızaya kaydedildi!");
@@ -13436,7 +13378,7 @@ export default function App() {
                           const dataUrl = `data:${mimeType};base64,${base64Data}`;
                           setTechizatImages(prev => {
                             const updated = { ...prev, [imageKey]: dataUrl };
-                            localStorage.setItem('techizat_images', JSON.stringify(updated));
+                            void 0;
                             return updated;
                           });
                           showNotification("Görsel yerel hafızaya kaydedildi!");
@@ -13448,7 +13390,7 @@ export default function App() {
                         setTechizatImages(prev => {
                           const copy = { ...prev };
                           delete copy[imageKey];
-                          localStorage.setItem('techizat_images', JSON.stringify(copy));
+                          void 0;
                           return copy;
                         });
                         showNotification("Görsel silindi!");
@@ -13626,8 +13568,8 @@ export default function App() {
                     setHangarPdfDocs(prev => {
                       const updated = prev.filter(d => d.id !== docToDelete);
                       try {
-                        localStorage.setItem('hangar_pdf_docs', JSON.stringify(updated));
-                        localStorage.setItem('hangar_techizat_pdf_docs', JSON.stringify(updated));
+                        void 0;
+                        void 0;
                       } catch {
                         // ignore
                       }
@@ -13665,8 +13607,8 @@ export default function App() {
                     setHangarPdfDocs(prev => {
                       const updated = [newDoc, ...prev.filter(d => d.id !== newDoc.id)];
                       try {
-                        localStorage.setItem('hangar_pdf_docs', JSON.stringify(updated));
-                        localStorage.setItem('hangar_techizat_pdf_docs', JSON.stringify(updated));
+                        void 0;
+                        void 0;
                       } catch {
                         // ignore
                       }
@@ -13786,7 +13728,7 @@ export default function App() {
 
             // Sync to Table 7 (DEPO SAYIM KAYITLARI)
             try {
-              const stored = localStorage.getItem('form_7_sayimlar');
+              const stored = null;
               const currentLogs = stored ? JSON.parse(stored) : [];
               const newRows = newTxs
                 .filter(tx => tx.islemTuru?.includes('SAYIM') || tx.type === 'SAYIM')
@@ -13803,7 +13745,7 @@ export default function App() {
                 }));
               
               if (newRows.length > 0) {
-                localStorage.setItem('form_7_sayimlar', JSON.stringify([...newRows, ...currentLogs]));
+                void 0;
               }
             } catch (e) {}
 
@@ -13839,7 +13781,7 @@ export default function App() {
             // Sync to Table 7 (DEPO SAYIM KAYITLARI) if it's a counting action
             if (newTx.islemTuru?.includes('SAYIM') || newTx.type === 'SAYIM') {
               try {
-                const stored = localStorage.getItem('form_7_sayimlar');
+                const stored = null;
                 const currentLogs = stored ? JSON.parse(stored) : [];
                 const newRow = {
                   Tarih: newTx.date || new Date().toLocaleString('tr-TR'),
@@ -13852,7 +13794,7 @@ export default function App() {
                   Fark: newTx.fark ?? '-',
                   Personel: newTx.operator || '-'
                 };
-                localStorage.setItem('form_7_sayimlar', JSON.stringify([newRow, ...currentLogs]));
+                void 0;
               } catch (e) {}
             }
             
@@ -13879,7 +13821,7 @@ export default function App() {
           }}
           onUpdateInventory={async (updated) => {
             try {
-              localStorage.setItem('ogm_depo_inventory_v5', JSON.stringify(updated));
+              void 0;
               const unit = barkodOkuyucuInitialUnit || 'at802';
               const sheetName = unit.toUpperCase() + '_SARF_DEPO';
               
@@ -13921,7 +13863,9 @@ export default function App() {
               </button>
             </div>
             <p className="text-xs text-slate-700 font-medium">
-              Veri güncelleme ve depo yönetim ekranına erişmek için lütfen 4 haneli yetkili şifrenizi giriniz.
+              {passwordActionType === 'personel_bilgi'
+                ? 'Personel Bilgi Sistemine erişmek için lütfen 4 haneli yetkili şifrenizi giriniz.'
+                : 'Veri güncelleme ve depo yönetim ekranına erişmek için lütfen 4 haneli yetkili şifrenizi giriniz.'}
             </p>
             <div>
               <input
@@ -14029,7 +13973,7 @@ export default function App() {
                     if (geDeleteOrderId) {
                       const updated = karaAraclariGorevEmirleri.filter(o => String(o.id) !== geDeleteOrderId);
                       setKaraAraclariGorevEmirleri(updated);
-                      localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
+                      void 0;
                       pushKaraAraclariGorevEmirleri(updated);
                       showNotification("Görev emri başarıyla silindi!");
                     }
@@ -14332,34 +14276,34 @@ export default function App() {
             recordTechizatUpdate(cleanKey);
             if (cleanKey.includes('bell429')) {
               setTechizatBell429Data(newRows);
-              try { localStorage.setItem('techizat_bell429_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('at802_ozel_alet')) {
               setTechizatAt802OzelAletData(newRows);
-              try { localStorage.setItem('techizat_at802_ozel_alet_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('at802')) {
               setTechizatAt802Data(newRows);
-              try { localStorage.setItem('techizat_at802_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('t70_bumbi')) {
               setTechizatT70BumbiBacketData(newRows);
-              try { localStorage.setItem('techizat_t70_bumbi_backet_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('t70_helitak')) {
               setTechizatT70HelitakData(newRows);
-              try { localStorage.setItem('techizat_t70_helitak_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('t70')) {
               setTechizatT70Data(newRows);
-              try { localStorage.setItem('techizat_t70_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('b360')) {
               setTechizatB360Data(newRows);
-              try { localStorage.setItem('techizat_b360_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('c650')) {
               setTechizatC650Data(newRows);
-              try { localStorage.setItem('techizat_c650_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('hangar')) {
               setTechizatHangarData(newRows);
-              try { localStorage.setItem('techizat_hangar_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             } else if (cleanKey.includes('kara')) {
               setTechizatKaraAraclariData(newRows);
-              try { localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(newRows)); } catch(e){}
+              try { void 0; } catch(e){}
             }
           }}
           onApplyDriveSync={async () => {
@@ -14375,11 +14319,11 @@ export default function App() {
           }}
           onUpdatePersonnelData={(newRows) => {
             setExcelForm5Data(newRows);
-            try { localStorage.setItem('excel_form_5_data', JSON.stringify(newRows)); } catch(e){}
+            try { void 0; } catch(e){}
             const now = new Date();
             const dateStr = `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
             setFormUpdateDates(prev => ({ ...prev, 5: dateStr }));
-            try { localStorage.setItem('form_update_dates', JSON.stringify({ ...formUpdateDates, 5: dateStr })); } catch(e){}
+            try { void 0; } catch(e){}
           }}
           showNotification={(msg) => showNotification(msg)}
         />
@@ -14423,7 +14367,7 @@ export default function App() {
           logs={auditLogs}
           onClearLogs={() => {
             setAuditLogs([]);
-            localStorage.removeItem('equipment_audit_logs');
+            void 0;
             showNotification("Tüm denetim kayıtları temizlendi.");
           }}
         />
@@ -14440,7 +14384,7 @@ export default function App() {
           onUploadDocument={(newDoc) => {
             setVehicleDocuments(prev => {
               const updated = [newDoc, ...prev];
-              try { localStorage.setItem('kara_araclari_vehicle_documents', JSON.stringify(updated)); } catch (e) {}
+              try { void 0; } catch (e) {}
               return updated;
             });
             addAuditLog({
@@ -14457,7 +14401,7 @@ export default function App() {
           onDeleteDocument={(docId) => {
             setVehicleDocuments(prev => {
               const updated = prev.filter(d => d.id !== docId);
-              try { localStorage.setItem('kara_araclari_vehicle_documents', JSON.stringify(updated)); } catch (e) {}
+              try { void 0; } catch (e) {}
               return updated;
             });
             showNotification("Belge silindi.");
@@ -14483,6 +14427,15 @@ export default function App() {
         <PersonelEgitimModal
           isOpen={isPersonelEgitimModalOpen}
           onClose={() => setIsPersonelEgitimModalOpen(false)}
+          showNotification={(msg) => showNotification(msg)}
+        />
+      )}
+
+      {/* PERSONEL BİLGİ SİSTEMİ MODALI */}
+      {isPersonelBilgiModalOpen && (
+        <PersonelBilgiModal
+          isOpen={isPersonelBilgiModalOpen}
+          onClose={() => setIsPersonelBilgiModalOpen(false)}
           showNotification={(msg) => showNotification(msg)}
         />
       )}

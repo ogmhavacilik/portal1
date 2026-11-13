@@ -462,99 +462,551 @@ async function startServer() {
     }
   });
 
-  // API Route: Fast PDF Streaming & Proxy from Google Drive / GAS
+  // API Route: Fast PDF Streaming & Proxy from Google Drive / GAS / External URL
   app.get("/api/pdf-proxy", async (req, res) => {
     try {
       const fileId = String(req.query.fileId || "").trim();
+      const externalUrl = String(req.query.url || "").trim();
       const requestedFileName = String(req.query.fileName || "publication.pdf").trim();
-      if (!fileId) {
-        return res.status(400).send("fileId is required");
+      if (!fileId && !externalUrl) {
+        return res.status(400).send("fileId or url is required");
       }
 
-      // Determine MIME type based on file extension
       const getProxyMime = (fname: string, fallbackMime?: string): string => {
-        const ext = fname.split(".").pop()?.toLowerCase();
+        const ext = fname.split("?")[0].split(".").pop()?.toLowerCase();
         if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
         if (ext === "png") return "image/png";
         if (ext === "zip") return "application/zip";
         if (ext === "rar") return "application/x-rar-compressed";
         if (ext === "pdf") return "application/pdf";
-        return fallbackMime && fallbackMime !== "text/html" ? fallbackMime : "application/pdf";
+        return fallbackMime && !fallbackMime.includes("text/html") ? fallbackMime : "application/pdf";
+      };
+
+      const isPdfBuffer = (buf: Buffer): boolean => {
+        if (!buf || buf.length < 5) return false;
+        const head = buf.slice(0, 64).toString("utf8").trimStart();
+        return head.startsWith("%PDF-");
+      };
+
+      const sendBinaryResponse = (buf: Buffer, mime: string) => {
+        res.removeHeader("X-Frame-Options");
+        res.removeHeader("Content-Security-Policy");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Content-Type", mime);
+        res.setHeader("Content-Length", String(buf.length));
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(requestedFileName)}"`);
+        res.setHeader("Cache-Control", "public, max-age=3600");
+        return res.send(buf);
       };
 
       const computedMime = getProxyMime(requestedFileName);
 
-      // Try direct Google Drive download URL
-      const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+      // External PDF URL proxy mode (e.g. OGM Bulut PDF)
+      if (externalUrl) {
+        if (!/^https?:\/\//i.test(externalUrl)) {
+          return res.status(400).send("Invalid external url");
+        }
+        const extResp = await fetch(externalUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "application/pdf,application/octet-stream,*/*"
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(15000)
+        });
+        if (!extResp.ok) {
+          return res.status(extResp.status).send(`External PDF fetch error (${extResp.status})`);
+        }
+        const ab = await extResp.arrayBuffer();
+        const buf = Buffer.from(ab);
+        const respCt = extResp.headers.get("content-type") || computedMime;
+        if (computedMime === "application/pdf" && !isPdfBuffer(buf) && respCt.includes("text/html")) {
+          return res.status(502).send("External URL returned HTML instead of PDF");
+        }
+        return sendBinaryResponse(buf, isPdfBuffer(buf) ? "application/pdf" : getProxyMime(requestedFileName, respCt));
+      }
+
+      // Google Drive Download + Modern Virus-Scan / Large-File Form Bypass
+      const browserHeaders = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "application/pdf,application/octet-stream,text/html,*/*"
+      };
+
+      const downloadUrl = `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
       const response = await fetch(downloadUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        },
-        redirect: "follow"
+        headers: browserHeaders,
+        redirect: "follow",
+        signal: AbortSignal.timeout(25000)
       });
 
-      if (!response.ok) {
-        // Fallback: try GAS endpoint getPdfBase64
-        const gasUrl = `https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec?action=getPdfBase64&fileId=${fileId}`;
-        const gasResp = await fetch(gasUrl);
-        if (gasResp.ok) {
-          const gasData = await gasResp.json();
-          if (gasData && gasData.base64) {
-            const buf = Buffer.from(gasData.base64, 'base64');
-            res.setHeader("Content-Type", computedMime);
-            res.setHeader("Content-Disposition", `inline; filename="${requestedFileName}"`);
-            res.setHeader("Cache-Control", "public, max-age=86400");
-            return res.send(buf);
+      if (response.ok) {
+        const contentType = response.headers.get("content-type") || computedMime;
+        const firstBuf = Buffer.from(await response.arrayBuffer());
+
+        // If valid PDF (or non-HTML non-PDF asset requested), return immediately
+        if (isPdfBuffer(firstBuf) || (computedMime !== "application/pdf" && !contentType.includes("text/html"))) {
+          return sendBinaryResponse(firstBuf, isPdfBuffer(firstBuf) ? "application/pdf" : getProxyMime(requestedFileName, contentType));
+        }
+
+        // Handle Google Drive HTML confirmation page (old & new download-form)
+        if (contentType.includes("text/html") || firstBuf.slice(0, 64).toString("utf8").trimStart().startsWith("<")) {
+          const htmlText = firstBuf.toString("utf8");
+
+          // Method A: New drive.usercontent.google.com/download form
+          const formActionMatch = htmlText.match(/action="(https:\/\/drive\.usercontent\.google\.com\/download[^"]*)"/i)
+            || htmlText.match(/id="download-form"[^>]*action="([^"]+)"/i);
+          if (formActionMatch && formActionMatch[1]) {
+            const actionUrl = new URL(formActionMatch[1].replace(/&amp;/g, "&"));
+            const hiddenInputs = [...htmlText.matchAll(/<input[^>]*type=["']hidden["'][^>]*>/gi)];
+            for (const inp of hiddenInputs) {
+              const nameMatch = inp[0].match(/name=["']([^"']+)["']/i);
+              const valMatch = inp[0].match(/value=["']([^"']*)["']/i);
+              if (nameMatch && nameMatch[1]) {
+                actionUrl.searchParams.set(nameMatch[1], valMatch ? valMatch[1] : "");
+              }
+            }
+            if (!actionUrl.searchParams.has("confirm")) actionUrl.searchParams.set("confirm", "t");
+            if (!actionUrl.searchParams.has("export")) actionUrl.searchParams.set("export", "download");
+            if (!actionUrl.searchParams.has("id")) actionUrl.searchParams.set("id", fileId);
+
+            const confirmedResp = await fetch(actionUrl.toString(), {
+              headers: browserHeaders,
+              redirect: "follow",
+              signal: AbortSignal.timeout(30000)
+            });
+            if (confirmedResp.ok) {
+              const confirmedBuf = Buffer.from(await confirmedResp.arrayBuffer());
+              if (isPdfBuffer(confirmedBuf) || computedMime !== "application/pdf") {
+                return sendBinaryResponse(confirmedBuf, isPdfBuffer(confirmedBuf) ? "application/pdf" : getProxyMime(requestedFileName, confirmedResp.headers.get("content-type") || undefined));
+              }
+            }
+          }
+
+          // Method B: Legacy confirm=XXXX token
+          const confirmMatch = htmlText.match(/confirm=([0-9A-Za-z_-]+)/) || htmlText.match(/name="confirm"\s+value="([0-9A-Za-z_-]+)"/);
+          const directConfirmUrl = confirmMatch && confirmMatch[1]
+            ? `https://drive.google.com/uc?export=download&confirm=${confirmMatch[1]}&id=${encodeURIComponent(fileId)}`
+            : `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
+          const legacyResp = await fetch(directConfirmUrl, {
+            headers: browserHeaders,
+            redirect: "follow",
+            signal: AbortSignal.timeout(30000)
+          });
+          if (legacyResp.ok) {
+            const legacyBuf = Buffer.from(await legacyResp.arrayBuffer());
+            if (isPdfBuffer(legacyBuf) || (computedMime !== "application/pdf" && !(legacyResp.headers.get("content-type") || "").includes("text/html"))) {
+              return sendBinaryResponse(legacyBuf, isPdfBuffer(legacyBuf) ? "application/pdf" : getProxyMime(requestedFileName, legacyResp.headers.get("content-type") || undefined));
+            }
           }
         }
-        return res.status(response.status).send("Failed to retrieve document from Drive");
       }
 
-      const contentType = response.headers.get("content-type") || computedMime;
-      // Check if Google Drive returned a virus scan confirmation HTML page
-      if (contentType.includes("text/html")) {
-        const htmlText = await response.text();
-        const confirmMatch = htmlText.match(/confirm=([0-9A-Za-z_]+)/) || htmlText.match(/name="confirm"\s+value="([0-9A-Za-z_]+)"/);
-        if (confirmMatch && confirmMatch[1]) {
-          const confirmedUrl = `https://drive.google.com/uc?export=download&confirm=${confirmMatch[1]}&id=${fileId}`;
-          const confirmedResp = await fetch(confirmedUrl, { redirect: "follow" });
-          if (confirmedResp.ok) {
-            const arrayBuf = await confirmedResp.arrayBuffer();
-            const buf = Buffer.from(arrayBuf);
-            res.setHeader("Content-Type", getProxyMime(requestedFileName, confirmedResp.headers.get("content-type") || undefined));
-            res.setHeader("Content-Disposition", `inline; filename="${requestedFileName}"`);
-            res.setHeader("Cache-Control", "public, max-age=86400");
-            return res.send(buf);
+      // Fallback: try GAS endpoint getPdfBase64
+      const gasUrls = [
+        "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+      ];
+      for (const baseGas of gasUrls) {
+        try {
+          const gasResp = await fetch(`${baseGas}?action=getPdfBase64&fileId=${encodeURIComponent(fileId)}`, {
+            signal: AbortSignal.timeout(25000)
+          });
+          if (gasResp.ok) {
+            const text = await gasResp.text();
+            if (text && !text.trimStart().startsWith("<")) {
+              const gasData = JSON.parse(text);
+              const b64 = gasData?.base64 || gasData?.data;
+              if (b64) {
+                const cleanB64 = String(b64).replace(/^data:[^;]+;base64,/, "");
+                const buf = Buffer.from(cleanB64, "base64");
+                if (isPdfBuffer(buf) || computedMime !== "application/pdf") {
+                  return sendBinaryResponse(buf, isPdfBuffer(buf) ? "application/pdf" : computedMime);
+                }
+              }
+            }
           }
-        }
-
-        // Fallback to GAS getPdfBase64
-        const gasUrl = `https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec?action=getPdfBase64&fileId=${fileId}`;
-        const gasResp = await fetch(gasUrl);
-        if (gasResp.ok) {
-          const gasData = await gasResp.json();
-          if (gasData && gasData.base64) {
-            const buf = Buffer.from(gasData.base64, 'base64');
-            res.setHeader("Content-Type", computedMime);
-            res.setHeader("Content-Disposition", `inline; filename="${requestedFileName}"`);
-            res.setHeader("Cache-Control", "public, max-age=86400");
-            return res.send(buf);
-          }
+        } catch {
+          // try next GAS URL
         }
       }
 
-      const arrayBuf = await response.arrayBuffer();
-      const buf = Buffer.from(arrayBuf);
-      const finalMime = getProxyMime(requestedFileName, contentType);
-      res.setHeader("Content-Type", finalMime);
-      res.setHeader("Content-Disposition", `inline; filename="${requestedFileName}"`);
-      res.setHeader("Cache-Control", "public, max-age=86400");
-      return res.send(buf);
+      return res.status(502).json({
+        status: "error",
+        message: "PDF verisi Google Drive üzerinden alınamadı (HTML onay sayfası veya dosya erişim sınırı)."
+      });
     } catch (err: any) {
       console.error("[PDF Proxy] Error:", err.message);
       return res.status(500).send(`PDF fetch error: ${err.message}`);
     }
   });
+
+  // Cached reachability state for bulut.ogm.gov.tr (avoids repeated 8s timeouts when cloud IP is firewall-blocked)
+  let ogmReachabilityCache: { checkedAt: number; reachable: boolean } | null = null;
+  const OGM_CACHE_TTL_MS = 60_000;
+
+  const probeOgmReachability = async (targetUrl: string): Promise<{ reachable: boolean; status?: number }> => {
+    const now = Date.now();
+    if (ogmReachabilityCache && now - ogmReachabilityCache.checkedAt < OGM_CACHE_TTL_MS) {
+      return { reachable: ogmReachabilityCache.reachable };
+    }
+    try {
+      const resp = await fetch(targetUrl, {
+        method: "HEAD",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        },
+        redirect: "manual",
+        signal: AbortSignal.timeout(3500)
+      });
+      ogmReachabilityCache = { checkedAt: Date.now(), reachable: true };
+      return { reachable: true, status: resp.status };
+    } catch {
+      ogmReachabilityCache = { checkedAt: Date.now(), reachable: false };
+      return { reachable: false };
+    }
+  };
+
+  // API Route: Quick Reachability Probe for OGM Bulut (bulut.ogm.gov.tr)
+  app.get("/api/ogm-bulut-check", async (req, res) => {
+    const targetUrl = String(req.query.url || "https://bulut.ogm.gov.tr/app/tr-TR/Klasor/Paylas/OGMDrive/0b7eb51b-6174-4314-89bc-c26d74d78acc");
+    const force = String(req.query.force || "") === "1";
+    if (force) ogmReachabilityCache = null;
+
+    const probe = await probeOgmReachability(targetUrl);
+    if (probe.reachable) {
+      return res.json({ reachable: true, status: probe.status || 200 });
+    }
+    return res.json({
+      reachable: false,
+      geoBlocked: true,
+      message: "OGM Bulut sunucusuna bu sunucu IP adresinden erişilemedi (yerel tarayıcı / eklenti modu aktif)."
+    });
+  });
+
+  const buildOgmGeoBlockedFallbackHtml = (targetUrl: string) => {
+    const safeUrl = targetUrl.replace(/["'<>]/g, "");
+    return `<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>OGM Bulut Arşivi</title>
+  <script>
+    try { window.parent.postMessage({ type: "OGM_SWITCH_DIRECT" }, "*"); } catch (e) {}
+  </script>
+  <style>
+    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#020d07; color:#e2e8f0; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; box-sizing:border-box; }
+    .card { max-width:480px; width:100%; background:#071a10; border:1px solid rgba(16,185,129,0.35); border-radius:16px; padding:28px; text-align:center; box-shadow:0 20px 50px rgba(0,0,0,0.5); }
+    h2 { margin:0 0 10px; font-size:17px; color:#ffffff; }
+    p { margin:0 0 18px; font-size:13px; line-height:1.55; color:#94a3b8; }
+    a { cursor:pointer; font-size:12px; font-weight:700; padding:10px 18px; border-radius:10px; text-decoration:none; display:inline-flex; align-items:center; gap:6px; background:#059669; color:#ffffff; }
+    a:hover { background:#10b981; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>AT-802F OGM Bulut Klasörü</h2>
+    <p>Klasör bağlantısı hazırlanıyor. İçerik otomatik olarak yüklenmezse aşağıdaki bağlantıdan klasöre erişebilirsiniz.</p>
+    <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Klasörü Aç</a>
+  </div>
+</body>
+</html>`;
+  };
+
+  // Reverse Proxy & X-Frame-Options/CSP Unlocker for bulut.ogm.gov.tr
+  const handleOgmBulutProxy = async (req: express.Request, res: express.Response) => {
+    const OGM_ORIGIN = "https://bulut.ogm.gov.tr";
+    let targetUrlStr = "";
+    try {
+      if (req.query.url) {
+        targetUrlStr = String(req.query.url);
+      } else {
+        const subPath = req.originalUrl.replace(/^\/ogm-bulut-proxy/, "") || "/";
+        targetUrlStr = `${OGM_ORIGIN}${subPath.startsWith("/") ? subPath : `/${subPath}`}`;
+      }
+
+      if (!targetUrlStr.startsWith("http://") && !targetUrlStr.startsWith("https://")) {
+        targetUrlStr = `${OGM_ORIGIN}${targetUrlStr.startsWith("/") ? "" : "/"}${targetUrlStr}`;
+      }
+
+      const parsedTarget = new URL(targetUrlStr);
+      if (!parsedTarget.hostname.endsWith("ogm.gov.tr")) {
+        return res.status(403).send("Only ogm.gov.tr URLs are allowed through this proxy.");
+      }
+
+      // Fast-fail if recent probe confirmed OGM firewall blocks this server IP
+      if (ogmReachabilityCache && !ogmReachabilityCache.reachable && Date.now() - ogmReachabilityCache.checkedAt < OGM_CACHE_TTL_MS) {
+        res.removeHeader("X-Frame-Options");
+        res.removeHeader("Content-Security-Policy");
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        return res.status(200).send(buildOgmGeoBlockedFallbackHtml(parsedTarget.toString()));
+      }
+
+      const forwardHeaders: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": req.headers.accept || "*/*",
+        "Accept-Language": req.headers["accept-language"] || "tr-TR,tr;q=0.9,en-US;q=0.8",
+        "Origin": OGM_ORIGIN,
+        "Referer": `${OGM_ORIGIN}/`
+      };
+      if (req.headers["content-type"]) forwardHeaders["Content-Type"] = String(req.headers["content-type"]);
+      if (req.headers["cookie"]) forwardHeaders["Cookie"] = String(req.headers["cookie"]);
+
+      let bodyPayload: any = undefined;
+      if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
+        bodyPayload = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+      }
+
+      const upstream = await fetch(parsedTarget.toString(), {
+        method: req.method,
+        headers: forwardHeaders,
+        body: bodyPayload,
+        redirect: "manual",
+        signal: AbortSignal.timeout(5000)
+      });
+
+      ogmReachabilityCache = { checkedAt: Date.now(), reachable: true };
+
+      // Handle redirects internally through proxy
+      if (upstream.status >= 300 && upstream.status < 400 && upstream.headers.get("location")) {
+        const loc = upstream.headers.get("location")!;
+        const resolvedLoc = new URL(loc, parsedTarget).toString();
+        if (resolvedLoc.startsWith(OGM_ORIGIN)) {
+          const proxiedPath = resolvedLoc.replace(OGM_ORIGIN, "/ogm-bulut-proxy");
+          return res.redirect(upstream.status, proxiedPath);
+        }
+        return res.redirect(upstream.status, `/api/ogm-bulut-proxy?url=${encodeURIComponent(resolvedLoc)}`);
+      }
+
+      // Copy safe headers while STRIPPING X-Frame-Options, CSP, and X-Content-Type-Options (sub_frame unlocker rules)
+      const strippedHeaders = new Set([
+        "x-frame-options",
+        "content-security-policy",
+        "content-security-policy-report-only",
+        "x-content-type-options",
+        "frame-options",
+        "cross-origin-opener-policy",
+        "cross-origin-embedder-policy",
+        "cross-origin-resource-policy",
+        "content-encoding",
+        "content-length",
+        "transfer-encoding"
+      ]);
+
+      upstream.headers.forEach((value, key) => {
+        if (!strippedHeaders.has(key.toLowerCase())) {
+          if (key.toLowerCase() === "set-cookie") {
+            const cleanedCookie = value
+              .replace(/;\s*Domain=[^;]+/gi, "")
+              .replace(/;\s*SameSite=Strict/gi, "; SameSite=Lax");
+            res.append("Set-Cookie", cleanedCookie);
+          } else {
+            res.setHeader(key, value);
+          }
+        }
+      });
+
+      res.removeHeader("X-Frame-Options");
+      res.removeHeader("Content-Security-Policy");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+
+      const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+
+      // If upstream returned a PDF directly, stream binary
+      if (contentType.toLowerCase().includes("application/pdf")) {
+        const pdfBuf = Buffer.from(await upstream.arrayBuffer());
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", "inline");
+        return res.status(upstream.status).send(pdfBuf);
+      }
+
+      // If HTML document, rewrite origin URLs & inject Double-Click PDF + Window.open + Fetch Interceptor
+      if (contentType.toLowerCase().includes("text/html")) {
+        let html = await upstream.text();
+        html = html.replace(/https?:\/\/bulut\.ogm\.gov\.tr/gi, "/ogm-bulut-proxy");
+        html = html.replace(/<meta[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*>/gi, "");
+        html = html.replace(/<meta[^>]*http-equiv=["']?X-Frame-Options["']?[^>]*>/gi, "");
+
+        const bridgeScript = `
+<script>
+(function() {
+  var OGM_ORIGIN = "https://bulut.ogm.gov.tr";
+  var PROXY_PREFIX = "/ogm-bulut-proxy";
+
+  function toProxyUrl(u) {
+    if (!u || typeof u !== "string") return u;
+    if (u.startsWith("blob:") || u.startsWith("data:") || u.startsWith("javascript:") || u.startsWith("#")) return u;
+    if (u.startsWith(PROXY_PREFIX)) return u;
+    if (u.startsWith(OGM_ORIGIN)) return PROXY_PREFIX + u.slice(OGM_ORIGIN.length);
+    if (u.startsWith("/")) return PROXY_PREFIX + u;
+    return u;
+  }
+
+  function toExternalUrl(u) {
+    if (!u || typeof u !== "string") return "";
+    if (u.startsWith(OGM_ORIGIN)) return u;
+    if (u.startsWith(PROXY_PREFIX)) return OGM_ORIGIN + u.slice(PROXY_PREFIX.length);
+    if (u.startsWith("/")) return OGM_ORIGIN + u;
+    try {
+      var parsed = new URL(u, window.location.href);
+      if (parsed.pathname.startsWith(PROXY_PREFIX)) {
+        return OGM_ORIGIN + parsed.pathname.slice(PROXY_PREFIX.length) + parsed.search;
+      }
+      return parsed.href;
+    } catch (e) {
+      return u;
+    }
+  }
+
+  function looksLikePdfOrDoc(urlStr, textHint) {
+    var lower = (String(urlStr || "") + " " + String(textHint || "")).toLowerCase();
+    return lower.includes(".pdf") || lower.includes("pdf") || lower.includes("download") || lower.includes("indir") || lower.includes("preview") || lower.includes("onizle") || lower.includes("goruntule") || lower.includes("dosya") || lower.includes("stream") || lower.includes("file") || lower.includes("view");
+  }
+
+  function notifyParentOpenPdf(rawUrl, fileName) {
+    if (!rawUrl || rawUrl === "about:blank") return;
+    var extUrl = toExternalUrl(rawUrl);
+    var proxyUrl = toProxyUrl(rawUrl);
+    try {
+      window.parent.postMessage({
+        type: "OGM_OPEN_PDF",
+        url: extUrl,
+        proxyUrl: proxyUrl,
+        fileName: fileName || decodeURIComponent(String(extUrl).split("?")[0].split("/").pop() || "OGM_Teknik_Yayin.pdf")
+      }, "*");
+    } catch (e) {}
+  }
+
+  var origOpen = window.open;
+  window.open = function(url, target, features) {
+    if (url && String(url) !== "about:blank") {
+      notifyParentOpenPdf(String(url), "");
+      return null;
+    }
+    var fakeLoc = {
+      set href(v) { notifyParentOpenPdf(String(v || ""), ""); },
+      get href() { return ""; },
+      replace: function(v) { notifyParentOpenPdf(String(v || ""), ""); },
+      assign: function(v) { notifyParentOpenPdf(String(v || ""), ""); }
+    };
+    return {
+      location: fakeLoc,
+      document: { write: function() {}, close: function() {}, open: function() {} },
+      focus: function() {},
+      close: function() {},
+      closed: false
+    };
+  };
+
+  var origAnchorClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function() {
+    try {
+      var href = this.getAttribute("href") || this.href || "";
+      var target = this.getAttribute("target") || this.target || "";
+      if (href && !href.startsWith("#") && (target === "_blank" || looksLikePdfOrDoc(href, this.textContent || ""))) {
+        notifyParentOpenPdf(href, (this.textContent || "").trim());
+        return;
+      }
+    } catch (e) {}
+    return origAnchorClick.apply(this, arguments);
+  };
+
+  var origFetch = window.fetch;
+  if (origFetch) {
+    window.fetch = function(input, init) {
+      if (typeof input === "string") {
+        input = toProxyUrl(input);
+      } else if (input && input.url) {
+        try {
+          var nextUrl = toProxyUrl(input.url);
+          if (nextUrl !== input.url) input = new Request(nextUrl, input);
+        } catch (e) {}
+      }
+      return origFetch.call(this, input, init);
+    };
+  }
+
+  var origXhrOpen = XMLHttpRequest && XMLHttpRequest.prototype && XMLHttpRequest.prototype.open;
+  if (origXhrOpen) {
+    XMLHttpRequest.prototype.open = function(method, url) {
+      if (typeof url === "string") {
+        arguments[1] = toProxyUrl(url);
+      }
+      return origXhrOpen.apply(this, arguments);
+    };
+  }
+
+  document.addEventListener("submit", function(e) {
+    var form = e.target;
+    if (!form || form.tagName !== "FORM") return;
+    var action = form.getAttribute("action") || "";
+    var target = form.getAttribute("target") || "";
+    if (target === "_blank" && action) {
+      e.preventDefault();
+      notifyParentOpenPdf(action, action.split("/").pop());
+    }
+  }, true);
+
+  document.addEventListener("click", function(e) {
+    var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    var href = a.getAttribute("href") || "";
+    var text = (a.textContent || a.getAttribute("title") || "").trim();
+    if (href && !href.startsWith("#") && (a.target === "_blank" || looksLikePdfOrDoc(href, text) || a.hasAttribute("download"))) {
+      e.preventDefault();
+      e.stopPropagation();
+      notifyParentOpenPdf(href, text || href.split("/").pop());
+    }
+  }, true);
+
+  document.addEventListener("dblclick", function(e) {
+    var row = e.target && e.target.closest ? e.target.closest("a[href], tr, [data-url], [data-href], [role='row'], .file-item, .card") : null;
+    if (!row) return;
+    var link = row.tagName === "A" ? row : (row.querySelector ? row.querySelector("a[href]") : null);
+    var href = (link && link.getAttribute("href")) || row.getAttribute("data-url") || row.getAttribute("data-href") || "";
+    var titleText = (row.textContent || "").trim().slice(0, 120);
+    if (href && looksLikePdfOrDoc(href, titleText)) {
+      e.preventDefault();
+      e.stopPropagation();
+      notifyParentOpenPdf(href, (link && link.textContent ? link.textContent.trim() : "") || titleText);
+    }
+  }, true);
+})();
+</script>`;
+
+        if (/<head[^>]*>/i.test(html)) {
+          html = html.replace(/<head[^>]*>/i, (m) => `${m}\n<base href="/ogm-bulut-proxy/">\n${bridgeScript}`);
+        } else {
+          html = `${bridgeScript}\n${html}`;
+        }
+
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        return res.status(upstream.status).send(html);
+      }
+
+      // Rewrite absolute origin inside JS/CSS/JSON text assets
+      if (contentType.includes("javascript") || contentType.includes("css") || contentType.includes("json")) {
+        let txt = await upstream.text();
+        txt = txt.replace(/https?:\/\/bulut\.ogm\.gov\.tr/gi, "/ogm-bulut-proxy");
+        res.setHeader("Content-Type", contentType);
+        return res.status(upstream.status).send(txt);
+      }
+
+      const bin = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader("Content-Type", contentType);
+      return res.status(upstream.status).send(bin);
+    } catch {
+      ogmReachabilityCache = { checkedAt: Date.now(), reachable: false };
+      res.removeHeader("X-Frame-Options");
+      res.removeHeader("Content-Security-Policy");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.status(200).send(buildOgmGeoBlockedFallbackHtml(targetUrlStr || "https://bulut.ogm.gov.tr/app/tr-TR/Klasor/Paylas/OGMDrive/0b7eb51b-6174-4314-89bc-c26d74d78acc"));
+    }
+  };
+
+  app.all("/api/ogm-bulut-proxy", handleOgmBulutProxy);
+  app.all("/ogm-bulut-proxy", handleOgmBulutProxy);
+  app.all("/ogm-bulut-proxy/*", handleOgmBulutProxy);
 
   // API Route: AT-802 Sarf Deposu Live from Excel / Drive
   app.get("/api/at802-sarf-depo", async (req, res) => {
@@ -1494,7 +1946,7 @@ async function startServer() {
   async function fetchAndMergeAllTransactions(): Promise<any[]> {
     const sheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
     const possibleSheetTargets = [
-      { name: "DEPO HAREKET GEÇMİŞİ-AT-802", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=1298613975` },
+      { name: "DEPO HAREKET GEÇMİŞİ-AT-802", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-AT-802")}` },
       { name: "DEPO HAREKET GEÇMİŞİ-BELL 429", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-BELL 429")}` },
       { name: "DEPO HAREKET GEÇMİŞİ-T-70", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-T-70")}` },
       { name: "DEPO HAREKET GEÇMİŞİ-C-650", url: `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("DEPO HAREKET GEÇMİŞİ-C-650")}` },
@@ -1756,8 +2208,7 @@ async function startServer() {
           { name: "ONAY BEKLEYENLER -T-70", unit: "t70" },
           { name: "ONAY BEKLEYENLER -C-650", unit: "c650" },
           { name: "ONAY BEKLEYENLER -B-360", unit: "b360" },
-          { name: "ONAY BEKLEYENLER -HANGAR", unit: "hangar" },
-          { name: "ONAY BEKLEYENLER", unit: "at802" }
+          { name: "ONAY BEKLEYENLER -HANGAR", unit: "hangar" }
         ];
 
         const remoteItems: any[] = [];
@@ -1834,10 +2285,13 @@ async function startServer() {
         console.warn("Live approval sync warning:", syncErr.message);
       }
 
-      // Reddedilen kayıtlar veritabanında ve e-tabloda kalır, ancak sistem onay ekranında gizlenir
+      // Reddedilen ve farkı kapanarak eşitlenen kayıtlar veritabanında ve e-tabloda kalır, ancak sistem onay ekranında gizlenir
       const visibleItems = req.query.includeRejected === 'true'
         ? localItems
-        : localItems.filter(it => String(it.status || "").toUpperCase() !== 'REDDEDİLDİ');
+        : localItems.filter(it => {
+            const st = String(it.status || "").toUpperCase();
+            return st !== 'REDDEDİLDİ' && st !== 'EŞİTLENDİ';
+          });
 
       return res.json({ status: "success", items: visibleItems });
     } catch (err: any) {
@@ -1868,12 +2322,19 @@ async function startServer() {
           workOrderNo = "",
           requestedBy = "",
           notes = "",
-          unit = "at802"
+          unit = "at802",
+          sistemStok,
+          sayilanAdet,
+          fark,
+          sayimFarki,
+          txCategory,
+          sourceUnit,
+          sourceDepot
         } = item;
 
         const finalWorkOrder = String(workOrderOrCrs || workOrderNo || "").trim();
 
-        const newRequest = {
+        const newRequest: any = {
           id: `TLP-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substr(2, 3).toUpperCase()}`,
           timestamp: new Date().toISOString(),
           date: date || new Date().toLocaleString("tr-TR"),
@@ -1892,6 +2353,14 @@ async function startServer() {
           unit: unit || "at802"
         };
 
+        if (sistemStok !== undefined) newRequest.sistemStok = Number(sistemStok);
+        if (sayilanAdet !== undefined) newRequest.sayilanAdet = Number(sayilanAdet);
+        if (fark !== undefined) newRequest.fark = Number(fark);
+        else if (sayimFarki !== undefined) newRequest.fark = Number(sayimFarki);
+        if (txCategory) newRequest.txCategory = String(txCategory);
+        if (sourceUnit) newRequest.sourceUnit = String(sourceUnit);
+        if (sourceDepot) newRequest.sourceDepot = String(sourceDepot);
+
         createdRequests.push(newRequest);
         current.unshift(newRequest);
       }
@@ -1907,6 +2376,147 @@ async function startServer() {
         requests: createdRequests,
         request: createdRequests[0]
       });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err.message });
+    }
+  });
+
+  // Helper: Reconcile pending Sayim variance entries in Onay Bekleyenler when GİRİŞ or ÇIKIŞ occurs
+  const reconcileSayimOnayBekleyenler = (txList: any[]): number => {
+    try {
+      if (!Array.isArray(txList) || txList.length === 0) return 0;
+      const onayItems = readOnayBekleyenler();
+      if (onayItems.length === 0) return 0;
+
+      const norm = (s: any) => String(s || "").trim().toLowerCase().replace(/[^a-z0-9çğıöşü]/g, "");
+      const normUnit = (u: any, sheet?: any): string => {
+        const s = `${String(u || "")} ${String(sheet || "")}`.toLowerCase();
+        if (s.includes("bell") || s.includes("429")) return "bell429";
+        if (s.includes("t70") || s.includes("t-70")) return "t70";
+        if (s.includes("c650") || s.includes("c-650")) return "c650";
+        if (s.includes("b360") || s.includes("b-360")) return "b360";
+        if (s.includes("hangar")) return "hangar";
+        return "at802";
+      };
+      const extractDepot = (s: any): string => {
+        const u = String(s || "").toUpperCase();
+        if (u.includes("KARAİN") || u.includes("KARAIN")) return "KARAİN";
+        if (u.includes("ÇANAKKALE") || u.includes("CANAKKALE")) return "ÇANAKKALE";
+        if (u.includes("MİLAS") || u.includes("MILAS")) return "MİLAS";
+        if (u.includes("BURSA")) return "BURSA";
+        if (u.includes("ANKARA")) return "ANKARA";
+        return "";
+      };
+      const extractFarkFromReq = (reqItem: any): number => {
+        if (typeof reqItem.fark === "number" && !isNaN(reqItem.fark)) return reqItem.fark;
+        if (typeof reqItem.sayilanAdet === "number" && typeof reqItem.sistemStok === "number") {
+          return reqItem.sayilanAdet - reqItem.sistemStok;
+        }
+        const notesStr = String(reqItem.notes || "");
+        const mFark = notesStr.match(/Fark:\s*([+-]?\d+)/i);
+        if (mFark) return parseInt(mFark[1], 10) || 0;
+        const mSis = notesStr.match(/Sistem:\s*(\d+)/i);
+        const mSay = notesStr.match(/Say[ıi]lan:\s*(\d+)/i);
+        if (mSis && mSay) return (parseInt(mSay[1], 10) || 0) - (parseInt(mSis[1], 10) || 0);
+        return 0;
+      };
+
+      let changedCount = 0;
+
+      for (const tx of txList) {
+        if (!tx) continue;
+        const typeStr = String(tx.type || tx.islemTuru || "").toUpperCase();
+        if (!typeStr || typeStr.includes("SAYIM") || typeStr.includes("TRANSFER") || typeStr.includes("FİLO DIŞI") || typeStr.includes("FILO DISI")) {
+          continue;
+        }
+        const isGiris = typeStr.includes("GİREN") || typeStr.includes("GİRİŞ") || typeStr.includes("GIRIS") || typeStr.includes("GELEN");
+        const isCikis = typeStr.includes("ÇIKAN") || typeStr.includes("ÇIKIŞ") || typeStr.includes("CIKIS") || typeStr.includes("SARF");
+        if (!isGiris && !isCikis) continue;
+
+        let remainingQty = Number(tx.quantity !== undefined ? tx.quantity : (tx.adet || 0));
+        if (!remainingQty || remainingQty <= 0) continue;
+
+        const txUnit = normUnit(tx.unit, tx.sheetName);
+        const txPn = norm(tx.pn || tx.partNumber);
+        const txDesc = norm(tx.itemName || tx.itemDesc || tx.name);
+        const txDepot = extractDepot(`${typeStr} ${tx.location || tx.depoYeri || ""}`);
+
+        for (const reqItem of onayItems) {
+          if (remainingQty <= 0) break;
+          if (String(reqItem.status || "").toUpperCase() !== "ONAY BEKLİYOR") continue;
+
+          const reqNotesUpper = String(reqItem.notes || "").toUpperCase();
+          const reqTailUpper = String(reqItem.tailNo || "").toUpperCase();
+          const isSayimReq = reqItem.txCategory === "sayim" || reqItem.category === "sayim" || reqTailUpper.includes("SAYIM") || reqNotesUpper.includes("SAYIM");
+          if (!isSayimReq) continue;
+
+          const reqUnit = normUnit(reqItem.unit);
+          if (reqUnit !== txUnit) continue;
+
+          const reqPn = norm(reqItem.pn);
+          const reqDesc = norm(reqItem.itemName || reqItem.description);
+          const pnMatch = txPn && reqPn && txPn !== "-" && reqPn !== "-" && (txPn === reqPn || txPn.includes(reqPn) || reqPn.includes(txPn));
+          const descMatch = txDesc && reqDesc && (txDesc === reqDesc || txDesc.includes(reqDesc) || reqDesc.includes(txDesc));
+          if (!pnMatch && !descMatch) continue;
+
+          const reqDepot = extractDepot(reqItem.depot);
+          if (reqDepot && txDepot && reqDepot !== txDepot) continue;
+
+          const currentFark = extractFarkFromReq(reqItem);
+          if (currentFark === 0) continue;
+
+          // sayım eksiği (fark < 0) -> malzeme GİRİŞİ ile kapanır
+          // sayım fazlası (fark > 0) -> malzeme ÇIKIŞI ile kapanır
+          let newFark = currentFark;
+          let applied = 0;
+          if (currentFark < 0 && isGiris) {
+            applied = Math.min(remainingQty, Math.abs(currentFark));
+            newFark = currentFark + applied;
+          } else if (currentFark > 0 && isCikis) {
+            applied = Math.min(remainingQty, currentFark);
+            newFark = currentFark - applied;
+          } else {
+            continue;
+          }
+
+          if (applied <= 0) continue;
+          remainingQty -= applied;
+          changedCount++;
+
+          reqItem.fark = newFark;
+          if (typeof reqItem.sistemStok === "number") {
+            reqItem.sistemStok = Math.max(0, reqItem.sistemStok + (isGiris ? applied : -applied));
+          }
+          reqItem.quantity = Math.abs(newFark);
+
+          const baseNotes = String(reqItem.notes || "").replace(/\|\s*Fark:.*$/i, "").trim();
+          if (newFark === 0) {
+            reqItem.status = "EŞİTLENDİ";
+            reqItem.resolvedDate = new Date().toLocaleString("tr-TR");
+            reqItem.notes = `${baseNotes} | ✅ ${applied} adet ${isGiris ? "giriş" : "çıkış"} ile sayım farkı kapandı (Fark: 0, Eşitlendi).`;
+          } else {
+            const farkStr = newFark > 0 ? `+${newFark}` : `${newFark}`;
+            reqItem.notes = `${baseNotes} | Güncel Fark: ${farkStr} Adet (${applied} adet ${isGiris ? "giriş" : "çıkış"} mahsup edildi)`;
+          }
+        }
+      }
+
+      if (changedCount > 0) {
+        writeOnayBekleyenler(onayItems);
+        syncOnayBekleyenlerToDrive(onayItems).catch(() => {});
+      }
+      return changedCount;
+    } catch (e) {
+      console.warn("reconcileSayimOnayBekleyenler error:", e);
+      return 0;
+    }
+  };
+
+  app.post("/api/onay-bekleyenler/reconcile-sayim", (req, res) => {
+    try {
+      const txList = Array.isArray(req.body.transactions) ? req.body.transactions : (req.body.tx ? [req.body.tx] : []);
+      const updated = reconcileSayimOnayBekleyenler(txList);
+      return res.json({ status: "success", updated });
     } catch (err: any) {
       return res.status(500).json({ status: "error", message: err.message });
     }
@@ -1936,14 +2546,28 @@ async function startServer() {
       // Add to Depo Hareket Geçmişi
       const depotName = (target.depot || "ANKARA").toUpperCase();
       const notesLower = (target.notes || "").toLowerCase();
-      const itemDescLower = (target.itemName || "").toLowerCase();
+      const tailLower = String(target.tailNo || "").toLowerCase();
       
-      const isSayim = target.category === 'sayim' || 
+      const isInterFleetTransfer =
+        target.txCategory === 'filo_disi_transfer' ||
+        tailLower.includes('filo dışı') ||
+        tailLower.includes('filo disi') ||
+        notesLower.includes('filo dışı transfer') ||
+        notesLower.includes('filo disi transfer') ||
+        notesLower.includes('filolar arası transfer') ||
+        notesLower.includes('şubeler arası transfer');
+
+      const isSayim = !isInterFleetTransfer && (
+        target.txCategory === 'sayim' ||
+        target.category === 'sayim' || 
         notesLower.includes('sayım') || notesLower.includes('sayim') || 
-        notesLower.includes('fazla') || notesLower.includes('fark');
+        notesLower.includes('fazla') || notesLower.includes('fark')
+      );
 
       let txType = `${depotName} ÇIKAN`;
-      if (isSayim) {
+      if (isInterFleetTransfer) {
+        txType = `FİLO DIŞI TRANSFER (${depotName})`;
+      } else if (isSayim) {
         if (depotName.includes('ANKARA')) {
           txType = "ANKARA GELEN";
         } else {
@@ -1972,16 +2596,22 @@ async function startServer() {
         pn: target.pn,
         sn: finalSn,
         quantity: target.quantity,
-        tailNo: target.tailNo,
+        tailNo: isInterFleetTransfer ? '-' : target.tailNo,
         workOrderOrCrs: target.workOrderOrCrs || target.workOrderNo || "-",
         workOrderNo: target.workOrderOrCrs || target.workOrderNo || "-",
         operator: target.requestedBy,
         receivedBy: approver,
-        location: target.category === 'kimyasal' ? 'KİMYASAL DEPO' : (depotName.includes('ANKARA') ? 'ANKARA MERKEZ DEPO' : `${depotName} DEPOSU`),
+        location: target.category === 'kimyasal'
+          ? 'KİMYASAL DEPO'
+          : (isInterFleetTransfer
+            ? `FİLO DIŞI TRANSFER ➔ ${depotName} DEPOSU`
+            : (depotName.includes('ANKARA') ? 'ANKARA MERKEZ DEPO' : `${depotName} DEPOSU`)),
         unit: itemUnit,
         category: target.category,
         sheetName: targetSheet,
-        notes: isSayim ? `SAYIM FAZLASI / FARKI (${target.id}): ${target.notes || ''}` : `ONAYLANAN TALEP (${target.id}): ${target.notes || ''}`
+        notes: isInterFleetTransfer
+          ? `FİLO DIŞI TRANSFER (${target.id}): ${target.notes || ''}`
+          : (isSayim ? `SAYIM FAZLASI / FARKI (${target.id}): ${target.notes || ''}` : `ONAYLANAN TALEP (${target.id}): ${target.notes || ''}`)
       };
 
       const fullList = await fetchAndMergeAllTransactions();
@@ -2116,32 +2746,62 @@ async function startServer() {
       fs.writeFileSync(localJsonPath, JSON.stringify(updatedList, null, 2), "utf-8");
       writePersistedDepoTransactions(updatedList);
 
+      // Yeni giriş/çıkış hareketleri varsa Onay Bekleyenler'deki Sayım farklarını otomatik kapat
+      const newSessionTxs = incomingTransfers.filter((t: any) => t && t.isNewSessionTx);
+      reconcileSayimOnayBekleyenler(newSessionTxs.length > 0 ? newSessionTxs : incomingTransfers.slice(0, 5));
+
       // 2. Excel dosyası oluştur ve kaydet
       let base64Xlsx = "";
       try {
         const xlsx = await import("xlsx");
         const wb = xlsx.utils.book_new();
         const headerRow = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO", "AÇIKLAMA / NOTLAR", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
-        const rows = [headerRow];
-        updatedList.forEach((t: any) => {
-          const isChem = (t.category === 'kimyasal') || (t.sheetName && String(t.sheetName).toLowerCase().includes('kimya')) || (t.location && String(t.location).toLowerCase().includes('kimya'));
-          rows.push([
-            t.itemName || t.name || "",
-            t.quantity || t.miktar || t.adet || 1,
-            t.date || t.timestamp || "",
-            t.type || t.islemTuru || "",
-            t.workOrderOrCrs || t.workOrderNo || t.crsNo || "-",
-            t.notes || t.aciklama || "",
-            t.sn || t.serialNumber || "",
-            t.tailNo || t.aircraftTail || t.tailNo || "",
-            t.operator || t.teslimAlan || "",
-            t.receivedBy || t.kabulYapan || "",
-            isChem ? "KİMYASAL DEPO" : (t.location || t.depoYeri || ""),
-            t.sheetName || getDepoSheetNameForUnit(t.unit)
-          ]);
-        });
-        const ws = xlsx.utils.aoa_to_sheet(rows);
-        xlsx.utils.book_append_sheet(wb, ws, "DEPO HAREKET GEÇMİŞİ-AT-802");
+
+        const unitSheetConfigs = [
+          { name: "DEPO HAREKET GEÇMİŞİ-AT-802", unit: "at802" },
+          { name: "DEPO HAREKET GEÇMİŞİ-BELL 429", unit: "bell429" },
+          { name: "DEPO HAREKET GEÇMİŞİ-T-70", unit: "t70" },
+          { name: "DEPO HAREKET GEÇMİŞİ-C-650", unit: "c650" },
+          { name: "DEPO HAREKET GEÇMİŞİ-B-360", unit: "b360" },
+          { name: "DEPO HAREKET GEÇMİŞİ-HANGAR", unit: "hangar" }
+        ];
+
+        for (const cfg of unitSheetConfigs) {
+          const matchingTransfers = updatedList.filter((t: any) => {
+            const tUnit = String(t.unit || 'at802').toLowerCase();
+            const tSheet = String(t.sheetName || '').toUpperCase();
+            if (tSheet === cfg.name.toUpperCase()) return true;
+            if (cfg.unit === 'at802' && (tUnit.includes('802') || !t.unit)) return true;
+            if (cfg.unit === 'bell429' && tUnit.includes('bell')) return true;
+            if (cfg.unit === 't70' && tUnit.includes('t70')) return true;
+            if (cfg.unit === 'c650' && tUnit.includes('650')) return true;
+            if (cfg.unit === 'b360' && tUnit.includes('360')) return true;
+            if (cfg.unit === 'hangar' && tUnit.includes('hangar')) return true;
+            return false;
+          });
+
+          const rows = [headerRow];
+          matchingTransfers.forEach((t: any) => {
+            const isChem = (t.category === 'kimyasal') || (t.sheetName && String(t.sheetName).toLowerCase().includes('kimya')) || (t.location && String(t.location).toLowerCase().includes('kimya'));
+            rows.push([
+              t.itemName || t.name || "",
+              t.quantity || t.miktar || t.adet || 1,
+              t.date || t.timestamp || "",
+              t.type || t.islemTuru || "",
+              t.workOrderOrCrs || t.workOrderNo || t.crsNo || "-",
+              t.notes || t.aciklama || "",
+              t.sn || t.serialNumber || "",
+              t.tailNo || t.aircraftTail || t.tailNo || "",
+              t.operator || t.teslimAlan || "",
+              t.receivedBy || t.kabulYapan || "",
+              isChem ? "KİMYASAL DEPO" : (t.location || t.depoYeri || ""),
+              cfg.name
+            ]);
+          });
+
+          const ws = xlsx.utils.aoa_to_sheet(rows);
+          xlsx.utils.book_append_sheet(wb, ws, cfg.name);
+        }
 
         const localExcelPath = path.resolve(process.cwd(), "public/hangar_depo_hareket_gecmisi.xlsx");
         xlsx.writeFile(wb, localExcelPath);
@@ -4159,6 +4819,10 @@ async function startServer() {
       const localJsonPath = path.resolve(process.cwd(), "public/depo_transactions.json");
       fs.writeFileSync(localJsonPath, JSON.stringify(updatedList, null, 2), "utf-8");
 
+      if (newlyAdded.length > 0) {
+        reconcileSayimOnayBekleyenler(newlyAdded);
+      }
+
       const targetSheet = sheetName || "DEPO HAREKET GEÇMİŞİ-AT-802";
       const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
       
@@ -4312,8 +4976,10 @@ async function startServer() {
     "c650_sarf_depo.xlsx": "",
     "hava_araçları_yer_destek_hangar.xlsx": "1-KGVWi0EN5UnI0NEC_EC3-zORYHsbqvu",
     "hava_araclari_yer_destek_hangar.xlsx": "1-KGVWi0EN5UnI0NEC_EC3-zORYHsbqvu",
-    "hangar_sarf_ve_parca_deposu.xlsx": "",
-    "hangar_sarf_depo.xlsx": "",
+    "hangar_sarf_ve_parca_deposu.xlsx": "1LXGmi5mjDuE_r90fJoMKS4N68KKEvTfF",
+    "hangar_sarf_depo.xlsx": "1LXGmi5mjDuE_r90fJoMKS4N68KKEvTfF",
+    "hangar_kimyasal_depo.xlsx": "1_NO_EXISTING_ID_YET",
+    "hangar_kimyasal_deposu.xlsx": "1_NO_EXISTING_ID_YET",
     "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
     "hava_araclari_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
     "hangar_depo_hareket_gecmisi.xlsx": "1RXIhJps-PxUQAkTlLDyvcDWnpUbg2KzG",
@@ -4341,19 +5007,40 @@ async function startServer() {
     if (!cand || !target) return false;
     const nCand = normalizeExcelName(cand);
     const nTarget = normalizeExcelName(target);
+    
+    // Strict exact match first
     if (nCand === nTarget) return true;
+    
     const bCand = nCand.replace(/\.(xlsx|xls|csv)$/, "");
     const bTarget = nTarget.replace(/\.(xlsx|xls|csv)$/, "");
     if (bCand === bTarget) return true;
 
-    // Check unit and category match to isolate fleet files strictly
+    // Isolate Hangar strictly - Do NOT allow cross matching between kimyasal, sarf, and yer destek
+    const isHangarTarget = bTarget.includes('hangar');
+    const isHangarCand = bCand.includes('hangar');
+    if (isHangarTarget && isHangarCand) {
+      const isKimTarget = bTarget.includes('kimya');
+      const isKimCand = bCand.includes('kimya');
+      if (isKimTarget !== isKimCand) return false;
+
+      const isSarfTarget = bTarget.includes('sarf') || bTarget.includes('parca');
+      const isSarfCand = bCand.includes('sarf') || bCand.includes('parca');
+      if (isSarfTarget !== isSarfCand) return false;
+
+      const isYerTarget = bTarget.includes('yer_destek') || bTarget.includes('techizat');
+      const isYerCand = bCand.includes('yer_destek') || bCand.includes('techizat');
+      if (isYerTarget !== isYerCand) return false;
+      
+      return true;
+    }
+
+    // Check other unit and category match to isolate fleet files strictly
     const units = [
       { key: 'bell429', matches: (s: string) => s.includes('bell') || s.includes('429') },
       { key: 'at802', matches: (s: string) => s.includes('at802') || s.includes('at_802') || s.includes('802') },
       { key: 't70', matches: (s: string) => s.includes('t70') || s.includes('t_70') },
       { key: 'c650', matches: (s: string) => s.includes('c650') || s.includes('c_650') },
-      { key: 'b360', matches: (s: string) => s.includes('b360') || s.includes('b_360') },
-      { key: 'hangar', matches: (s: string) => s.includes('hangar') }
+      { key: 'b360', matches: (s: string) => s.includes('b360') || s.includes('b_360') }
     ];
 
     for (const u of units) {
@@ -4428,31 +5115,32 @@ async function startServer() {
 
       const localExcelPath = path.resolve(process.cwd(), `public/${fileName}`);
 
-      // 1. LIVE GOOGLE DRIVE CHECK: Query real current files or known ID in Google Drive folder
-      try {
-        const driveExcels = await getDriveExcelsList(false);
-        console.log("DEBUG [Backend]: driveExcels count:", driveExcels?.length);
-        if (driveExcels && driveExcels.length > 0) {
-          const match = driveExcels.find((d: any) => {
-            const dName = d.name || d.fileName || "";
-            return isExcelNameExactMatch(dName, fileName);
-          });
-          if (match && match.id) {
-            fileId = match.id;
-            console.log("DEBUG [Backend]: Found file match in drive:", fileId);
-          }
+      // 1. Check known explicit master file IDs first for guaranteed multi-sheet integrity
+      for (const [k, id] of Object.entries(KNOWN_DRIVE_EXCEL_FILES)) {
+        if (id && id !== "1_NO_EXISTING_ID_YET" && isExcelNameExactMatch(k, fileName)) {
+          fileId = id;
+          console.log(`[read-excel-from-drive] Prioritizing master known ID for ${fileName}:`, fileId);
+          break;
         }
-      } catch (e) {
-        console.warn("Live Drive list query error:", e);
       }
 
-      // 2. If not found in live folder scan, check updated KNOWN map
+      // 2. LIVE GOOGLE DRIVE CHECK: Query real current files in Google Drive folder if not found in KNOWN map
       if (!fileId) {
-        for (const [k, id] of Object.entries(KNOWN_DRIVE_EXCEL_FILES)) {
-          if (id && isExcelNameExactMatch(k, fileName)) {
-            fileId = id;
-            break;
+        try {
+          const driveExcels = await getDriveExcelsList(false);
+          console.log("DEBUG [Backend]: driveExcels count:", driveExcels?.length);
+          if (driveExcels && driveExcels.length > 0) {
+            const match = driveExcels.find((d: any) => {
+              const dName = d.name || d.fileName || "";
+              return isExcelNameExactMatch(dName, fileName);
+            });
+            if (match && match.id) {
+              fileId = match.id;
+              console.log("DEBUG [Backend]: Found file match in drive:", fileId);
+            }
           }
+        } catch (e) {
+          console.warn("Live Drive list query error:", e);
         }
       }
 
@@ -4704,7 +5392,8 @@ async function startServer() {
           const safeTargetKey = String(targetKey || "").toLowerCase();
           const isOlayTakipOrEgitim = safeFileName.includes("olay_takip") || safeTargetKey.includes("olay_takip") || safeFileName.includes("personel_egitim") || safeTargetKey.includes("personel_egitim");
           const xlsx = await import("xlsx");
-          let wb = xlsx.read(buffer, { type: "buffer" });
+          const fileBuffer = Buffer.from(cleanBase64, "base64");
+          let wb = xlsx.read(fileBuffer, { type: "buffer" });
           let modified = false;
 
           if (!isOlayTakipOrEgitim && wb && wb.SheetNames) {
@@ -4753,8 +5442,6 @@ async function startServer() {
           if (modified) {
             const modBuffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
             finalBase64 = modBuffer.toString("base64");
-            // Overwrite the local file with modified content
-            fs.writeFileSync(localExcelPath, modBuffer);
           }
 
           // 3. Also parse and update public/at802_sarf_data.json ONLY for AT-802 Sarf files
@@ -6257,8 +6944,21 @@ async function startServer() {
         if (fs.existsSync(localExcelPath)) {
           const fileBuffer = fs.readFileSync(localExcelPath);
           wb = xlsx.read(fileBuffer, { type: "buffer" });
-        } else {
-          wb = xlsx.utils.book_new();
+        }
+      }
+
+      if (!wb || !Array.isArray(wb.SheetNames) || wb.SheetNames.length <= 1) {
+        try {
+          const masterResp = await fetch("https://docs.google.com/spreadsheets/d/1S-ktkzrs7p5CIcwUihuQsJDecmLpXmpp/export?format=xlsx", {
+            signal: AbortSignal.timeout(6000)
+          });
+          if (masterResp.ok) {
+            const masterBuf = await masterResp.arrayBuffer();
+            wb = xlsx.read(Buffer.from(masterBuf), { type: "buffer" });
+          }
+        } catch (mErr) {
+          console.warn("Master Google sheet fetch fallback error:", mErr);
+          if (!wb) wb = xlsx.utils.book_new();
         }
       }
 
@@ -6555,6 +7255,99 @@ async function startServer() {
       status: "success",
       data: autoReminderState
     });
+  });
+
+  // Helper to read Excel rows into 2D array from Google Drive or local mirror
+  async function readExcelRows(fileName: string, explicitFileId?: string): Promise<any[][]> {
+    try {
+      let fileBuf: Buffer | null = null;
+      let fileId = explicitFileId || "";
+      if (!fileId) {
+        for (const [k, id] of Object.entries(KNOWN_DRIVE_EXCEL_FILES)) {
+          if (id && isExcelNameExactMatch(k, fileName)) {
+            fileId = id;
+            break;
+          }
+        }
+      }
+      if (fileId) {
+        const driveUrl = `https://drive.google.com/uc?export=download&id=${fileId}&t=${Date.now()}`;
+        try {
+          const resp = await fetch(driveUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+          if (resp.ok) {
+            const ab = await resp.arrayBuffer();
+            if (ab && ab.byteLength > 500) {
+              fileBuf = Buffer.from(ab);
+            }
+          }
+        } catch (e) {}
+      }
+      if (!fileBuf) {
+        const localPath = path.resolve(process.cwd(), `public/${fileName}`);
+        if (fs.existsSync(localPath)) {
+          fileBuf = fs.readFileSync(localPath);
+        }
+      }
+      if (fileBuf) {
+        const wb = XLSX.read(fileBuf, { type: "buffer" });
+        const sheetName = wb.SheetNames[0];
+        const sheet = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+        return rows || [];
+      }
+    } catch (err) {
+      console.warn(`[readExcelRows] Error reading ${fileName}:`, err);
+    }
+    return [];
+  }
+
+  // API Route: Live Scan All Drive Lists for Gün Takip & Otomatik Bildirim
+  app.get("/api/gun-takip-live-scan", async (req, res) => {
+    try {
+      const [
+        at802Yer,
+        at802Depo,
+        at802Ozel,
+        bell429Yer,
+        bell429Depo,
+        t70Yer,
+        t70Depo,
+        hangarYer,
+        hangarDepo,
+        karaAraclari,
+        b360Yer,
+        c650Yer
+      ] = await Promise.all([
+        readExcelRows("hava_araçları_yer_destek_at-802.xlsx"),
+        readExcelRows("at-802_sarf_ve_parca_deposu.xlsx"),
+        readExcelRows("at-802_ozel_bakim_aletleri.xlsx"),
+        readExcelRows("hava_araçları_yer_destek_bell-429.xlsx"),
+        readExcelRows("bell-429_sarf_ve_parca_deposu.xlsx"),
+        readExcelRows("hava_araçları_yer_destek_t-70.xlsx"),
+        readExcelRows("t-70_sarf_ve_parca_deposu.xlsx"),
+        readExcelRows("hava_araçları_yer_destek_hangar.xlsx"),
+        readExcelRows("hangar_sarf_ve_parca_deposu.xlsx"),
+        readExcelRows("kara_araclari_bakim_muayene.xlsx"),
+        readExcelRows("hava_araçları_yer_destek_b-360.xlsx"),
+        readExcelRows("hava_araçları_yer_destek_c-650.xlsx")
+      ]);
+
+      res.json({
+        status: "success",
+        timestamp: new Date().toISOString(),
+        data: {
+          at802: [...at802Yer, ...at802Depo, ...at802Ozel],
+          bell429: [...bell429Yer, ...bell429Depo],
+          t70: [...t70Yer, ...t70Depo],
+          hangar: [...hangarYer, ...hangarDepo],
+          kara_araclari: karaAraclari,
+          b360: b360Yer,
+          c650: c650Yer
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ status: "error", message: err.message });
+    }
   });
 
   // API Route: Trigger Auto Reminders on demand (silent background)

@@ -48,7 +48,7 @@ const TOMBSTONE_STORAGE_KEY = 'hangar_deleted_docs_tombstone';
 export function getDeletedDocTombstone(): Set<string> {
   if (typeof window === 'undefined' || !window.localStorage) return new Set();
   try {
-    const raw = localStorage.getItem(TOMBSTONE_STORAGE_KEY);
+    const raw = null;
     if (raw) {
       const arr: string[] = JSON.parse(raw);
       return new Set(arr.filter(Boolean));
@@ -74,7 +74,7 @@ export function addDeletedDocTombstone(...keys: (string | undefined | null)[]): 
         }
       }
     });
-    localStorage.setItem(TOMBSTONE_STORAGE_KEY, JSON.stringify(Array.from(current)));
+    void 0;
   } catch (e) {
     console.warn('Error saving tombstone:', e);
   }
@@ -129,11 +129,11 @@ export function persistDocsToLocalStorage(docs: HangarPdfDoc[]): void {
   const keys = ['hangar_techizat_pdf_docs', 'hangar_pdf_docs', 'hangar_pdf_docs_meta'];
   keys.forEach(k => {
     try {
-      localStorage.setItem(k, serialized);
+      void 0;
     } catch (e) {
       // Quota fallback: keep fewer items if localStorage is near full
       try {
-        localStorage.setItem(k, JSON.stringify(lightDocs.slice(0, 50)));
+        void 0;
       } catch {
         // ignore
       }
@@ -170,7 +170,7 @@ export async function getAllHangarPdfDocs(): Promise<HangarPdfDoc[]> {
     try {
       const keys = ['hangar_techizat_pdf_docs', 'hangar_pdf_docs', 'hangar_pdf_docs_meta'];
       for (const k of keys) {
-        const saved = localStorage.getItem(k);
+        const saved = null;
         if (saved) {
           const parsed = JSON.parse(saved) as HangarPdfDoc[];
           if (Array.isArray(parsed) && parsed.length > 0) {
@@ -626,7 +626,7 @@ const ROW_DOC_LINKS_KEY = 'olay_takip_row_doc_links';
 export function getRowDocLinks(): Record<string, string[]> {
   if (typeof window === 'undefined' || !window.localStorage) return {};
   try {
-    const saved = localStorage.getItem(ROW_DOC_LINKS_KEY);
+    const saved = null;
     if (saved) return JSON.parse(saved);
   } catch (e) {}
   return {};
@@ -647,7 +647,7 @@ export function setRowDocLink(rowKey: string, docId: string, isLinked = true): v
     } else {
       links[rowKey] = current.filter(id => id !== docId);
     }
-    localStorage.setItem(ROW_DOC_LINKS_KEY, JSON.stringify(links));
+    void 0;
   } catch (e) {}
 }
 

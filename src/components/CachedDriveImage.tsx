@@ -48,7 +48,7 @@ export const fetchDriveImageAsBase64 = async (src: string | null | undefined): P
   const fileId = getDriveFileId(src);
   if (fileId) {
     const cacheKey = `cached_drive_img_${fileId}`;
-    const cachedData = memoryCache.get(fileId) || localStorage.getItem(cacheKey) || sessionStorage.getItem(cacheKey);
+    const cachedData = memoryCache.get(fileId) || null || sessionStorage.getItem(cacheKey);
     if (cachedData && cachedData.startsWith('data:')) return cachedData;
 
     try {
@@ -61,7 +61,7 @@ export const fetchDriveImageAsBase64 = async (src: string | null | undefined): P
           const dataUrl = `data:${mimeType};base64,${data.base64}`;
           memoryCache.set(fileId, dataUrl);
           try {
-            localStorage.setItem(cacheKey, dataUrl);
+            void 0;
             sessionStorage.setItem(cacheKey, dataUrl);
           } catch (e) {}
           return dataUrl;
@@ -101,7 +101,7 @@ export const fetchDriveImageAsBase64 = async (src: string | null | undefined): P
           if (fileId) {
             memoryCache.set(fileId, dataUrl);
             try {
-              localStorage.setItem(`cached_drive_img_${fileId}`, dataUrl);
+              void 0;
               sessionStorage.setItem(`cached_drive_img_${fileId}`, dataUrl);
             } catch (e) {}
           }
@@ -140,7 +140,7 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
     const fileId = getDriveFileId(src);
     if (fileId) {
       const cacheKey = `cached_drive_img_${fileId}`;
-      const saved = memoryCache.get(fileId) || localStorage.getItem(cacheKey) || sessionStorage.getItem(cacheKey);
+      const saved = memoryCache.get(fileId) || null || sessionStorage.getItem(cacheKey);
       if (saved) return saved;
       return `https://lh3.googleusercontent.com/d/${fileId}`;
     }
@@ -169,7 +169,7 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
 
     // Try memory, localStorage and sessionStorage cache first
     const cacheKey = `cached_drive_img_${fileId}`;
-    const cachedData = memoryCache.get(fileId) || localStorage.getItem(cacheKey) || sessionStorage.getItem(cacheKey);
+    const cachedData = memoryCache.get(fileId) || null || sessionStorage.getItem(cacheKey);
     if (cachedData) {
       if (!memoryCache.has(fileId)) {
         memoryCache.set(fileId, cachedData);
@@ -198,7 +198,7 @@ export const CachedDriveImage: React.FC<CachedDriveImageProps> = ({
           // Cache in memory and localStorage
           memoryCache.set(fileId, dataUrl);
           try {
-            localStorage.setItem(cacheKey, dataUrl);
+            void 0;
             sessionStorage.setItem(cacheKey, dataUrl);
           } catch (e) {
             console.warn("Could not save to storage:", e);

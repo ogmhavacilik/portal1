@@ -24,9 +24,14 @@ import {
   parseExcelWorksheetToStandardRows,
   detectUnitAndSectionFromNames
 } from '../utils/driveExcelSync';
+import {
+  uploadExcelToDrive,
+  DIRECT_GAS_URLS,
+  DRIVE_FOLDER_ID
+} from '../utils/remoteDriveSync';
 
-export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby2TM-nlURR5iPR4s4I6BpE8hbor93Jin9g014k3XPaQ0rYtS2MWHwtlnlAoph8Y3mZ/exec";
-export const DRIVE_FOLDER_ID = "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP";
+export const GOOGLE_SCRIPT_URL = DIRECT_GAS_URLS[0];
+export { DRIVE_FOLDER_ID };
 
 export const getStandardDriveFileName = (targetKey: string, originalName?: string): string => {
   const targetMap: Record<string, string> = {
@@ -403,16 +408,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         // Upload to Drive with duplicate replacement
         const driveFileName = 'personel_bilgi_cizelgesi.xlsx';
         try {
-          await fetch('/api/upload-techizat-excel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fileName: driveFileName,
-              targetKey: '5',
-              base64Data: base64Data,
-              folderId: DRIVE_FOLDER_ID
-            })
-          });
+          await uploadExcelToDrive(driveFileName, base64Data, '5', DRIVE_FOLDER_ID);
         } catch (e) {}
 
         // Upload to Google Sheet 5-Personel_Bilgi
@@ -433,7 +429,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           onUpdatePersonnelData(parsedPersonnelRows);
         }
         try {
-          localStorage.setItem('excel_form_5_data', JSON.stringify(parsedPersonnelRows));
+          void 0;
         } catch (e) {}
 
         setProgressPercent(100);
@@ -522,37 +518,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       const base64Data = btoa(binary);
 
       try {
-        // Try local backend proxy first
-        const apiRes = await fetch('/api/upload-techizat-excel', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileName: standardDriveFileName,
-            targetKey: selectedTarget,
-            base64Data: base64Data,
-            folderId: DRIVE_FOLDER_ID
-          })
-        });
-        if (!apiRes.ok) {
-          throw new Error("Server proxy response not ok");
-        }
-      } catch (localProxyErr) {
-        // Direct GAS fallback
-        try {
-          await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({
-              action: 'uploadTechizatExcel',
-              fileName: standardDriveFileName,
-              targetKey: selectedTarget,
-              base64Data: base64Data,
-              folderId: DRIVE_FOLDER_ID
-            })
-          });
-        } catch (uploadErr) {
-          console.warn("Drive yükleme uyarısı (işleme devam ediliyor):", uploadErr);
-        }
+        await uploadExcelToDrive(standardDriveFileName, base64Data, selectedTarget, DRIVE_FOLDER_ID);
+      } catch (uploadErr) {
+        console.warn("Drive yükleme uyarısı (işleme devam ediliyor):", uploadErr);
       }
 
       // 4. Update local state & sheets

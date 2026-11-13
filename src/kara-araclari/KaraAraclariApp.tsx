@@ -169,7 +169,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
   // Vehicle data
   const [vehicleRows, setVehicleRows] = useState<string[][]>(() => {
     try {
-      const stored = localStorage.getItem('excel_kara_araclari_data');
+      const stored = null;
       if (stored) return JSON.parse(stored);
     } catch {}
     return [
@@ -187,7 +187,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
   // Task Orders
   const [taskOrders, setTaskOrders] = useState<any[]>(() => {
     try {
-      const stored = localStorage.getItem('kara_araclari_gorev_emirleri');
+      const stored = null;
       if (stored) return JSON.parse(stored);
     } catch {}
     return [
@@ -214,7 +214,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
   const saveRows = (rows: string[][]) => {
     setVehicleRows(rows);
     try {
-      localStorage.setItem('excel_kara_araclari_data', JSON.stringify(rows));
+      void 0;
     } catch {}
     publishCrossSystemEvent('KARA_ARACI_UPDATED', 'kara-araclari', { count: rows.length });
   };
@@ -245,7 +245,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
     const unsub = subscribeCrossSystemEvents((ev) => {
       if (ev.type === 'REFRESH_ALL') {
         try {
-          const stored = localStorage.getItem('excel_kara_araclari_data');
+          const stored = null;
           if (stored) setVehicleRows(JSON.parse(stored));
         } catch {}
       }
@@ -479,7 +479,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
     const updated = [orderObj, ...taskOrders];
     setTaskOrders(updated);
     try {
-      localStorage.setItem('kara_araclari_gorev_emirleri', JSON.stringify(updated));
+      void 0;
     } catch {}
 
     // Update vehicle row in vehicleRows list
@@ -496,8 +496,8 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
 
       // Keep cross-system localStorage keys fully synchronized
       try {
-        localStorage.setItem('excel_techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
-        localStorage.setItem('techizat_kara_araclari_data', JSON.stringify(updatedVehicles));
+        void 0;
+        void 0;
       } catch (err) {}
     }
 
