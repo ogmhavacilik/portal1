@@ -267,10 +267,11 @@ import { GunTakipModal } from './components/GunTakipModal';
 import { DepoSlipPrintModal } from './components/DepoSlipPrintModal';
 import { PersonelEgitimModal } from './components/PersonelEgitimModal';
 import { PersonelBilgiModal } from './components/PersonelBilgiModal';
+import { TalepOlusturModal } from './components/TalepOlusturModal';
 import { fetchExcelFromDrive, uploadExcelToDrive } from './utils/remoteDriveSync';
 
 export const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec";
-export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwgWc7aKDB_dtubQVxeQDpiHR0FF8jeYvfDWRzcx4kbYUfLsT9vJGg69zupHbGoUf5H/exec";
+export const EBYS_SEARCH_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxuivDglCOCOl32raOdzjV_gjDk6k7i70pepzYp8ak9tcc1D8t5L9gJNI2YxYXZi7wa/exec";
 export const TASKLINE_SUBMIT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbys4kKFJI87wbn155z6jphH7D5qgC45FWUvzzxi9n4-YfYDdRxY72fMWTaTGMxvkXqN-g/exec";
 
 // Convert a File object to Base64 string for Drive uploading
@@ -969,13 +970,13 @@ export default function App() {
       const docs = await syncHangarPdfDocsFromDrive(GOOGLE_SCRIPT_URL);
       if (docs && docs.length > 0) {
         setHangarPdfDocs(docs);
-        showNotification(`✅ Google Drive'dan ${docs.length} adet PDF evrak tarandı ve yüklendi!`);
+        showNotification(`✅ Bulut Arşivinden ${docs.length} adet PDF evrak tarandı ve yüklendi!`);
       } else {
-        showNotification('Google Drive üzerinde PDF evrak bulunamadı.');
+        showNotification('Bulut Arşivinde PDF evrak bulunamadı.');
       }
     } catch (err: any) {
       console.warn('Drive PDF sync error:', err);
-      showNotification('Google Drive PDF taraması sırasında hata oluştu.');
+      showNotification('Bulut Arşivi PDF taraması sırasında hata oluştu.');
     } finally {
       setIsSyncingDrivePdfs(false);
     }
@@ -1735,7 +1736,7 @@ export default function App() {
         }
       }
 
-      showNotification("Seçilen teçhizatlar başarıyla topluca güncellendi ve Google Drive Excel dosyalarına kaydedildi!");
+      showNotification("Seçilen teçhizatlar başarıyla topluca güncellendi ve Bulut Arşivi Excel dosyalarına kaydedildi!");
       setSelectedTechizatItems({});
       setIsEbysModalOpen(false);
       setBulkEditYer("");
@@ -2061,6 +2062,7 @@ export default function App() {
   const [barkodOkuyucuInitialUnit, setBarkodOkuyucuInitialUnit] = useState<string>('at802');
   const [isPersonelEgitimModalOpen, setIsPersonelEgitimModalOpen] = useState<boolean>(false);
   const [isPersonelBilgiModalOpen, setIsPersonelBilgiModalOpen] = useState<boolean>(false);
+  const [isTalepOlusturOpen, setIsTalepOlusturOpen] = useState<boolean>(false);
 
   // Akıllı Teçhizat Görsel Eşleştirici: AT-802, Hangar ve tüm birimler için seri no, parça no veya isimle tam uyumlu görseli bulur
   const findRowImageUrl = (techType: string, row: string[], images: Record<string, string>): string | null => {
@@ -2511,8 +2513,8 @@ export default function App() {
         const rowPlaka = String(row[1] || "").replace(/\s+/g, "").toLowerCase();
         return rowPlaka === cleanPlaka || rowPlaka.includes(cleanPlaka) || cleanPlaka.includes(rowPlaka);
       });
-      if (foundRow && foundRow[4]) {
-        setGeDepartureKm(foundRow[4]);
+      if (foundRow && (foundRow[5] || foundRow[4])) {
+        setGeDepartureKm(foundRow[5] && foundRow[5] !== '-' ? foundRow[5] : foundRow[4]);
       }
     } else if (!gePlaka) {
       lastPopulatedPlaka.current = "";
@@ -2548,6 +2550,8 @@ export default function App() {
       setTechizatC650Data([]);
     } else if (actualType === 'b360') {
       setTechizatB360Data([]);
+    } else if (actualType === 'kara_araclari' && techizatKaraAraclariData.length === 0) {
+      pullTechizatUnitFromDrive('kara_araclari', false);
     }
   };
 
@@ -4625,39 +4629,78 @@ export default function App() {
   };
   const [isSorumluModalOpen, setIsSorumluModalOpen] = useState(false);
   const [isSavingSorumlu, setIsSavingSorumlu] = useState(false);
-  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; norm?: string; mail90?: string; mail60?: string; mail30?: string; }[]>(() => {
-    try {
-      const saved = null;
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  const normalizeGunTakipRows = (rows: { birim: string; adSoyad: string; eposta: string; norm?: string; mail90?: string; mail60?: string; mail30?: string; }[]) => {
+    const combinedPrefixes = ['BELL 429', 'T-70', 'B-360', 'C-650'];
+    const normUpper = (s: string) =>
+      String(s || '')
+        .replace(/İ/g, 'I').replace(/ı/g, 'i')
+        .replace(/Ğ/g, 'G').replace(/ğ/g, 'g')
+        .replace(/Ü/g, 'U').replace(/ü/g, 'u')
+        .replace(/Ş/g, 'S').replace(/ş/g, 's')
+        .replace(/Ö/g, 'O').replace(/ö/g, 'o')
+        .replace(/Ç/g, 'C').replace(/ç/g, 'c')
+        .toUpperCase().trim();
+
+    const result: { birim: string; adSoyad: string; eposta: string; norm?: string; mail90?: string; mail60?: string; mail30?: string; }[] = [];
+    const seen = new Set<string>();
+
+    for (const raw of rows) {
+      if (!raw || !raw.birim) continue;
+      let birim = String(raw.birim).trim().toUpperCase();
+      const bNorm = normUpper(birim);
+      for (const prefix of combinedPrefixes) {
+        if (bNorm === `${prefix} YER DESTEK` || bNorm === `${prefix} OZEL ALET` || bNorm === `${prefix} YER DESTEK & OZEL ALET`) {
+          birim = `${prefix} YER DESTEK & ÖZEL ALET`;
+          break;
+        }
       }
-    } catch(e) {}
-    return [
-      { birim: "AT-802 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
-      { birim: "AT-802 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "AT-802 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "AT-802 YAŞAM DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Can Yeleği, Spare Air & Kask Kit SKT / Periyodik Kontrol Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "BELL 429 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
-      { birim: "BELL 429 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "BELL 429 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "T-70 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
-      { birim: "T-70 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "T-70 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yangın Kovası Periyodik Bakım & Kontrol Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "T-70 HELİTAK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Helitak Teçhizat Kalibrasyon & Bakım Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "B-360 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
-      { birim: "B-360 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "B-360 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "C-650 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Sarf/Kimyasal Ömür Takibi (3 Ay Kala) & Kritik Stok Takibi (Kritik Stok +1 Adet)", mail90: "" },
-      { birim: "C-650 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Bakım Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "C-650 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Hangar Ekipmanları Son Kontrol / Kalibrasyon / Bakım Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "KARA ARAÇLARI BAKIM & MUAYENE", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Araç Bakım Tarihi & Sonraki Bakım/KM Yaklaşım Takibi (3 Ay Kala)", mail90: "" },
-      { birim: "PERSONEL BİLGİ SİSTEMİ", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "OGM Periyodik Sağlık Muayene Tarih Takibi (1 Ay Kala)", mail90: "" },
-      { birim: "PERSONEL EĞİTİM BİLİGİ SİSTEMİ", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "3 Yıllık İSG Periyodik Eğitim Yenileme Tarih Takibi (1 Ay Kala)", mail90: "" }
-    ];
-  });
+      const key = normUpper(birim);
+      if (seen.has(key)) {
+        const idx = result.findIndex(r => normUpper(r.birim) === key);
+        if (idx >= 0) {
+          const ex = result[idx];
+          if ((!ex.adSoyad || ex.adSoyad === 'Sorumlu Personel') && raw.adSoyad && raw.adSoyad !== 'Sorumlu Personel') ex.adSoyad = raw.adSoyad;
+          if ((!ex.eposta || ex.eposta === 'orhavak.bakimsube@gmail.com') && raw.eposta) ex.eposta = raw.eposta;
+          if (!ex.mail90 && raw.mail90) ex.mail90 = raw.mail90;
+        }
+        continue;
+      }
+      seen.add(key);
+      result.push({
+        birim,
+        adSoyad: String(raw.adSoyad || 'Sorumlu Personel').trim(),
+        eposta: String(raw.eposta || 'orhavak.bakimsube@gmail.com').trim(),
+        norm: String(raw.norm || '').trim(),
+        mail90: String(raw.mail90 || '').trim(),
+        mail60: String(raw.mail60 || '').trim(),
+        mail30: String(raw.mail30 || '').trim()
+      });
+    }
+    return result;
+  };
+
+  const DEFAULT_GUN_TAKIP_SORUMLULARI: { birim: string; adSoyad: string; eposta: string; norm?: string; mail90?: string; mail60?: string; mail30?: string; }[] = [
+    { birim: "AT-802 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Depo: Ömür Takip (Tarih Bazlı - 3 Ay Kala) & Kritik Stok (Kritik +1 Adet Kala)", mail90: "" },
+    { birim: "AT-802 YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yer Destek & Özel Alet: Kalibrasyon / Bakım Tarih Takip (3 Ay Kala)", mail90: "" },
+    { birim: "AT-802 ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Özel Aletler: Kalibrasyon & Test Aletleri Tarih Takibi (3 Ay Kala)", mail90: "" },
+    { birim: "AT-802 YAŞAM DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "AT-802 Yaşam Destek: Can Yeleği, Spare Air & Kask Kit SKT Takip (3 Ay Kala)", mail90: "" },
+    { birim: "BELL 429 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Depo: Ömür Takip (Tarih Bazlı - 3 Ay Kala) & Kritik Stok (Kritik +1 Adet Kala)", mail90: "" },
+    { birim: "BELL 429 YER DESTEK & ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yer Destek & Özel Alet: Kalibrasyon / Bakım Tarih Takip (3 Ay Kala)", mail90: "" },
+    { birim: "T-70 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Depo: Ömür Takip (Tarih Bazlı - 3 Ay Kala) & Kritik Stok (Kritik +1 Adet Kala)", mail90: "" },
+    { birim: "T-70 YER DESTEK & ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yer Destek & Özel Alet: Kalibrasyon / Bakım Tarih Takip (3 Ay Kala)", mail90: "" },
+    { birim: "T-70 BUMBİ BACKET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yangın Ekipmanları / Helitak / Bumbi: Kalibrasyon & Bakım Takip (3 Ay Kala)", mail90: "" },
+    { birim: "T-70 HELİTAK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yangın Ekipmanları / Helitak / Bumbi: Kalibrasyon & Bakım Takip (3 Ay Kala)", mail90: "" },
+    { birim: "B-360 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Depo: Ömür Takip (Tarih Bazlı - 3 Ay Kala) & Kritik Stok (Kritik +1 Adet Kala)", mail90: "" },
+    { birim: "B-360 YER DESTEK & ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yer Destek & Özel Alet: Kalibrasyon / Bakım Tarih Takip (3 Ay Kala)", mail90: "" },
+    { birim: "C-650 DEPO", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Depo: Ömür Takip (Tarih Bazlı - 3 Ay Kala) & Kritik Stok (Kritik +1 Adet Kala)", mail90: "" },
+    { birim: "C-650 YER DESTEK & ÖZEL ALET", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Yer Destek & Özel Alet: Kalibrasyon / Bakım Tarih Takip (3 Ay Kala)", mail90: "" },
+    { birim: "HANGAR YER DESTEK", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Hangar Yer Destek: Son Kontrol / Kalibrasyon / Bakım Takip (3 Ay Kala)", mail90: "" },
+    { birim: "KARA ARAÇLARI BAKIM & MUAYENE", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Kara Araçları: Bakım Tarihi & Sonraki Bakım / KM Takip (3 Ay Kala)", mail90: "" },
+    { birim: "PERSONEL BİLGİ SİSTEMİ", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Personel Bilgi Sistemi: OGM Periyodik Muayene Tarih Takip (1 Ay Kala)", mail90: "" },
+    { birim: "PERSONEL EĞİTİM BİLİGİ SİSTEMİ", adSoyad: "Sorumlu Personel", eposta: "orhavak.bakimsube@gmail.com", norm: "Personel Eğitim Bilgi Sistemi: 3 Yıllık İSG Eğitim Tarihi Takip (1 Ay Kala)", mail90: "" }
+  ];
+
+  const [gunTakipSorumlulari, setGunTakipSorumlulari] = useState<{ birim: string; adSoyad: string; eposta: string; norm?: string; mail90?: string; mail60?: string; mail30?: string; }[]>(() => DEFAULT_GUN_TAKIP_SORUMLULARI);
 
   // 4. OTOMATİK 90 GÜN KONTROLÜ VE E-POSTA BİLDİRİMİ (SİTE AÇILDIĞINDA VE ARKA PLANDA SÜREKLİ AKTİF)
   const [autoReminderStatus, setAutoReminderStatus] = useState<{
@@ -4741,24 +4784,33 @@ export default function App() {
 
         if (isMuaf || !dateStr) return;
 
-        const diff = parseDiffDays(dateStr);
-        if (diff !== null && diff <= 90) {
-          items.push({
-            birim: birimName,
-            rowIndex: idx,
-            malzemeAdi: String(r[1] || ''),
-            parcaNo: String(r[2] || ''),
-            seriNo: String(r[3] || ''),
-            gelecekTarih: dateStr,
-            daysDiff: diff,
-            isOverdue: diff <= 0
-          });
-        }
+        const dateLines = dateStr.split(/\r?\n/);
+        const seriLines = String(r[3] || '').split(/\r?\n/);
+        dateLines.forEach((rawLine, lIdx) => {
+          const cleanLine = rawLine.trim();
+          if (!cleanLine || /^x+$/i.test(cleanLine) || cleanLine === '-') return;
+          const diff = parseDiffDays(cleanLine);
+          if (diff !== null && diff <= 90) {
+            const alignedSeri = (seriLines[lIdx] ?? (seriLines.length === 1 ? seriLines[0] : '')).trim() || String(r[3] || '');
+            items.push({
+              birim: birimName,
+              rowIndex: idx,
+              lineIndex: lIdx,
+              malzemeAdi: String(r[1] || ''),
+              parcaNo: String(r[2] || ''),
+              seriNo: alignedSeri,
+              gelecekTarih: cleanLine,
+              daysDiff: diff,
+              isOverdue: diff <= 0
+            });
+          }
+        });
       });
     };
 
     scanRows('BELL 429', techizatBell429Data, 'bell429');
-    scanRows('AT-802', techizatAt802Data, 'at802');
+    scanRows('AT-802 YER DESTEK', techizatAt802Data, 'at802');
+    scanRows('AT-802 ÖZEL ALET', techizatAt802OzelAletData, 'at802_ozel_alet');
     scanRows('T-70', techizatT70Data, 't70');
     scanRows('T-70 BUMBİ BACKET', techizatT70BumbiBacketData, 't70_bumbi_backet');
     scanRows('T-70 HELİTAK', techizatT70HelitakData, 't70_helitak');
@@ -4815,6 +4867,10 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    fetchGunTakipSorumlulari();
+  }, []);
+
   // Run automatically on component mount and every 30 minutes
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -4832,6 +4888,7 @@ export default function App() {
   }, [
     techizatBell429Data,
     techizatAt802Data,
+    techizatAt802OzelAletData,
     techizatT70Data,
     techizatB360Data,
     techizatC650Data,
@@ -5273,18 +5330,22 @@ export default function App() {
 
   const formatKaraAraciToStandardRow = (row: string[]) => {
     const r = formatKaraAraclariRow(row);
+    const hasPlaka = r[1] && r[1] !== "-" && r[1] !== "0";
+    const title = [r[2] && r[2] !== "-" ? r[2] : "", r[3] && r[3] !== "-" ? r[3] : ""].filter(Boolean).join(" ") || r[1] || "Kara Aracı";
     return [
       r[0] || "1",
-      r[1] || "",
-      r[2] || "-",
-      r[3] || "",
+      hasPlaka ? `${r[1]} (${title})` : title,
+      r[3] || "-",
+      "-",
+      r[5] ? `${r[5]} KM` : "-",
       r[4] || "-",
-      r[5] || "FAAL",
-      r[6] || "-",
+      r[6] || "FAAL",
+      "EVET",
       r[7] || "-",
       r[8] || "-",
       r[9] || "-",
-      r[10] || ""
+      r[10] || "",
+      ""
     ];
   };
 
@@ -5404,23 +5465,18 @@ export default function App() {
     let finalEditedRow: string[] = [];
 
     if (isKaraAraci) {
-      const originalSec = (targetOriginal && targetOriginal[13]) ? targetOriginal[13] : "kara_araclari";
-      const preservedMailDate = targetOriginal?.[12] || "";
       finalEditedRow = [
-        editedRow[0] || "1", // 0: SIRA NO
-        editedRow[1] || "",  // 1: ARAÇ PLAKASI / TANIMI
-        editedRow[2] || "-", // 2: MARKA
-        editedRow[3] || "",  // 3: PARÇA NO (P/N) / MODEL
-        editedRow[4] || "",  // 4: BULUNDUĞU YER
-        editedRow[5] || "",  // 5: SON KM Sİ
+        editedRow[0] || "1",    // 0: Sıra No
+        editedRow[1] || "-",    // 1: Araç Plaka
+        editedRow[2] || "-",    // 2: Marka
+        editedRow[3] || "-",    // 3: Model
+        editedRow[4] || "-",    // 4: Yakıt Türü
+        editedRow[5] || "-",    // 5: Son Bakım Km
         editedRow[6] || "FAAL", // 6: DURUMU
-        editedRow[7] || "EVET", // 7: BAKIMA TABİ
-        editedRow[8] || "",  // 8: SON KONTROL / KALİBRASYON / BAKIM
-        editedRow[9] || "",  // 9: GELECEK KONTROL / KALİBRASYON / BAKIM
-        editedRow[10] || "", // 10: SON KONTROLÜ YAPAN FİRMA
-        editedRow[11] || "", // 11: AÇIKLAMA
-        preservedMailDate,   // 12: 90 GÜN UYARISI MAİL GÖNDERİM TARİHİ
-        originalSec          // 13: BÖLÜM
+        editedRow[7] || "-",    // 7: Bakım Tarihi
+        editedRow[8] || "-",    // 8: Sonraki Bakım Tarihi yada KM'si
+        editedRow[9] || "-",    // 9: SON KONTROLÜ YAPAN FİRMA
+        editedRow[10] || ""     // 10: AÇIKLAMA
       ];
     } else if (isDepo) {
       const originalSec = targetOriginal ? getRowSection(targetOriginal, techType) : (techizatActiveSection && techizatActiveSection !== 'all' ? techizatActiveSection : 'depo_sarf');
@@ -5567,12 +5623,12 @@ export default function App() {
 
     // Close modal immediately and show immediate responsive feedback
     setActiveTechizatRowEdit(null);
-    showNotification("Kayıt başarıyla güncellendi! Google Drive Excel dosyası güncelleniyor...");
+    showNotification("Kayıt başarıyla güncellendi! Bulut Arşivi Excel dosyası güncelleniyor...");
 
-    // Background sync to Google Drive Excel
+    // Background sync to Drive Excel
     if (techType && updated.length > 0) {
       syncTechizatExcelToGoogleDrive(techType, updated);
-      showNotification("Değişiklikler Google Drive Excel dosyasına başarıyla kaydedildi!");
+      showNotification("Değişiklikler Bulut Arşivi Excel dosyasına başarıyla kaydedildi!");
     }
   };
 
@@ -5638,13 +5694,13 @@ export default function App() {
 
     // Modal'ı hemen kapat ve kullanıcıya anında bildirim ver
     setActiveTechizatRowEdit(null);
-    showNotification("Seçilen kayıt silindi! Google Drive Excel dosyası güncelleniyor...");
+    showNotification("Seçilen kayıt silindi! Bulut Arşivi Excel dosyası güncelleniyor...");
 
-    // 1. Güncellenmiş listeyi Excel olarak doğrudan Google Drive'a senkronize et
+    // 1. Güncellenmiş listeyi Excel olarak doğrudan buluta senkronize et
     syncTechizatExcelToGoogleDrive(techType, updatedList);
 
-    // Doğrudan Google Drive Excel klasörüne kaydedilir
-    showNotification("Seçilen kayıt Google Drive Excel dosyası üzerinden başarıyla silindi ve güncellendi.");
+    // Doğrudan Bulut Arşivi Excel klasörüne kaydedilir
+    showNotification("Seçilen kayıt Bulut Arşivi Excel dosyası üzerinden başarıyla silindi ve güncellendi.");
   };
 
   /**
@@ -5795,20 +5851,17 @@ export default function App() {
     let newRow: string[] = [];
     if (isKara) {
       newRow = [
-        nextSiraNo, // 0: SIRA NO
-        newProductForm.name.trim(), // 1: ARAÇ PLAKASI / TANIMI
-        newProductForm.marka?.trim() || "-", // 2: MARKA
-        newProductForm.pn.trim() || "-", // 3: PARÇA NO (P/N) / MODEL
-        newProductForm.yer.trim() || "-", // 4: BULUNDUĞU YER
-        newProductForm.miktar.trim() || "0", // 5: SON KM Sİ
-        newProductForm.durumu || "FAAL", // 6: DURUMU
-        newProductForm.kalibrasyonaTabi || "EVET", // 7: BAKIMA TABİ
-        newProductForm.sonKontrol.trim() || "-", // 8: SON MUAYENE / BAKIM
-        newProductForm.gelecekKontrol.trim() || "-", // 9: GELECEK MUAYENE / BAKIM
-        newProductForm.firma.trim() || "-", // 10: SON KONTROLÜ YAPAN FİRMA
-        newProductForm.aciklama.trim() || "-", // 11: AÇIKLAMA
-        "", // 12: 90 GÜN MAIL
-        "kara_araclari" // 13: BÖLÜM
+        nextSiraNo,                            // 0: Sıra No
+        newProductForm.name.trim() || "-",     // 1: Araç Plaka
+        newProductForm.marka?.trim() || "-",   // 2: Marka
+        newProductForm.pn.trim() || "-",       // 3: Model
+        newProductForm.yer.trim() || "-",      // 4: Yakıt Türü
+        newProductForm.miktar.trim() || "0",   // 5: Son Bakım Km
+        newProductForm.durumu || "FAAL",       // 6: DURUMU
+        newProductForm.sonKontrol.trim() || "-",    // 7: Bakım Tarihi
+        newProductForm.gelecekKontrol.trim() || "-", // 8: Sonraki Bakım Tarihi yada KM'si
+        newProductForm.firma.trim() || "-",    // 9: SON KONTROLÜ YAPAN FİRMA
+        newProductForm.aciklama.trim() || "-"  // 10: AÇIKLAMA
       ];
     } else if (isDepo) {
       newRow = [
@@ -5859,14 +5912,14 @@ export default function App() {
     else if (targetUnit === 'kara_araclari') { setTechizatKaraAraclariData(updated); }
 
     setIsNewProductModalOpen(false);
-    showNotification("Yeni ürün/kayıt başarıyla eklendi! Google Drive Excel dosyası güncelleniyor...");
+    showNotification("Yeni ürün/kayıt başarıyla eklendi! Bulut Arşivi Excel dosyası güncelleniyor...");
 
     // En son satıra eklenmiş yeni listeyi Excel olarak Drive'a senkronize et
     syncTechizatExcelToGoogleDrive(targetUnit, updated);
 
-    // Canlı Google E-Tabloya satırı ekle
+    // Canlı E-Tabloya satırı ekle
     const unitLabel = getTechizatUnitLabel(targetUnit);
-    showNotification("Yeni kayıt Google Drive Excel dosyasına başarıyla eklendi.");
+    showNotification("Yeni kayıt Bulut Arşivi Excel dosyasına başarıyla eklendi.");
   };
 
   // State to track cloud sync progress
@@ -5958,7 +6011,7 @@ export default function App() {
         }));
         
         if (!silentNotify) {
-          showNotification(`Canlı Google E-Tablodan '${config.title}' tablosuna ait ${parsedRows.length} satır güncel veri başarıyla çekildi!`);
+          showNotification(`Canlı E-Tablodan '${config.title}' tablosuna ait ${parsedRows.length} satır güncel veri başarıyla çekildi!`);
         }
         return parsedRows;
       } else {
@@ -6382,7 +6435,7 @@ export default function App() {
           const karaMarkaIdx = findColIdx(["MARKA"]);
           const karaModelIdx = findColIdx(["MODEL", "TİP", "TIP"]);
           const karaYakitIdx = findColIdx(["YAKIT TÜRÜ", "YAKIT TURU", "YAKIT", "BENZİN", "BENZIN", "MAZOT", "DİZEL", "DIZEL"]);
-          const karaKmIdx = findColIdx(["SON BAKIM KM", "SON BAKIM", "KM Sİ", "KM SI", "SON KM", "KM"]);
+          const karaKmIdx = findColIdx(["SON BAKIM KM", "KM Sİ", "KM SI", "SON KM", "KM"], ["TARİH", "TARIH", "SONRAKİ", "SONRAKI"]);
           const karaDurumIdx = findColIdx(["DURUM", "DURUMU"]);
           const karaBakimTarihiIdx = findColIdx(["BAKIM TARİHİ", "BAKIM TARIHI"], ["SONRAKİ", "SONRAKI", "GELECEK"]);
           const karaSonrakiBakimIdx = findColIdx(["SONRAKİ BAKIM TARİHİ", "SONRAKI BAKIM TARIHI", "SONRAKİ BAKIM", "SONRAKI BAKIM", "GELECEK BAKIM", "SONRAKİ", "SONRAKI", "GELECEK"]);
@@ -6394,41 +6447,63 @@ export default function App() {
           const mIdx = karaMarkaIdx >= 0 ? karaMarkaIdx : (hasSiraInExcel ? 2 : 1);
           const moIdx = karaModelIdx >= 0 ? karaModelIdx : (hasSiraInExcel ? 3 : 2);
           const yIdx = karaYakitIdx >= 0 ? karaYakitIdx : (hasSiraInExcel ? 4 : 3);
-          const dIdx = karaDurumIdx >= 0 ? karaDurumIdx : (hasSiraInExcel ? 5 : 4);
-          const kIdx = karaKmIdx >= 0 ? karaKmIdx : (hasSiraInExcel ? 6 : 5);
+          const kIdx = karaKmIdx >= 0 ? karaKmIdx : (hasSiraInExcel ? 5 : 4);
+          const dIdx = karaDurumIdx >= 0 ? karaDurumIdx : (hasSiraInExcel ? 6 : 5);
           const btIdx = karaBakimTarihiIdx >= 0 ? karaBakimTarihiIdx : (hasSiraInExcel ? 7 : 6);
           const sbtIdx = karaSonrakiBakimIdx >= 0 ? karaSonrakiBakimIdx : (hasSiraInExcel ? 8 : 7);
           const fIdx = karaFirmaIdx >= 0 ? karaFirmaIdx : (hasSiraInExcel ? 9 : 8);
           const aIdx = karaAciklamaIdx >= 0 ? karaAciklamaIdx : (hasSiraInExcel ? 10 : 9);
 
-          let rawSiraVal = getVal(karaSiraIdx, "");
+          const rawSiraVal = getVal(karaSiraIdx, "");
           let rawPlakaVal = getVal(pIdx, "");
-          let rawMarkaVal = getVal(mIdx, "-");
-          let rawModelVal = getVal(moIdx, "");
-          let rawYakitVal = getVal(yIdx, "");
-          let rawDurumVal = getVal(dIdx, "FAAL") || "FAAL";
+          if (rawPlakaVal === "0") rawPlakaVal = "-";
+          const rawMarkaVal = getVal(mIdx, "-");
+          const rawModelVal = getVal(moIdx, "");
+          const rawYakitVal = getVal(yIdx, "");
           let rawKmVal = getVal(kIdx, "-");
-          let rawBakimTarihiVal = cleanAndFormatDateString(getVal(btIdx, ""));
-          let rawSonrakiBakimVal = cleanAndFormatDateString(getVal(sbtIdx, ""));
+          let rawDurumVal = getVal(dIdx, "FAAL") || "FAAL";
+          const rawBakimTarihiVal = cleanAndFormatDateString(getVal(btIdx, ""));
+          const rawSonrakiBakimVal = cleanAndFormatDateString(getVal(sbtIdx, ""));
           let rawFirmaVal = getVal(fIdx, "");
           let rawAciklamaVal = getVal(aIdx, "");
 
-          const targetRow = [
+          // Swapped KM / DURUMU correction in kara_araçları_takip.xlsx
+          const kmUpper = rawKmVal.toUpperCase();
+          const durumUpper = rawDurumVal.toUpperCase();
+          const isStatusWord = (val: string) =>
+            ["FAAL", "ARIZALI", "GAYRİ FAAL", "GAYRI FAAL", "BAKIMDA", "HURDA"].some(w => val.includes(w));
+          if (isStatusWord(kmUpper) && (!isStatusWord(durumUpper) || /^\d+$/.test(rawDurumVal) || rawDurumVal === "-")) {
+            const tmp = rawKmVal;
+            rawKmVal = rawDurumVal;
+            rawDurumVal = tmp;
+          }
+
+          // Legacy description stored in "SON KONTROLÜ YAPAN FİRMA" while "AÇIKLAMA" holds "HAYIR"/"EVET"
+          const acikUpper = rawAciklamaVal.toUpperCase();
+          if ((acikUpper === "HAYIR" || acikUpper === "EVET" || acikUpper === "-" || acikUpper === "") && rawFirmaVal && rawFirmaVal !== "-") {
+            const lowerFirma = rawFirmaVal.toLowerCase();
+            if (rawFirmaVal.length > 22 || lowerFirma.includes("bakım") || lowerFirma.includes("kontrol") || lowerFirma.includes("değişim") || lowerFirma.includes("yağ") || lowerFirma.includes("akü") || lowerFirma.includes("tamamlandı") || lowerFirma.includes("yapıldı")) {
+              rawAciklamaVal = rawFirmaVal;
+              rawFirmaVal = "-";
+            }
+          }
+
+          const normalizedKaraRow = convertOldKaraAraclariRowToNew([
             rawSiraVal,
             rawPlakaVal,
             rawMarkaVal,
             rawModelVal,
             rawYakitVal,
-            rawDurumVal,
             rawKmVal,
+            rawDurumVal,
             rawBakimTarihiVal,
             rawSonrakiBakimVal,
             rawFirmaVal,
             rawAciklamaVal
-          ];
+          ]);
 
           if (rawPlakaVal || rawMarkaVal || rawModelVal || rawAciklamaVal || rawKmVal) {
-            rawParsedRows.push(targetRow);
+            rawParsedRows.push(normalizedKaraRow);
           }
           continue;
         } else if (isDepoType) {
@@ -6607,18 +6682,19 @@ export default function App() {
         b360: 'hava_araçları_yer_destek_b-360.xlsx',
         c650: 'hava_araçları_yer_destek_c-650.xlsx',
         hangar: 'hava_araçları_yer_destek_hangar.xlsx',
-        kara_araclari: 'kara_araclari_servis_cizelgesi.xlsx'
+        kara_araclari: 'kara_araçları_takip.xlsx'
       };
 
       const UNIT_FILE_IDS: Record<string, string> = {
-        at802: '1PY6ZHqBS5iELDHBZX-wUdOeyUNkqbSf3',
+        at802: '1CA2kJJsb5MqM0dP2eKeVovRbnl6oTiBD',
         at802_ozel_alet: '1idYaGtP9-4zMnUP9R28yHZwd47gy_QL8',
         bell429: '1oICd57xCIGHza96IrWfOBCh1p5jTv3mB',
         t70: '1xDxoQPBpKIWTvbAhcMv7cUsdTtKHxwkJ',
         t70_bumbi_backet: '1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q',
         b360: '1_oxUU31nloWuKb9dMOOU8Q8XfvD4iAkz',
         c650: '1BRvs2LxZ21BMl3YRjKL1rtMzli9J5Kuf',
-        hangar: '1-KGVWi0EN5UnI0NEC_EC3-zORYHsbqvu'
+        hangar: '1-KGVWi0EN5UnI0NEC_EC3-zORYHsbqvu',
+        kara_araclari: '1QrOKOWYwHAeVI4ap46ViFg8t5Akt00n6'
       };
 
       let keysToFetch: string[] = [];
@@ -6636,12 +6712,20 @@ export default function App() {
         const targetFileName = UNIT_EXCEL_MAP[uKey] || `hava_araçları_yer_destek_${uKey}.xlsx`;
         const explicitFileId = UNIT_FILE_IDS[uKey] || '';
         try {
-          const candidates = [
-            targetFileName,
-            targetFileName.replace(/ç/g, 'c').replace(/ı/g, 'i'),
-            targetFileName.replace(/-/g, '_'),
-            targetFileName.replace(/_/g, '-')
-          ];
+          const candidates =
+            uKey === 'kara_araclari'
+              ? [
+                  'kara_araçları_takip.xlsx',
+                  'kara_araclari_takip.xlsx',
+                  'kara_araclari_servis_cizelgesi.xlsx',
+                  'kara_araçları_servis_çizelgesi.xlsx'
+                ]
+              : [
+                  targetFileName,
+                  targetFileName.replace(/ç/g, 'c').replace(/ı/g, 'i'),
+                  targetFileName.replace(/-/g, '_'),
+                  targetFileName.replace(/_/g, '-')
+                ];
           const result = await fetchExcelFromDrive(targetFileName, candidates, '1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP');
 
           if (result && result.status === 'success' && result.base64) {
@@ -6699,11 +6783,11 @@ export default function App() {
         });
         const unitLabel = targetUnitKey && targetUnitKey !== 'all' ? targetUnitKey.toUpperCase() : 'Birimler';
         if (!silent) {
-          showNotification(`Google Drive'dan [${unitLabel}] için (${totalLoadedCount} kayıt) Excel verileri başarıyla yüklendi!`);
+          showNotification(`Bulut Arşivinden [${unitLabel}] için (${totalLoadedCount} kayıt) Excel verileri başarıyla yüklendi!`);
         }
       } else {
         if (!silent) {
-          showNotification("❌ Google Drive'dan canlı veri çekilemedi: Dosya bulunamadı veya bağlantı hatası oluştu! Önbellek kullanımı kesinlikle yasaktır.");
+          showNotification("❌ Bulut Arşivinden canlı veri çekilemedi: Dosya bulunamadı veya bağlantı hatası oluştu! Önbellek kullanımı kesinlikle yasaktır.");
         }
       }
     } catch (err) {
@@ -6719,7 +6803,19 @@ export default function App() {
 
   const fetchGunTakipSorumlulari = async () => {
     try {
-      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("GÜN TAKİP")}`;
+      const serverRes = await fetch(`/api/gun-takip/sorumlular?t=${Date.now()}`).catch(() => null);
+      if (serverRes && serverRes.ok) {
+        const sJson = await serverRes.json().catch(() => null);
+        if (sJson && sJson.status === "success" && Array.isArray(sJson.data) && sJson.data.length > 0) {
+          const normalized = normalizeGunTakipRows(sJson.data);
+          if (normalized.length > 0) {
+            setGunTakipSorumlulari(normalized);
+            return;
+          }
+        }
+      }
+
+      const targetUrl = `${GOOGLE_SCRIPT_URL}?action=readSheet&sheetName=${encodeURIComponent("GÜN TAKİP")}&t=${Date.now()}`;
       const response = await fetch(targetUrl);
       if (response.ok) {
         const result = await response.json();
@@ -6733,10 +6829,9 @@ export default function App() {
             mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[5] || "").trim(),
             mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[6] || "").trim()
           })).filter((item: any) => item.birim);
-          
+
           if (mapped.length > 0) {
-            setGunTakipSorumlulari(mapped);
-            try { void 0; } catch(e){}
+            setGunTakipSorumlulari(normalizeGunTakipRows(mapped));
           }
         }
       }
@@ -6746,36 +6841,79 @@ export default function App() {
   };
 
   const saveGunTakipSorumlulari = async (updatedData: typeof gunTakipSorumlulari) => {
+    const normalized = normalizeGunTakipRows(updatedData);
+    setGunTakipSorumlulari(normalized);
     setIsSavingSorumlu(true);
     try {
-      const rowsToSend = updatedData.map(item => [
-        item.birim,
-        item.adSoyad,
-        item.eposta,
-        item.norm || '',
-        item.mail90 || '',
-        item.mail60 || '',
-        item.mail30 || ''
-      ]);
-      const response = await fetch(GOOGLE_SCRIPT_URL, {
+      let savedAnywhere = false;
+      let sheetSynced = false;
+
+      const serverResp = await fetch('/api/gun-takip/sorumlular', {
         method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          action: 'updateGunTakip',
-          data: rowsToSend
-        })
-      });
-      
-      const result = await response.json();
-      if (result.status === "success") {
-        setGunTakipSorumlulari(updatedData);
-        try { void 0; } catch(e){}
-        showNotification("Sorumlu Personel (Gün Takip) Verileri Başarıyla Güncellendi!");
-      } else {
-        alert("E-Tablo Güncelleme Hatası: " + result.message);
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: normalized })
+      }).catch(() => null);
+
+      if (serverResp && serverResp.ok) {
+        const sRes = await serverResp.json().catch(() => null);
+        if (sRes && sRes.status === 'success') {
+          savedAnywhere = true;
+          sheetSynced = Boolean(sRes.sheetSaved);
+        }
       }
-    } catch (err: any) {
-      alert("Entegrasyon Bağlantı Hatası: " + err.toString());
+
+      if (!sheetSynced && GOOGLE_SCRIPT_URL) {
+        const headers = [
+          "SORUMLU BİRİM",
+          "ADI SOYADI",
+          "E-POSTA ADRESİ",
+          "TAKİP EDİLECEK NORM",
+          "SON BİLDİRİM TARİHİ",
+          "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
+          "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+        ];
+        const rowsToSend = normalized.map(item => [
+          item.birim,
+          item.adSoyad,
+          item.eposta,
+          item.norm || '',
+          item.mail90 || '',
+          item.mail60 || '',
+          item.mail30 || ''
+        ]);
+        try {
+          const gasResp = await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({
+              action: 'updateSheet',
+              sheetName: 'GÜN TAKİP',
+              spreadsheetId: '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0',
+              data: [headers, ...rowsToSend]
+            })
+          });
+          if (gasResp.ok) {
+            const gj = await gasResp.json().catch(() => null);
+            if (gj && gj.status === 'success') {
+              savedAnywhere = true;
+              sheetSynced = true;
+            }
+          }
+        } catch {}
+      }
+
+      if (savedAnywhere) {
+        showNotification(
+          sheetSynced
+            ? "Sorumlu Personel (Gün Takip) Verileri Sunucuya ve Canlı E-Tabloya Başarıyla Kaydedildi!"
+            : "Sorumlu Personel (Gün Takip) Verileri Sunucuya Kaydedildi!"
+        );
+      } else {
+        showNotification("Kaydetme sırasında bağlantı uyarısı oluştu, tekrar deneyiniz.");
+      }
+    } catch (err) {
+      console.error("Gün takip kaydetme hatası:", err);
+      showNotification("Kaydetme hatası oluştu.");
     } finally {
       setIsSavingSorumlu(false);
     }
@@ -7080,7 +7218,7 @@ export default function App() {
         });
 
         setUploadProgress(60);
-        showNotification(`Çözümlenen veriler Google Sheets'e aktarılıyor...`);
+        showNotification(`Çözümlenen veriler Canlı E-Tabloya aktarılıyor...`);
 
         const targetUrl = GOOGLE_SCRIPT_URL;
 
@@ -7097,7 +7235,7 @@ export default function App() {
         });
         
         if (!res.ok) {
-          throw new Error(`Google Apps Script sunucu hatası: Kod ${res.status}`);
+          throw new Error(`Sunucu bağlantı hatası: Kod ${res.status}`);
         }
         
         const result = await res.json();
@@ -7116,7 +7254,7 @@ export default function App() {
         await pullDataFromGoogleSheets(id, true, firstSheetName);
         
         setUploadProgress(100);
-        showNotification(`'${config.title}' altındaki tüm sayfalar başarıyla Google Sheets üzerine aktarıldı ve güncellendi!`);
+        showNotification(`'${config.title}' altındaki tüm sayfalar başarıyla Canlı E-Tablo üzerine aktarıldı ve güncellendi!`);
         
         setSelectedFormId(id);
         setModalType('form_table');
@@ -7642,9 +7780,9 @@ export default function App() {
 
           setIsSendingToSheets(prev => ({ ...prev, [syncSelectedTarget]: true }));
           setUploadProgress(10);
-          showNotification(`${file.name} belgesi başarıyla işlendi ve Google Drive Excel klasörüne kaydedildi!`);
+          showNotification(`${file.name} belgesi başarıyla işlendi ve Bulut Arşivi Excel klasörüne kaydedildi!`);
 
-          // Background Google Drive upload for Teçhizat/Depo Excel file
+          // Background Drive upload for Teçhizat/Depo Excel file
           fileToBase64(file).then(async (base64Data) => {
             try {
               let driveFileName = "hava_araçları_yer_destek_bell-429.xlsx";
@@ -7685,10 +7823,10 @@ export default function App() {
 
               const resOk = await uploadExcelToDrive(driveFileName, base64Data, String(syncSelectedTarget), "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP");
               if (resOk) {
-                showNotification(`'${driveFileName}' (${prettyUnitName}) güncel Excel belgesi Google Drive'a başarıyla yedeklendi!`);
+                showNotification(`'${driveFileName}' (${prettyUnitName}) güncel Excel belgesi Bulut Arşivine başarıyla yedeklendi!`);
               }
             } catch (err) {
-              console.error("Failed to backup Teçhizat Excel to Google Drive:", err);
+              console.error("Failed to backup Teçhizat Excel to Drive:", err);
             }
           });
 
@@ -7854,14 +7992,14 @@ export default function App() {
           
           setIsSendingToSheets(prev => ({ ...prev, [5]: true }));
           setUploadProgress(10);
-          showNotification(`${file.name} belgesi çözümleniyor, Google Drive'a yükleniyor ve E-Tablo güncelleniyor...`);
+          showNotification(`${file.name} belgesi çözümleniyor, Bulut Arşivine yükleniyor ve E-Tablo güncelleniyor...`);
 
           fileToBase64(file).then(async (base64Data) => {
             try {
               const driveFileName = "personel_bilgi_cizelgesi.xlsx";
               setUploadProgress(30);
 
-              // 1. Upload to Google Drive (with correct mimeType)
+              // 1. Upload to Drive (with correct mimeType)
               const driveRes = await fetch(GOOGLE_SCRIPT_URL, {
                 method: "POST",
                 headers: {
@@ -7879,16 +8017,16 @@ export default function App() {
               });
 
               if (!driveRes.ok) {
-                throw new Error("Google Drive yedekleme başarısız oldu.");
+                throw new Error("Bulut Arşivi yedekleme başarısız oldu.");
               }
 
               const driveResult = await driveRes.json();
               if (driveResult.status !== "success") {
-                throw new Error(driveResult.message || "Google Drive yedekleme işlemi başarısız.");
+                throw new Error(driveResult.message || "Bulut Arşivi yedekleme işlemi başarısız.");
               }
 
               setUploadProgress(60);
-              showNotification("Dosya Google Drive'a başarıyla yüklendi. Şimdi E-Tablo veritabanı güncelleniyor...");
+              showNotification("Dosya Bulut Arşivine başarıyla yüklendi. Şimdi E-Tablo veritabanı güncelleniyor...");
 
               // 2. Upload parsed gridData to Google Sheet (5-Personel_Bilgi)
               const headers = TABLE_CONFIGS[5].columns.map(col => col.label);
@@ -7935,7 +8073,7 @@ export default function App() {
 
               setUploadProgress(100);
               setIsSendingToSheets(prev => ({ ...prev, [5]: false }));
-              showNotification(`'5. Personel Bilgi Çizelgeleri' başarıyla Google Drive'a yedeklendi ve E-Tablo veritabanı güncellendi!`);
+              showNotification(`'5. Personel Bilgi Çizelgeleri' başarıyla Bulut Arşivine yedeklendi ve E-Tablo veritabanı güncellendi!`);
 
               fetchPdfMetadata(); // Refresh metadata list
 
@@ -8081,7 +8219,7 @@ export default function App() {
         driveFileName = `${prefix}_cizelgesi.pdf`;
       }
 
-      showNotification(`"${driveFileName}" adıyla Google Drive'a yükleniyor...`);
+      showNotification(`"${driveFileName}" adıyla Bulut Arşivine yükleniyor...`);
       setUploadProgress(70);
 
       const targetUrl = GOOGLE_SCRIPT_URL;
@@ -8101,7 +8239,7 @@ export default function App() {
       });
 
       if (!res.ok) {
-        throw new Error(`Google Apps Script sunucu hatası: Kod ${res.status}`);
+        throw new Error(`Sunucu bağlantı hatası: Kod ${res.status}`);
       }
 
       const result = await res.json();
@@ -8199,7 +8337,7 @@ export default function App() {
         });
 
         setUploadProgress(60);
-        showNotification(`Çözümlenen veriler Google Sheets'e aktarılıyor...`);
+        showNotification(`Çözümlenen veriler Canlı E-Tabloya aktarılıyor...`);
 
         const targetUrl = GOOGLE_SCRIPT_URL;
 
@@ -8216,7 +8354,7 @@ export default function App() {
         });
         
         if (!res.ok) {
-          throw new Error(`Google Apps Script sunucu hatası: Code ${res.status}`);
+          throw new Error(`Sunucu bağlantı hatası: Code ${res.status}`);
         }
         
         const result = await res.json();
@@ -8235,7 +8373,7 @@ export default function App() {
         await pullDataFromGoogleSheets(id, true, firstSheetName);
         
         setUploadProgress(100);
-        showNotification(`'${config.title}' altındaki tüm sayfalar başarıyla Google Sheets üzerine aktarıldı ve güncellendi!`);
+        showNotification(`'${config.title}' altındaki tüm sayfalar başarıyla Canlı E-Tablo üzerine aktarıldı ve güncellendi!`);
         
         setSelectedFormId(id);
         setModalType('form_table');
@@ -9360,6 +9498,22 @@ export default function App() {
                     </button>
 
                     <button
+                      id="btn-form-talep-olustur"
+                      onClick={() => setIsTalepOlusturOpen(true)}
+                      className="bg-white hover:bg-emerald-50/50 border border-emerald-600/30 shadow-sm rounded-[2rem] p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:scale-[1.03] active:scale-[0.98] cursor-pointer group relative"
+                    >
+                      <div className="w-16 h-16 bg-emerald-700/10 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-emerald-700/20 transition-all shadow-sm text-[#0b3d1d] relative">
+                        <FileText className="w-8 h-8 text-[#0b3d1d]" />
+                        <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-md bg-emerald-600 text-white flex items-center justify-center shadow-xs border border-white">
+                          <Plus className="w-3 h-3" />
+                        </div>
+                      </div>
+                      <span className="text-[#0b3d1d] font-bold tracking-normal text-sm mb-2 text-center uppercase leading-tight">10. TALEP OLUŞTUR</span>
+                      <span className="text-[9px] text-[#0b3d1d]/70 uppercase tracking-wider font-semibold font-mono mb-2">Parça, Sarf, Kalibrasyon &amp; Hizmet Talepleri (Word)</span>
+                      <span className="text-[9px] text-emerald-800 font-extrabold uppercase tracking-wider font-mono bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">TALEP OLUŞTUR ➜</span>
+                    </button>
+
+                    <button
                       id="btn-form-olay-takip"
                       onClick={() => {
                         setOlayTakipInitialUnit('at802');
@@ -9653,7 +9807,7 @@ export default function App() {
                                 onClick={async () => {
                                   try {
                                     setIsExcelOcrProcessing(true);
-                                    showNotification("Google Drive'daki Excel dosyası aranıyor ve veriler eşitleniyor...");
+                                    showNotification("Bulut Arşivindeki Excel dosyası aranıyor ve veriler eşitleniyor...");
                                     await pullDataFromGoogleSheets(5);
                                     showNotification("Drive Excel verileri başarıyla portal hafızasına çekildi!");
                                   } catch (err: any) {
@@ -9663,7 +9817,7 @@ export default function App() {
                                   }
                                 }}
                                 className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold font-mono text-[10px] rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm active:scale-95"
-                                title="Google Drive'daki en güncel Personel Bilgi Excel dosyasını (.xlsx) tara ve verileri portal hafızasına senkronize et"
+                                title="Bulut Arşivindeki en güncel Personel Bilgi Excel dosyasını (.xlsx) tara ve verileri portal hafızasına senkronize et"
                               >
                                 <RefreshCw className="w-3.5 h-3.5 animate-spin-slow" />
                                 <span>DRİVE'DAN VERİLERİ YENİLE</span>
@@ -10312,10 +10466,10 @@ export default function App() {
                           <FileText className="w-10 h-10" />
                         </div>
                         <h4 className="text-slate-800 font-extrabold tracking-tight text-base uppercase mb-2">
-                          PLAN PDF'İ GOOGLE DRIVE'DA BULUNAMADI
+                          PLAN PDF'İ BULUT ARŞİVİNDE BULUNAMADI
                         </h4>
                         <p className="text-xs text-slate-500 font-bold leading-relaxed max-w-md uppercase tracking-wide">
-                          Seçilen <span className="text-emerald-800">"{TABLE_CONFIGS[selectedFormId!]?.title}"</span> planı için Drive klasöründe uygun PDF belgesi tespit edilemedi.
+                          Seçilen <span className="text-emerald-800">"{TABLE_CONFIGS[selectedFormId!]?.title}"</span> planı için Bulut Arşivi klasöründe uygun PDF belgesi tespit edilemedi.
                         </p>
                         <p className="text-[11px] text-slate-400 mt-2 max-w-sm leading-relaxed">
                           Lütfen dosyanızı Güncelleme Sihirbazından yükleyin. Beklenen dosya adı: <strong>{expectedFileName}</strong>
@@ -10837,7 +10991,7 @@ export default function App() {
                                 }}
                                 disabled={isTechizatDriveLoading}
                                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black text-xs rounded-xl flex items-center gap-2 shadow-lg cursor-pointer transition-all"
-                                title="Google Drive'dan bu birime ait Excel dosyasını canlı olarak indirir ve tabloyu doldurur"
+                                title="Bulut Arşivinden bu birime ait Excel dosyasını canlı olarak indirir ve tabloyu doldurur"
                             >
                                 <RefreshCw className={`w-3 h-3 ${isTechizatDriveLoading ? 'animate-spin' : ''}`} />
                                 <span>{isTechizatDriveLoading ? 'ÇEKİLİYOR...' : 'ARA'}</span>
@@ -11065,12 +11219,12 @@ export default function App() {
 
                               <button
                                 onClick={async () => {
-                                  showNotification("Google Drive'dan bu sayfaya ait güncel veriler senkronize ediliyor...");
+                                  showNotification("Bulut Arşivinden bu sayfaya ait güncel veriler senkronize ediliyor...");
                                   await pullTechizatUnitFromDrive(activeTechizatType, false);
                                 }}
                                 disabled={isTechizatDriveLoading}
                                 className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] disabled:opacity-50 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
-                                title="Google Drive klasöründeki güncel Excel dosyasından sadece bu sayfanın verilerini yeniler"
+                                title="Bulut Arşivi klasöründeki güncel Excel dosyasından sadece bu sayfanın verilerini yeniler"
                               >
                                 <RefreshCw className={`w-4 h-4 text-emerald-300 ${isTechizatDriveLoading ? 'animate-spin' : ''}`} />
                                 <span>{isTechizatDriveLoading ? 'BAĞLANILIYOR...' : 'DRİVE İLE SENKRONİZE ET'}</span>
@@ -11274,7 +11428,7 @@ export default function App() {
                                       {techizatActiveSection === 'depo_sarf' ? 'SARF VE PARÇA DEPOSUNDA KAYIT BULUNMUYOR' : techizatActiveSection === 'depo_kimyasal' ? 'KİMYASAL DEPOSUNDA KAYIT BULUNMUYOR' : 'DEPOLARDA HENÜZ KAYITLI MALZEME BULUNMUYOR'}
                                     </span>
                                     <p className="text-xs text-slate-500 font-medium max-w-md text-center leading-relaxed">
-                                      Google Drive üzerinde bu birime ait kayıtlı Excel bulunamadı veya henüz veri yüklenmedi. <strong>"VERİ GÜNCELLE"</strong> veya <strong>"YENİ EKLE"</strong> butonunu kullanarak Excel yükleyebilirsiniz.
+                                      Bulut Arşivi üzerinde bu birime ait kayıtlı Excel bulunamadı veya henüz veri yüklenmedi. <strong>"VERİ GÜNCELLE"</strong> veya <strong>"YENİ EKLE"</strong> butonunu kullanarak Excel yükleyebilirsiniz.
                                     </p>
                                   </div>
                                 ) : (
@@ -11355,7 +11509,7 @@ export default function App() {
 
                                       let resolvedCopy: string[] = [];
                                       if (targetTechType === 'kara_araclari') {
-                                        resolvedCopy = formatKaraAraciToStandardRow(resolvedRow);
+                                        resolvedCopy = formatKaraAraclariRow(resolvedRow);
                                       } else if (isDepo) {
                                         resolvedCopy = formatDepoRow(resolvedRow);
                                       } else {
@@ -11417,15 +11571,15 @@ export default function App() {
                                      const isKalibTabiVal = isKalibTabiColIdx !== -1 ? String(row[isKalibTabiColIdx] || "").trim().toUpperCase() : "EVET";
                                      const isBakimMuaf = isKalibTabiVal === "HAYIR" || isKalibTabiVal === "HAYIR (MUAFIYET)" || isKalibTabiVal === "MUAFIYET";
 
-                                     const isGelecekBakimCol = !isDepo && (cIdx === gelecekBakimColIdx || (isKaraAraci && (label === "BİR SONRAKİ MUAYENE TARİHİ" || label.includes("GELECEK"))));
+                                     const isGelecekBakimCol = !isDepo && (cIdx === gelecekBakimColIdx || (isKaraAraci && (label.toUpperCase().includes("SONRAKİ BAKIM") || label.toUpperCase().includes("SONRAKI BAKIM") || label === "BİR SONRAKİ MUAYENE TARİHİ" || label.toUpperCase().includes("GELECEK"))));
                                      const isOmurBitisCol = isDepo && (label === "ÖMÜR BİTİŞ TARİHİ" || label.includes("ÖMÜR"));
 
                                      if (!isMultiLine) {
-                                       if (isGelecekBakimCol && cell && cell !== "-" && cell !== "--") {
+                                       if (isGelecekBakimCol && displayCell && displayCell !== "-" && displayCell !== "--") {
                                          if (isBakimMuaf) {
                                            cellStyleClass = 'text-slate-400 italic font-bold text-center';
                                          } else {
-                                           const days = parseGelecekBakimDays(cell);
+                                           const days = parseGelecekBakimDays(displayCell);
                                            if (days !== null) {
                                              if (days < 0) {
                                                cellStyleClass = 'bg-rose-600 text-white font-extrabold px-3 py-1.5 rounded-xl shadow-sm text-center animate-pulse';
@@ -12296,7 +12450,7 @@ export default function App() {
           "SIRA NO", "MALZEME / PARÇA ADI", "PARÇA NO (P/N)", "SERİ NO (S/N)", "MİKTAR", "BULUNDUĞU YER / RAF", "DURUMU", "ÖMÜRLÜ PARÇA MI?", "ÖMÜR BİTİŞ TARİHİ", "TEDARİK EDİLEN FİRMA", "AÇIKLAMA"
         ];
         const karaAraclariColumns = [
-          "SIRA NO", "ARAÇ PLAKASI / TANIMI", "PARÇA NO (P/N) / MODEL", "BULUNDUĞU YER", "SON KM Sİ", "DURUMU", "KALİBRASYONA TABİ", "SON KONTROL / KALİBRASYON / BAKIM", "GELECEK KONTROL / KALİBRASYON / BAKIM", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA", "90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+          "Sıra No", "Araç Plaka", "Marka", "Model", "Yakıt Türü", "Son Bakım Km", "DURUMU", "Bakım Tarihi", "Sonraki Bakım Tarihi yada KM'si", "SON KONTROLÜ YAPAN FİRMA", "AÇIKLAMA"
         ];
         const columns = isKaraAraci ? karaAraclariColumns : (isDepo ? depoColumns : baseColumns);
         const imageKey = techType + "_" + (row[1] || "").replace(/\s+/g, '_') + "_" + (row[3] || "").replace(/\s+/g, '_');
@@ -13092,7 +13246,7 @@ export default function App() {
                               const fileMimeType = getDocMimeType(file.name);
 
                               setIsUploadingDoc(true);
-                              showNotification("Belge Google Drive'a aktarılıyor...");
+                              showNotification("Belge Bulut Arşivine aktarılıyor...");
 
                               try {
                                 const base64Data = await fileToBase64(file);
@@ -13341,7 +13495,7 @@ export default function App() {
                       onSaveImage={async (base64Data, mimeType) => {
                         try {
                           setIsImageUploadingToDrive(true);
-                          showNotification("Görsel Google Drive'a yükleniyor...");
+                          showNotification("Görsel Bulut Arşivine yükleniyor...");
                           const targetUrl = GOOGLE_SCRIPT_URL;
                           const response = await fetch(targetUrl, {
                             method: "POST",
@@ -13419,7 +13573,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (window.confirm("Bu teçhizat kaydını kalıcı olarak silmek ve Google Drive / E-Tablo ile senkronize etmek istediğinize emin misiniz?")) {
+                      if (window.confirm("Bu teçhizat kaydını kalıcı olarak silmek ve Bulut Arşivi / E-Tablo ile senkronize etmek istediğinize emin misiniz?")) {
                         handleDeleteTechizatRow(row, techType);
                       }
                     }}
@@ -14006,6 +14160,7 @@ export default function App() {
         unitDataMap={{
           bell429: techizatBell429Data,
           at802: techizatAt802Data,
+          at802_ozel_alet: techizatAt802OzelAletData,
           t70: techizatT70Data,
           t70_bumbi_backet: techizatT70BumbiBacketData,
           t70_helitak: techizatT70HelitakData,
@@ -14437,6 +14592,27 @@ export default function App() {
           isOpen={isPersonelBilgiModalOpen}
           onClose={() => setIsPersonelBilgiModalOpen(false)}
           showNotification={(msg) => showNotification(msg)}
+        />
+      )}
+
+      {/* 10. TALEP OLUŞTUR MODALI */}
+      {isTalepOlusturOpen && (
+        <TalepOlusturModal
+          isOpen={isTalepOlusturOpen}
+          onClose={() => setIsTalepOlusturOpen(false)}
+          showNotification={(msg, _type) => showNotification(msg)}
+          unitDataMap={{
+            at802: techizatAt802Data,
+            at802_ozel_alet: techizatAt802OzelAletData,
+            bell429: techizatBell429Data,
+            t70: techizatT70Data,
+            t70_bumbi_backet: techizatT70BumbiBacketData,
+            t70_helitak: techizatT70HelitakData,
+            b360: techizatB360Data,
+            c650: techizatC650Data,
+            hangar: techizatHangarData,
+            kara_araclari: techizatKaraAraclariData
+          }}
         />
       )}
 

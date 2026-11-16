@@ -1082,7 +1082,7 @@ ${LINE}`;
     try {
       const nav = navigator as any;
       if (!nav.bluetooth) {
-        alert("Tarayıcınız Web Bluetooth desteklemiyor. Lütfen Google Chrome veya Edge kullanın.");
+        alert("Tarayıcınız Web Bluetooth desteklemiyor. Lütfen Chrome veya Edge kullanın.");
         return;
       }
       const device = await nav.bluetooth.requestDevice({
@@ -1106,7 +1106,7 @@ ${LINE}`;
     try {
       const nav = navigator as any;
       if (!nav.usb) {
-        alert("Tarayıcınız Web USB desteklemiyor. Lütfen Google Chrome veya Edge kullanın.");
+        alert("Tarayıcınız Web USB desteklemiyor. Lütfen Chrome veya Edge kullanın.");
         return;
       }
       const device = await nav.usb.requestDevice({
@@ -1129,7 +1129,7 @@ ${LINE}`;
     try {
       const nav = navigator as any;
       if (!nav.serial) {
-        alert("Tarayıcınız Web Serial desteklemiyor. Lütfen Google Chrome veya Edge kullanın.");
+        alert("Tarayıcınız Web Serial desteklemiyor. Lütfen Chrome veya Edge kullanın.");
         return;
       }
       const port = await nav.serial.requestPort();

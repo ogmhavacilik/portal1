@@ -774,7 +774,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
           setLastYellowNgFetchTime(timeStr);
           success = true;
           if (notify) {
-            showNotification(`Google E-Tablodan ("Sarı İkaz Ng Takip Adedi") ${data.data?.records?.length || 0} kayıt başarıyla güncellendi.`, 'success');
+            showNotification(`Canlı E-Tablodan ("Sarı İkaz Ng Takip Adedi") ${data.data?.records?.length || 0} kayıt başarıyla güncellendi.`, 'success');
           }
         }
       }
@@ -827,7 +827,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               setLastYellowNgFetchTime(`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`);
               success = true;
               if (notify) {
-                showNotification(`Doğrudan Google Apps Script ile E-Tablodan ${mapped.length} satır çekildi.`, 'success');
+                showNotification(`Doğrudan sunucu üzerinden E-Tablodan ${mapped.length} satır çekildi.`, 'success');
               }
               break;
             }
@@ -968,7 +968,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
           if (data.data?.counts) setYellowNgCounts(data.data.counts);
           if (data.data?.records) setYellowNgRecords(data.data.records);
           const updatedTotal = data.data?.counts?.[selectedTail.code] || 0;
-          showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya ("${sheetName}") başarıyla aktarıldı! (Toplam: ${updatedTotal})`, 'success');
+          showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Canlı E-Tabloya ("${sheetName}") başarıyla aktarıldı! (Toplam: ${updatedTotal})`, 'success');
           
           // Çoklu uçuş listesinde aktarıldı olarak işaretle
           setMultiFlights(prev => prev.map(f => f.fileName === analysisResult.fileName ? { ...f, hasTransferredYellow: true } : f));
@@ -1042,7 +1042,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               const pJson = await pRes.json().catch(() => null);
               if (pJson && pJson.status === 'success') {
                 await fetchLiveYellowNg(false);
-                showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Google E-Tabloya doğrudan aktarıldı!`, 'success');
+                showNotification(`${selectedTail.code} için ${newRows.length} adet Ng Sarı İkazı Canlı E-Tabloya doğrudan aktarıldı!`, 'success');
                 setMultiFlights(prev => prev.map(f => f.fileName === analysisResult.fileName ? { ...f, hasTransferredYellow: true } : f));
                 success = true;
                 break;
@@ -1056,7 +1056,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
     }
 
     if (!success) {
-      showNotification('Google E-Tabloya veri aktarılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
+      showNotification('Canlı E-Tabloya veri aktarılamadı. Lütfen internet bağlantınızı kontrol edin.', 'error');
     }
     setIsSyncingYellowNg(false);
   };
@@ -1077,7 +1077,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
         if (data && data.status === 'success') {
           if (data.data?.counts) setYellowNgCounts(data.data.counts);
           if (data.data?.records) setYellowNgRecords(data.data.records);
-          showNotification('Kayıtlı sarı ikaz satırı Google E-Tablodan silindi.', 'success');
+          showNotification('Kayıtlı sarı ikaz satırı Canlı E-Tablodan silindi.', 'success');
           success = true;
           return;
         }
@@ -1126,7 +1126,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
             });
             if (pRes.ok) {
               await fetchLiveYellowNg(false);
-              showNotification('Kayıtlı sarı ikaz satırı Google E-Tablodan silindi.', 'success');
+              showNotification('Kayıtlı sarı ikaz satırı Canlı E-Tablodan silindi.', 'success');
               success = true;
               break;
             }
@@ -2933,7 +2933,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                         type="button"
                         onClick={() => setIsYellowNgHistoryModalOpen(true)}
                         className="px-2.5 py-0.5 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-lg text-xs cursor-pointer shadow-xs transition-transform active:scale-95 flex items-center gap-1"
-                        title="Bu hava aracına ait kayıtlı sarı ikaz satırlarını incele (Google E-Tablo)"
+                        title="Bu hava aracına ait kayıtlı sarı ikaz satırlarını incele (Canlı E-Tablo)"
                       >
                         <span>{yellowNgCounts[selectedTail.code] || 0} Adet</span>
                         <Eye className="w-3.5 h-3.5 opacity-80" />
@@ -2949,9 +2949,9 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                         } font-black text-xs uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 border border-amber-500/40`}
                         title={
                           isSyncingYellowNg
-                            ? 'Google E-Tabloya aktarılıyor, lütfen bekleyiniz...'
+                            ? 'Canlı E-Tabloya aktarılıyor, lütfen bekleyiniz...'
                             : analysisResult
-                              ? `Yüklü uçuş kaydındaki ${currentNgYellowEpisodes.length} adet Ng Sarı İkazını Google E-Tabloya canlı aktar ve saydır`
+                              ? `Yüklü uçuş kaydındaki ${currentNgYellowEpisodes.length} adet Ng Sarı İkazını Canlı E-Tabloya aktar ve saydır`
                               : 'Önce MVP/CSV uçuş kayıt dosyası yükleyiniz'
                         }
                       >
@@ -4227,7 +4227,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                     </p>
                     <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-950/60 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-400/40 font-mono font-semibold">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      Canlı Google E-Tablo ("Sarı İkaz Ng Takip Adedi")
+                      Canlı E-Tablo ("Sarı İkaz Ng Takip Adedi")
                     </span>
                   </div>
                 </div>
@@ -4247,7 +4247,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               {isLoadingYellowNg && (
                 <div className="p-3 mb-3 bg-amber-50 text-amber-900 border border-amber-300 rounded-xl flex items-center gap-2 shadow-xs animate-pulse">
                   <RefreshCw className="w-4 h-4 animate-spin text-amber-700 shrink-0" />
-                  <span className="font-bold">Google E-Tablodan canlı sarı ikaz satırları güncelleniyor, lütfen bekleyiniz...</span>
+                  <span className="font-bold">Canlı E-Tablodan sarı ikaz satırları güncelleniyor, lütfen bekleyiniz...</span>
                 </div>
               )}
 
@@ -4271,7 +4271,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                       <span className="font-bold text-amber-950 flex items-center gap-2">
                         <span>{selectedTail.code} Kuyruk Nolu Uçağın Kayıtlı Satır Adedi: <strong>{tailRecords.length} Adet</strong></span>
                         <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-mono font-bold border border-emerald-200">
-                          Google E-Tablo ile Canlı Eşit
+                          Canlı E-Tablo ile Eşit
                         </span>
                       </span>
                       <span className="text-[11px] text-slate-500">
@@ -4330,7 +4330,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                                   type="button"
                                   onClick={() => handleDeleteYellowNgRecord(r.id)}
                                   className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer transition-colors"
-                                  title="Bu sarı ikaz satırını sil (Google E-Tablodan silinir ve adet otomatik 1 düşer)"
+                                  title="Bu sarı ikaz satırını sil (Canlı E-Tablodan silinir ve adet otomatik 1 düşer)"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -4349,7 +4349,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
               <div className="flex items-center gap-2 text-xs text-slate-600 font-mono">
                 <Database className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>
-                  Veri Kaynağı: <strong>Google E-Tablo</strong> ("Sarı İkaz Ng Takip Adedi") • JSON veya statik depolama kullanılmaz.
+                  Veri Kaynağı: <strong>Canlı E-Tablo</strong> ("Sarı İkaz Ng Takip Adedi") • JSON veya statik depolama kullanılmaz.
                   {lastYellowNgFetchTime && ` • Son E-Tablo Senkronizasyonu: ${lastYellowNgFetchTime}`}
                 </span>
               </div>
@@ -4403,7 +4403,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
 
             <div className="p-6 space-y-4">
               <p className="text-xs text-slate-600 leading-relaxed font-sans">
-                <strong>Sarı İkaz Ng Takip Adedi</strong> Google E-Tablo aktarımı yetkili şifresi gerektirmektedir. Lütfen devam etmek için yetkili şifresini giriniz:
+                <strong>Sarı İkaz Ng Takip Adedi</strong> Canlı E-Tablo aktarımı yetkili şifresi gerektirmektedir. Lütfen devam etmek için yetkili şifresini giriniz:
               </p>
 
               <form
@@ -4491,7 +4491,7 @@ export const MvpFlightDataAnalysisModal: React.FC<MvpFlightDataAnalysisModalProp
                     <strong className="font-mono text-rose-900 bg-rose-100 px-1.5 py-0.5 rounded">
                       "{duplicateWarningFileName}"
                     </strong>{' '}
-                    adlı uçuş dosyası daha önce sisteme ve <strong>"Sarı İkaz Ng Takip Adedi"</strong> Google E-Tablo sayfasına aktarılmıştır.
+                    adlı uçuş dosyası daha önce sisteme ve <strong>"Sarı İkaz Ng Takip Adedi"</strong> Canlı E-Tablo sayfasına aktarılmıştır.
                   </p>
                 </div>
               </div>

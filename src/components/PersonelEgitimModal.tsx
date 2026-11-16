@@ -227,6 +227,31 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
   const [newInitialTrainingName, setNewInitialTrainingName] = useState('');
   const [newInitialTrainingDate, setNewInitialTrainingDate] = useState(() => new Date().toLocaleDateString('tr-TR'));
   const [newInitialTrainingProvider, setNewInitialTrainingProvider] = useState('');
+  const [activeProviderField, setActiveProviderField] = useState<'inline' | 'new' | 'edit' | null>(null);
+
+  // Mevcut tüm personellerin eğitim verilerinden benzersiz "Eğitim Veren Kurum" listesi çıkar
+  const uniqueProviders = useMemo(() => {
+    const map = new Map<string, string>();
+    people.forEach(p => {
+      (p.trainings || []).forEach(t => {
+        const raw = String(t.egitimVeren || '').trim();
+        if (!raw || raw === '-' || raw === '--') return;
+        const key = raw.toLocaleUpperCase('tr-TR');
+        if (!map.has(key)) {
+          map.set(key, raw);
+        }
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, 'tr'));
+  }, [people]);
+
+  const getFilteredProviders = (query: string) => {
+    const q = query.trim().toLocaleLowerCase('tr-TR');
+    if (!q) return uniqueProviders.slice(0, 12);
+    return uniqueProviders
+      .filter(p => p.toLocaleLowerCase('tr-TR').includes(q))
+      .slice(0, 12);
+  };
 
   // Inline "Eğitim Ekle" State for a specific person
   const [inlineAddingPersonId, setInlineAddingPersonId] = useState<string | null>(null);
@@ -278,9 +303,9 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
   const fetchLiveExcelFromDrive = async (isManual = false, customMsg = '') => {
     if (isManual || people.length === 0) {
       setIsLoadingDrive(true);
-      setSyncStatusMessage(customMsg || (isManual ? "Google Drive Exceli Aranıyor..." : "Veriler Yükleniyor..."));
+      setSyncStatusMessage(customMsg || (isManual ? "Bulut Arşivi Exceli Aranıyor..." : "Veriler Yükleniyor..."));
       if (showNotification && isManual) {
-        showNotification("🔄 Google Drive'daki Personel Eğitim Excel dosyası taranıyor...");
+        showNotification("🔄 Bulut Arşivindeki Personel Eğitim Excel dosyası taranıyor...");
       }
     }
 
@@ -315,7 +340,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                 const parsed = parseExcelAndSetPeople(gasJson.base64, false);
                 if (parsed) {
                   if (showNotification) {
-                    showNotification("✅ Google Drive'dan Personel Eğitim Listesi canlı olarak yüklendi.");
+                    showNotification("✅ Bulut Arşivinden Personel Eğitim Listesi canlı olarak yüklendi.");
                   }
                   return;
                 }
@@ -470,7 +495,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
     if (!file) return;
 
     if (showNotification) {
-      showNotification(`📤 "${file.name}" taranıyor ve Google Drive'a kaydediliyor...`);
+      showNotification(`📤 "${file.name}" taranıyor ve Bulut Arşivine kaydediliyor...`);
     }
 
     try {
@@ -485,7 +510,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
       parseExcelAndSetPeople(base64, true);
 
       if (showNotification) {
-        showNotification(`✅ Excel yükleme başarılı, kalıcı veritabanı ve Google Drive güncellendi.`);
+        showNotification(`✅ Excel yükleme başarılı, kalıcı veritabanı ve Bulut Arşivi güncellendi.`);
       }
     } catch (err: any) {
       alert("Excel yükleme hatası: " + err.message);
@@ -750,7 +775,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
     uploadExcelToGoogleDrive(buildExcelBase64FromPeople(updatedPeople), "Eğitim Bilgisi Güncelleniyor...");
 
     if (showNotification) {
-      showNotification("✅ Eğitim bilgisi güncellendi ve Google Drive'a kaydedildi.");
+      showNotification("✅ Eğitim bilgisi güncellendi ve Bulut Arşivine kaydedildi.");
     }
   };
 
@@ -1123,7 +1148,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
               setTestMailPinError(false);
             }}
             className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-black font-mono text-xs rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-md hover:scale-[1.02] active:scale-95 border border-amber-400/40"
-            title="Süresi yaklaşan İSG ve Muayeneler için test bildirim maili zamanla (Şifreli: 1839)"
+            title="Süresi yaklaşan İSG ve Muayeneler için test bildirim maili zamanla"
           >
             <Mail className="w-4 h-4 text-amber-200 animate-bounce" />
             <span>TEST MAİLİ GÖNDER</span>
@@ -1133,7 +1158,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
           <button
             onClick={() => fileInputRef.current?.click()}
             className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-black font-mono text-xs rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-md hover:scale-[1.02] active:scale-95"
-            title="Google Drive'a ve sisteme Excel dosyası yükle"
+            title="Bulut Arşivine ve sisteme Excel dosyası yükle"
           >
             <Upload className="w-4 h-4 text-blue-200" />
             <span>VERİ EKLE (EXCEL YÜKLE)</span>
@@ -1154,7 +1179,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
             onClick={() => fetchLiveExcelFromDrive(true)}
             disabled={isLoadingDrive}
             className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-all border border-slate-700 cursor-pointer"
-            title="Google Drive'dan verileri canlı tazele"
+            title="Bulut Arşivinden verileri canlı tazele"
           >
             <RefreshCw className={`w-4 h-4 text-emerald-400 ${isLoadingDrive ? 'animate-spin' : ''}`} />
           </button>
@@ -1671,19 +1696,45 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                               />
                             </td>
                             <td colSpan={2} className="p-3 border-r border-slate-200" />
-                            <td className="p-3 border-r border-slate-200">
+                            <td className="p-3 border-r border-slate-200 overflow-visible">
                               <div className="flex items-center gap-2">
-                                <input
-                                  type="text"
-                                  placeholder="Veren Kurum / Personel"
-                                  value={inlineTrainingProvider}
-                                  onChange={(e) => setInlineTrainingProvider(e.target.value)}
-                                  className="flex-1 px-3 py-2 bg-white border-2 border-emerald-500 rounded-xl text-xs font-bold uppercase text-slate-900 outline-none"
-                                />
+                                <div className="relative flex-1">
+                                  <input
+                                    type="text"
+                                    placeholder="Veren Kurum / Personel"
+                                    value={inlineTrainingProvider}
+                                    onFocus={() => setActiveProviderField('inline')}
+                                    onBlur={() => setTimeout(() => setActiveProviderField(prev => (prev === 'inline' ? null : prev)), 150)}
+                                    onChange={(e) => {
+                                      setInlineTrainingProvider(e.target.value);
+                                      setActiveProviderField('inline');
+                                    }}
+                                    className="w-full px-3 py-2 bg-white border-2 border-emerald-500 rounded-xl text-xs font-bold uppercase text-slate-900 outline-none"
+                                  />
+                                  {activeProviderField === 'inline' && getFilteredProviders(inlineTrainingProvider).length > 0 && (
+                                    <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-emerald-300 rounded-xl shadow-xl max-h-44 overflow-y-auto divide-y divide-slate-100">
+                                      {getFilteredProviders(inlineTrainingProvider).map((prov, pIdx) => (
+                                        <button
+                                          key={pIdx}
+                                          type="button"
+                                          onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            setInlineTrainingProvider(prov);
+                                            setActiveProviderField(null);
+                                          }}
+                                          className="w-full text-left px-3 py-2 text-xs font-bold uppercase text-slate-800 hover:bg-emerald-50 hover:text-emerald-900 flex items-center gap-1.5 cursor-pointer transition"
+                                        >
+                                          <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                          <span className="truncate">{prov}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                                 <button
                                   type="button"
                                   onClick={() => handleAddInlineTraining(person.id)}
-                                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl flex items-center gap-1 shadow cursor-pointer"
+                                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl flex items-center gap-1 shadow cursor-pointer shrink-0"
                                 >
                                   <Check className="w-3.5 h-3.5 stroke-[3]" />
                                   <span>Ekle</span>
@@ -1691,7 +1742,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => setInlineAddingPersonId(null)}
-                                  className="p-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl cursor-pointer"
+                                  className="p-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl cursor-pointer shrink-0"
                                 >
                                   <X className="w-4 h-4" />
                                 </button>
@@ -1760,7 +1811,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
 
                 <div>
                   <label className="block text-xs font-bold uppercase font-mono text-slate-300 mb-2">
-                    YETKİLİ ŞİFRESİ (1839)
+                    YETKİLİ ŞİFRESİ
                   </label>
                   <input
                     type="password"
@@ -1771,7 +1822,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                     className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl font-mono text-lg font-bold text-center tracking-widest outline-none focus:border-amber-500"
                   />
                   {testMailPinError && (
-                    <span className="text-red-400 text-xs font-bold mt-1 block">Hatalı Şifre! Lütfen 1839 giriniz.</span>
+                    <span className="text-red-400 text-xs font-bold mt-1 block">Hatalı Şifre! Lütfen tekrar deneyiniz.</span>
                   )}
                 </div>
 
@@ -1872,9 +1923,9 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
       {/* 4. YENİ PERSONEL EKLEME MODALI */}
       {isAddPersonModalOpen && (
         <div className="fixed inset-0 z-[700] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-scale-up">
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-visible animate-scale-up">
             
-            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+            <div className="bg-slate-900 text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <GraduationCap className="w-5 h-5 text-emerald-400" />
                 <h3 className="font-black text-sm uppercase tracking-wider font-mono">
@@ -1959,7 +2010,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                   />
                 </div>
 
-                <div>
+                <div className="relative">
                   <label className="block font-bold text-slate-700 uppercase font-mono mb-1">
                     Eğitim Veren Kurum
                   </label>
@@ -1967,9 +2018,33 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                     type="text"
                     placeholder="Örn: BELL TRAINING ACADEMY"
                     value={newInitialTrainingProvider}
-                    onChange={(e) => setNewInitialTrainingProvider(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold uppercase text-slate-800 outline-none"
+                    onFocus={() => setActiveProviderField('new')}
+                    onBlur={() => setTimeout(() => setActiveProviderField(prev => (prev === 'new' ? null : prev)), 150)}
+                    onChange={(e) => {
+                      setNewInitialTrainingProvider(e.target.value);
+                      setActiveProviderField('new');
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-emerald-500"
                   />
+                  {activeProviderField === 'new' && getFilteredProviders(newInitialTrainingProvider).length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-emerald-300 rounded-xl shadow-xl max-h-40 overflow-y-auto divide-y divide-slate-100">
+                      {getFilteredProviders(newInitialTrainingProvider).map((prov, pIdx) => (
+                        <button
+                          key={pIdx}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setNewInitialTrainingProvider(prov);
+                            setActiveProviderField(null);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs font-bold uppercase text-slate-800 hover:bg-emerald-50 hover:text-emerald-900 flex items-center gap-1.5 cursor-pointer transition"
+                        >
+                          <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span className="truncate">{prov}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1997,8 +2072,8 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
       {/* 5. EĞİTİM DÜZENLEME MODALI */}
       {editingTrainingInfo && (
         <div className="fixed inset-0 z-[750] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden animate-scale-up">
-            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+          <div className="bg-white text-slate-900 rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-visible animate-scale-up">
+            <div className="bg-slate-900 text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <Edit2 className="w-5 h-5 text-blue-400" />
                 <h3 className="font-black text-sm uppercase tracking-wider font-mono">
@@ -2043,7 +2118,7 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                   />
                 </div>
 
-                <div>
+                <div className="relative">
                   <label className="block font-bold text-slate-700 uppercase font-mono mb-1">
                     Eğitim Veren Kurum
                   </label>
@@ -2051,9 +2126,33 @@ export const PersonelEgitimModal: React.FC<PersonelEgitimModalProps> = ({
                     type="text"
                     placeholder="Veren Kurum / Personel"
                     value={editTrainingProvider}
-                    onChange={(e) => setEditTrainingProvider(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold uppercase text-slate-800 outline-none"
+                    onFocus={() => setActiveProviderField('edit')}
+                    onBlur={() => setTimeout(() => setActiveProviderField(prev => (prev === 'edit' ? null : prev)), 150)}
+                    onChange={(e) => {
+                      setEditTrainingProvider(e.target.value);
+                      setActiveProviderField('edit');
+                    }}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-blue-500"
                   />
+                  {activeProviderField === 'edit' && getFilteredProviders(editTrainingProvider).length > 0 && (
+                    <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-blue-300 rounded-xl shadow-xl max-h-40 overflow-y-auto divide-y divide-slate-100">
+                      {getFilteredProviders(editTrainingProvider).map((prov, pIdx) => (
+                        <button
+                          key={pIdx}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setEditTrainingProvider(prov);
+                            setActiveProviderField(null);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs font-bold uppercase text-slate-800 hover:bg-blue-50 hover:text-blue-900 flex items-center gap-1.5 cursor-pointer transition"
+                        >
+                          <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          <span className="truncate">{prov}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 

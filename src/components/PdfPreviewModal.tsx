@@ -320,7 +320,7 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({ preview, onClo
                 </div>
                 <h4 className="text-base font-bold text-white mb-2 max-w-md">{preview.fileName}</h4>
                 <p className="text-xs text-slate-400 max-w-md mb-6 leading-relaxed">
-                  Bu belge sıkıştırılmış bir arşiv dosyasıdır (.zip / .rar). Dosya içeriğine ulaşmak için bilgisayarınıza indirebilir veya Google Drive üzerinden açabilirsiniz.
+                  Bu belge sıkıştırılmış bir arşiv dosyasıdır (.zip / .rar). Dosya içeriğine ulaşmak için bilgisayarınıza indirebilir veya Bulut Arşivi üzerinden açabilirsiniz.
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-3">
                   <a
@@ -339,7 +339,7 @@ export const PdfPreviewModal: React.FC<PdfPreviewModalProps> = ({ preview, onClo
                       className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold text-xs rounded-xl border border-slate-700 flex items-center gap-2 transition-all"
                     >
                       <ExternalLink className="w-4 h-4" />
-                      <span>Google Drive'da Aç</span>
+                      <span>Bulut Arşivinde Aç</span>
                     </a>
                   )}
                 </div>

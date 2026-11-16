@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useDeferredValue } from 'react';
 import { 
   Camera, 
   Barcode, 
@@ -22,7 +22,10 @@ import {
   Send,
   FileText,
   ChevronDown,
-  Clock
+  Clock,
+  Info,
+  Download,
+  ExternalLink
 } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import * as XLSX from 'xlsx';
@@ -96,12 +99,17 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
   // Manual Scan Input fallback
   const [manualCodeInput, setManualCodeInput] = useState<string>('');
+  const deferredManualQuery = useDeferredValue(manualCodeInput);
   const [isManualSearchDropdownOpen, setIsManualSearchDropdownOpen] = useState<boolean>(false);
   const manualSearchRef = useRef<HTMLDivElement>(null);
 
-  // Live Drive Inventory state (used when inventory prop is empty or missing units)
+  // Live Drive Inventory state (loaded ONLY after unlock & ONLY for selected unit)
   const [liveInventory, setLiveInventory] = useState<DepoItem[]>([]);
   const [isLoadingInventory, setIsLoadingInventory] = useState<boolean>(false);
+  const loadedUnitRef = useRef<string>('');
+  const inventoryPropRef = useRef<DepoItem[]>(inventory);
+  inventoryPropRef.current = inventory;
+  const isStartingCameraRef = useRef<boolean>(false);
 
   // Scanned / Matched Item State (Module 1 - Barkod Oku)
   const [scannedResultText, setScannedResultText] = useState<string | null>(null);
@@ -122,6 +130,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
   }>>([]);
   const [isAddTalepItemOpen, setIsAddTalepItemOpen] = useState<boolean>(false);
   const [addTalepSearchQuery, setAddTalepSearchQuery] = useState<string>('');
+  const deferredAddTalepQuery = useDeferredValue(addTalepSearchQuery);
   const [isTalepCameraActive, setIsTalepCameraActive] = useState<boolean>(false);
   const [talepCameraError, setTalepCameraError] = useState<string | null>(null);
   const [talepAvailableCameras, setTalepAvailableCameras] = useState<Array<{ id: string; label: string }>>([]);
@@ -136,6 +145,8 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
   const [talepRequestedBy, setTalepRequestedBy] = useState<string>('');
   const [talepNotes, setTalepNotes] = useState<string>('');
   const [isTalepSubmitting, setIsTalepSubmitting] = useState<boolean>(false);
+  const [talepStep, setTalepStep] = useState<1 | 2 | 3>(1);
+  const [showWorkOrderInfo, setShowWorkOrderInfo] = useState<boolean>(false);
   const [isTalepDropdownOpen, setIsTalepDropdownOpen] = useState<boolean>(false);
   const talepDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -214,12 +225,15 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     setTalepCameraError(null);
     const pad = (n: number) => String(n).padStart(2, '0');
     const now = new Date();
-    setTalepDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`);
+    setTalepDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()}`);
     const defaultTail = (AIRCRAFT_TAILS.at802 && AIRCRAFT_TAILS.at802[0]) || 'ORMAN 21 (OR-2021) - AT-802';
     setTalepTailNo(defaultTail);
     setTalepTailNoOther('');
     setTalepRequestedBy('');
     setTalepNotes('');
+    setTalepWorkOrderOrCrs('');
+    setShowWorkOrderInfo(false);
+    setTalepStep(1);
     setIsUrunTalebiModalOpen(true);
   };
 
@@ -342,6 +356,9 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     pn: string;
     sn: string;
     aciklama: string;
+    page?: number;
+    viewUrl?: string;
+    unit?: string;
   }> | null>(null);
   const [isFormOneSearching, setIsFormOneSearching] = useState<boolean>(false);
 
@@ -369,7 +386,8 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
             sn: targetSn || '-',
             aciklama: res.snippet || `SERTİFİKA TARAMA_${cleanUnit}.pdf belgesinde Sayfa ${res.page} üzerinde eşleşme sağlandı.`,
             page: res.page,
-            viewUrl: res.viewUrl
+            unit: cleanUnit,
+            viewUrl: res.viewUrl || `/api/sertifika-tarama/pdf?unit=${encodeURIComponent(cleanUnit)}#page=${res.page}`
           }));
           setFormOneResults(mapped);
           setIsFormOneSearching(false);
@@ -404,7 +422,9 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
         malzemeAdi: matchedItem.description || matchedItem.name || 'Malzeme Belgesi',
         pn: targetPn || '-',
         sn: targetSn || '-',
-        aciklama: `Belge Bul sisteminde SERTİFİKA TARAMA_${cleanUnit}.pdf belgesi bağlandı.`
+        aciklama: `Belge Bul sisteminde SERTİFİKA TARAMA_${cleanUnit}.pdf belgesi bağlandı.`,
+        unit: cleanUnit,
+        viewUrl: `/api/sertifika-tarama/pdf?unit=${encodeURIComponent(cleanUnit)}`
       }
     ]);
     setIsFormOneSearching(false);
@@ -453,12 +473,33 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     excessSource?: 'ANKARA' | 'BOLGE' 
   }>>({});
 
-  // Fetch live inventory from Google Drive for autocomplete & barcode matching (Zero localStorage Cache)
+  // Fetch live inventory from Google Drive ONLY after password unlock & ONLY for the unlocked unit
   useEffect(() => {
-    if (!isOpen) return;
-    if (inventory && inventory.length > 0) return;
+    if (!isOpen || !isUnlocked) return;
+
+    const unitToLoad = selectedUnit || 'at802';
+    const normSel = unitToLoad.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const propInv = inventoryPropRef.current || [];
+
+    // If prop already contains items for this specific unlocked unit, skip re-downloading
+    if (unitToLoad !== 'all' && propInv.length > 0) {
+      const hasUnitItems = propInv.some(it => {
+        const u = String(it.unit || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
+        return normSel.startsWith('at802') ? (u === 'at802' || !it.unit) : (u === normSel || u.includes(normSel));
+      });
+      if (hasUnitItems) {
+        loadedUnitRef.current = unitToLoad;
+        setIsLoadingInventory(false);
+        return;
+      }
+    }
+
+    if (loadedUnitRef.current === unitToLoad && liveInventory.length > 0) {
+      return;
+    }
 
     let cancelled = false;
+    const yieldFrame = () => new Promise<void>(resolve => setTimeout(resolve, 16));
 
     const getFileName = (unitKey: string, cat: 'sarf' | 'kimyasal') => {
       const u = (unitKey || 'at802').toLowerCase();
@@ -591,36 +632,51 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
     const loadAllForUnit = async () => {
       setIsLoadingInventory(true);
-      const targetUnits = selectedUnit === 'all'
+      const targetUnits = unitToLoad === 'all'
         ? ['at802', 'bell429', 't70', 'c650', 'b360', 'hangar']
-        : [selectedUnit];
+        : [unitToLoad];
 
-      const fetchTasks = targetUnits.flatMap(u =>
-        (['sarf', 'kimyasal'] as const).map(async cat => {
+      const collected: DepoItem[] = [];
+
+      // Fetch and parse sequentially with frame yields so mobile CPU/UI stays responsive
+      for (const u of targetUnits) {
+        if (cancelled) return;
+        for (const cat of (['sarf', 'kimyasal'] as const)) {
+          if (cancelled) return;
           const fileName = getFileName(u, cat);
           const candidates = [fileName, fileName.replace(/-/g, '_'), fileName.replace(/_/g, '-')];
+          let base64Str: string | null = null;
           try {
             const res = await remoteFetchExcelFromDrive(fileName, candidates, DRIVE_FOLDER_ID);
             if (res && res.status === 'success' && res.base64) {
-              return parseDriveExcel(res.base64, u, cat);
-            }
-            const staticRes = await fetch(`/${fileName}`);
-            if (staticRes.ok && !(staticRes.headers.get('content-type') || '').includes('text/html')) {
-              const buf = await staticRes.arrayBuffer();
-              const bytes = new Uint8Array(buf);
-              let bin = '';
-              for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-              return parseDriveExcel(btoa(bin), u, cat);
+              base64Str = res.base64;
+            } else {
+              const staticRes = await fetch(`/${fileName}`);
+              if (staticRes.ok && !(staticRes.headers.get('content-type') || '').includes('text/html')) {
+                const buf = await staticRes.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                let bin = '';
+                for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+                base64Str = btoa(bin);
+              }
             }
           } catch {}
-          return [] as DepoItem[];
-        })
-      );
 
-      const results = await Promise.all(fetchTasks);
-      const collected = results.flat();
+          if (base64Str && !cancelled) {
+            await yieldFrame();
+            const parsed = parseDriveExcel(base64Str, u, cat);
+            if (parsed.length > 0) {
+              collected.push(...parsed);
+              if (unitToLoad === 'all' && !cancelled) {
+                setLiveInventory([...collected]);
+              }
+            }
+          }
+        }
+      }
 
       if (!cancelled) {
+        loadedUnitRef.current = unitToLoad;
         setLiveInventory(collected);
         setIsLoadingInventory(false);
       }
@@ -628,20 +684,72 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
     loadAllForUnit();
     return () => { cancelled = true; };
-  }, [isOpen, selectedUnit, inventory]);
+  }, [isOpen, isUnlocked, selectedUnit]);
 
-  // Active inventory: use prop or live Drive inventory filtered to selectedUnit
+  // Active inventory: use prop or live Drive inventory filtered STRICTLY to selectedUnit
   const activeInventory = useMemo(() => {
-    const source = (inventory && inventory.length > 0) ? inventory : liveInventory;
+    const propInv = inventory || [];
+    const normSel = (selectedUnit || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    let source: DepoItem[] = liveInventory;
+    if (propInv.length > 0 && selectedUnit !== 'all') {
+      const propMatches = propInv.filter(it => {
+        const u = String(it.unit || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (normSel.startsWith('at802')) return u === 'at802' || !it.unit;
+        return u === normSel || u.includes(normSel);
+      });
+      if (propMatches.length > 0) {
+        source = propMatches;
+      }
+    } else if (propInv.length > 0 && selectedUnit === 'all' && liveInventory.length === 0) {
+      source = propInv;
+    }
+
     if (!source || source.length === 0) return [];
     if (!selectedUnit || selectedUnit === 'all') return source;
-    const normSel = selectedUnit.toLowerCase().replace(/[^a-z0-9]/g, '');
     return source.filter(it => {
       const u = String(it.unit || 'at802').toLowerCase().replace(/[^a-z0-9]/g, '');
       if (normSel.startsWith('at802')) return u === 'at802' || !it.unit;
       return u === normSel || u.includes(normSel);
     });
   }, [inventory, liveInventory, selectedUnit]);
+
+  // Memoized deferred search lists for zero mobile input lag
+  const manualDropdownMatches = useMemo(() => {
+    const q = deferredManualQuery.toLowerCase().trim();
+    if (!q) return [];
+    return activeInventory
+      .filter(i => {
+        const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
+        const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
+        const s = (i.serialAndNotes || i.sn || (i as any).SERI_NO || '').toLowerCase();
+        const l = (i.lokasyonNo || i.location || '').toLowerCase();
+        return p.includes(q) || d.includes(q) || s.includes(q) || l.includes(q);
+      })
+      .slice(0, 15);
+  }, [activeInventory, deferredManualQuery]);
+
+  const talepAddMatches = useMemo(() => {
+    const sourceInv = (activeInventory && activeInventory.length > 0) ? activeInventory : inventory;
+    const q = deferredAddTalepQuery.toLowerCase().trim();
+    if (!q) return sourceInv.slice(0, 12);
+    return sourceInv
+      .filter(i => {
+        const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
+        const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
+        const s = (i.serialAndNotes || i.sn || (i as any).SERI_NO || '').toLowerCase();
+        const l = (i.lokasyonNo || i.location || '').toLowerCase();
+        return p.includes(q) || d.includes(q) || s.includes(q) || l.includes(q);
+      })
+      .sort((a, b) => {
+        const pa = (a.partNumber || a.pn || (a as any).MALZEME_PN || '').toLowerCase();
+        const pb = (b.partNumber || b.pn || (b as any).MALZEME_PN || '').toLowerCase();
+        const aExact = pa === q ? 0 : pa.startsWith(q) ? 1 : 2;
+        const bExact = pb === q ? 0 : pb.startsWith(q) ? 1 : 2;
+        return aExact - bExact;
+      })
+      .slice(0, 15);
+  }, [activeInventory, inventory, deferredAddTalepQuery]);
 
   // Beep sound function on barcode read
   const playBeep = () => {
@@ -740,10 +848,13 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
   // Start camera helper - Code-128 & Karekod (QR) support + Mobile permissions
   const startCamera = async () => {
+    if (isStartingCameraRef.current) return;
+    isStartingCameraRef.current = true;
     setCameraError(null);
     try {
       const el = document.getElementById(scannerContainerId);
       if (!el) {
+        isStartingCameraRef.current = false;
         setTimeout(() => {
           if (document.getElementById(scannerContainerId)) {
             startCamera();
@@ -782,15 +893,16 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
       });
       scannerRef.current = html5QrCode;
 
+      const isMobileDevice = typeof window !== 'undefined' && window.innerWidth < 768;
       const scanConfig = {
-        fps: 20,
+        fps: isMobileDevice ? 10 : 16,
         qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
           return {
-            width: Math.max(200, Math.floor(viewfinderWidth * 0.88)),
-            height: Math.max(140, Math.floor(viewfinderHeight * 0.65))
+            width: Math.max(180, Math.floor(viewfinderWidth * 0.85)),
+            height: Math.max(120, Math.floor(viewfinderHeight * 0.62))
           };
         },
-        aspectRatio: 1.0,
+        aspectRatio: isMobileDevice ? 1.333 : 1.0,
         experimentalFeatures: {
           useBarCodeDetectorIfSupported: true
         }
@@ -866,6 +978,8 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
       
       setCameraError(errorMsg);
       setIsCameraActive(false);
+    } finally {
+      isStartingCameraRef.current = false;
     }
   };
 
@@ -953,11 +1067,12 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
       });
       talepScannerRef.current = html5QrCode;
 
+      const isMobileDevice = typeof window !== 'undefined' && window.innerWidth < 768;
       const scanConfig = {
-        fps: 20,
+        fps: isMobileDevice ? 10 : 16,
         qrbox: (viewfinderWidth: number, viewfinderHeight: number) => ({
-          width: Math.max(180, Math.floor(viewfinderWidth * 0.88)),
-          height: Math.max(120, Math.floor(viewfinderHeight * 0.65))
+          width: Math.max(180, Math.floor(viewfinderWidth * 0.85)),
+          height: Math.max(110, Math.floor(viewfinderHeight * 0.62))
         }),
         aspectRatio: 1.333,
         experimentalFeatures: {
@@ -1024,11 +1139,19 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
     }
   };
 
-  // Cleanup camera on close or unmount (NEVER auto-start on page open)
+  // Cleanup camera & reset unlock/unit cache on close (NEVER pre-load before password unlock)
   useEffect(() => {
     if (!isOpen) {
       stopCamera();
       stopTalepCamera();
+      setIsUnlocked(false);
+      setPasswordInput('');
+      setPasswordError(false);
+      setLiveInventory([]);
+      setIsLoadingInventory(false);
+      setMatchedItem(null);
+      setScannedResultText(null);
+      loadedUnitRef.current = '';
     }
   }, [isOpen]);
 
@@ -1657,27 +1780,27 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[10150] bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-slate-900 text-white rounded-3xl shadow-2xl max-w-4xl w-full border border-slate-700 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-[10150] bg-black/85 sm:backdrop-blur-xs flex items-center justify-center p-1.5 sm:p-4 overflow-y-auto overscroll-contain">
+      <div className="bg-slate-900 text-white rounded-2xl sm:rounded-3xl shadow-2xl max-w-4xl w-full border border-slate-700 overflow-hidden flex flex-col max-h-[96dvh] sm:max-h-[92vh]">
         
         {/* HEADER */}
-        <div className="bg-slate-950 px-5 py-4 border-b border-slate-800 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30 shadow-inner">
-              <Camera className="w-5 h-5" />
+        <div className="bg-slate-950 px-3.5 py-3 sm:px-5 sm:py-4 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="p-2 sm:p-2.5 bg-emerald-500/20 text-emerald-400 rounded-xl sm:rounded-2xl border border-emerald-500/30 shadow-inner shrink-0">
+              <Camera className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-black uppercase tracking-wider text-white">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-white truncate">
                   BARKOD OKUYUCU & SAYIM TERMİNALİ
                 </h3>
                 {isUnlocked && (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-950 text-emerald-300 border border-emerald-700">
+                  <span className="px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-black bg-emerald-950 text-emerald-300 border border-emerald-700 shrink-0">
                     {UNITS_SECURITY.find(u => u.id === selectedUnit)?.name} AKTİF
                   </span>
                 )}
               </div>
-              <p className="text-[11px] text-slate-400 font-sans">
+              <p className="text-[10px] sm:text-[11px] text-slate-400 font-sans truncate">
                 Mobil Kamera ile Barkod / Karekod Okuma ve Depo Stok Sayım Modülü
               </p>
             </div>
@@ -1686,14 +1809,14 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer text-lg font-bold"
+            className="text-slate-400 hover:text-white p-2 -mr-1 rounded-lg transition-colors cursor-pointer text-lg font-bold shrink-0"
           >
             ✕
           </button>
         </div>
 
         {/* BODY */}
-        <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4">
+        <div className="p-3 sm:p-5 overflow-y-auto overscroll-contain flex-1 space-y-3 sm:space-y-4">
           
           {/* STEP 1: SECURITY / UNIT SELECTION SCREEN IF NOT UNLOCKED */}
           {!isUnlocked ? (
@@ -1758,8 +1881,8 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
             <div className="space-y-4">
               
               {/* TOP MODE TOGGLE (MODÜL 1: BARKOD OKU vs MODÜL 2: SAYIMA BAŞLA) */}
-              <div className="bg-slate-950 p-2 rounded-2xl border border-slate-800 flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 flex-1 min-w-[280px]">
+              <div className="bg-slate-950 p-2 rounded-2xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="grid grid-cols-2 gap-1.5 flex-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -1767,14 +1890,14 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                       setMatchedItem(null);
                       if (sessionActive) handleFinishSession();
                     }}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-black uppercase transition-all cursor-pointer ${
+                    className={`flex items-center justify-center gap-1.5 py-2.5 px-2 sm:px-3 rounded-xl text-[10.5px] sm:text-xs font-black uppercase transition-colors cursor-pointer ${
                       activeModule === 'read'
                         ? 'bg-emerald-600 text-white shadow-md'
                         : 'bg-slate-900 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <Barcode className="w-4 h-4" />
-                    <span>1. BARKOD OKU (STOK SORGULA)</span>
+                    <Barcode className="w-4 h-4 shrink-0" />
+                    <span className="truncate">1. BARKOD OKU</span>
                   </button>
 
                   <button
@@ -1784,21 +1907,31 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                       setSayimItem(null);
                       if (isCameraActive) stopCamera();
                     }}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-black uppercase transition-all cursor-pointer ${
+                    className={`flex items-center justify-center gap-1.5 py-2.5 px-2 sm:px-3 rounded-xl text-[10.5px] sm:text-xs font-black uppercase transition-colors cursor-pointer ${
                       activeModule === 'count'
                         ? 'bg-amber-600 text-white shadow-md'
                         : 'bg-slate-900 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <Layers className="w-4 h-4" />
-                    <span>2. SAYIMA BAŞLA (DEPO SAYIMI)</span>
+                    <Layers className="w-4 h-4 shrink-0" />
+                    <span className="truncate">2. DEPO SAYIMI</span>
                   </button>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => setIsUnlocked(false)}
-                  className="px-2.5 py-1.5 text-[10px] font-bold text-slate-400 hover:text-white bg-slate-900 rounded-lg border border-slate-800 transition"
+                  onClick={() => {
+                    stopCamera();
+                    stopTalepCamera();
+                    setIsUnlocked(false);
+                    setPasswordInput('');
+                    setPasswordError(false);
+                    setLiveInventory([]);
+                    setMatchedItem(null);
+                    setScannedResultText(null);
+                    loadedUnitRef.current = '';
+                  }}
+                  className="w-full sm:w-auto px-3 py-2 sm:py-1.5 text-[10px] font-bold text-slate-300 hover:text-white bg-slate-900 rounded-lg border border-slate-800 transition cursor-pointer"
                   title="Birimi Kilitle / Değiştir"
                 >
                   Birim Değiştir
@@ -1875,9 +2008,9 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                   </div>
 
                   {/* Manual Barcode / P/N Input fallback with Autocomplete */}
-                  <form onSubmit={handleManualSubmit} className="flex items-center gap-2 pt-1 relative">
-                    <div ref={manualSearchRef} className="relative flex-1">
-                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5 z-10" />
+                  <form onSubmit={handleManualSubmit} className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1 relative">
+                    <div ref={manualSearchRef} className="relative flex-1 w-full">
+                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3 z-10" />
                       <input
                         type="text"
                         value={manualCodeInput}
@@ -1886,78 +2019,69 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                           setIsManualSearchDropdownOpen(true);
                         }}
                         onFocus={() => setIsManualSearchDropdownOpen(true)}
-                        placeholder={isLoadingInventory ? "Drive stok verileri yükleniyor..." : "Barkod / Karekod verisi veya P/N / Malzeme Adı yazınız..."}
-                        className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-emerald-500 font-bold"
+                        placeholder={isLoadingInventory ? "Seçilen birim stokları yükleniyor..." : "Barkod / Karekod verisi veya P/N / Malzeme Adı yazınız..."}
+                        className="w-full pl-9 pr-3 py-2.5 sm:py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm sm:text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-emerald-500 font-bold"
                       />
 
                       {/* Autocomplete Dropdown List */}
-                      {isManualSearchDropdownOpen && manualCodeInput.trim().length > 0 && (() => {
-                        const q = manualCodeInput.toLowerCase().trim();
-                        const matchedList = activeInventory.filter(i => {
-                          const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
-                          const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
-                          const s = (i.serialAndNotes || i.sn || (i as any).SERI_NO || '').toLowerCase();
-                          const l = (i.lokasyonNo || i.location || '').toLowerCase();
-                          return p.includes(q) || d.includes(q) || s.includes(q) || l.includes(q);
-                        }).slice(0, 15);
-
-                        return (
-                          <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-slate-950 border-2 border-emerald-500/60 rounded-2xl shadow-2xl max-h-60 overflow-y-auto divide-y divide-slate-800/80">
-                            {isLoadingInventory && matchedList.length === 0 ? (
-                              <div className="p-3 text-center text-xs text-emerald-300 font-mono animate-pulse">
-                                ⏳ Drive deposundan malzeme listesi yükleniyor...
-                              </div>
-                            ) : matchedList.length === 0 ? (
-                              <div className="p-3 text-center text-xs text-slate-400">
-                                "{manualCodeInput}" ile eşleşen malzeme bulunamadı.
-                              </div>
-                            ) : (
-                              matchedList.map((item, idx) => (
-                                <div
-                                  key={idx}
-                                  onClick={() => {
-                                    const selPn = item.partNumber && item.partNumber !== '-' ? item.partNumber : (item.pn && item.pn !== '-' ? item.pn : (item.description || item.name));
-                                    setManualCodeInput(selPn);
-                                    setIsManualSearchDropdownOpen(false);
-                                    playBeep();
-                                    handleCodeRead(selPn);
-                                  }}
-                                  className="p-2.5 hover:bg-emerald-950/60 cursor-pointer text-xs flex items-center justify-between gap-2 transition-colors"
-                                >
-                                  <div className="min-w-0 flex-1">
-                                    <div className="font-bold text-white truncate">{item.description || item.name}</div>
-                                    <div className="text-[11px] font-mono text-slate-400 truncate">
-                                      P/N: <strong className="text-emerald-300">{item.partNumber || item.pn || '-'}</strong> | S/N: {item.serialAndNotes || item.sn || '-'} | Raf: {item.lokasyonNo || item.location || '-'}
-                                    </div>
+                      {isManualSearchDropdownOpen && manualCodeInput.trim().length > 0 && (
+                        <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-slate-950 border-2 border-emerald-500/60 rounded-2xl shadow-2xl max-h-60 overflow-y-auto overscroll-contain divide-y divide-slate-800/80">
+                          {isLoadingInventory && manualDropdownMatches.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-emerald-300 font-mono animate-pulse">
+                              ⏳ {UNITS_SECURITY.find(u => u.id === selectedUnit)?.name || selectedUnit.toUpperCase()} deposundan malzeme listesi yükleniyor...
+                            </div>
+                          ) : manualDropdownMatches.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-slate-400">
+                              "{manualCodeInput}" ile eşleşen malzeme bulunamadı.
+                            </div>
+                          ) : (
+                            manualDropdownMatches.map((item, idx) => (
+                              <div
+                                key={idx}
+                                onClick={() => {
+                                  const selPn = item.partNumber && item.partNumber !== '-' ? item.partNumber : (item.pn && item.pn !== '-' ? item.pn : (item.description || item.name));
+                                  setManualCodeInput(selPn);
+                                  setIsManualSearchDropdownOpen(false);
+                                  playBeep();
+                                  handleCodeRead(selPn);
+                                }}
+                                className="p-3 sm:p-2.5 hover:bg-emerald-950/60 cursor-pointer text-xs flex items-center justify-between gap-2 transition-colors"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-bold text-white truncate">{item.description || item.name}</div>
+                                  <div className="text-[11px] font-mono text-slate-400 truncate">
+                                    P/N: <strong className="text-emerald-300">{item.partNumber || item.pn || '-'}</strong> | S/N: {item.serialAndNotes || item.sn || '-'} | Raf: {item.lokasyonNo || item.location || '-'}
                                   </div>
-                                  <span className="text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full shrink-0">
-                                    Stok: {item.ankaraMevcut || item.toplamStok || 0}
-                                  </span>
                                 </div>
-                              ))
-                            )}
-                          </div>
-                        );
-                      })()}
+                                <span className="text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full shrink-0">
+                                  Stok: {item.ankaraMevcut || item.toplamStok || 0}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition cursor-pointer shrink-0"
-                    >
-                      Sorgula
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsManualSearchDropdownOpen(false);
-                        handleOpenUrunTalebi(matchedItem || null);
-                      }}
-                      className="px-3.5 py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black uppercase tracking-wider rounded-xl transition cursor-pointer shadow flex items-center gap-1.5 shrink-0"
-                      title="Depodan Çıkan Talebi Oluştur ('ONAY BEKLEYENLER -AT802' Sayfasına İlet)"
-                    >
-                      <Package className="w-3.5 h-3.5 text-slate-950" />
-                      <span>ÜRÜN TALEBİ</span>
-                    </button>
+                    <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
+                      <button
+                        type="submit"
+                        className="px-4 py-2.5 sm:py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                      >
+                        Sorgula
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsManualSearchDropdownOpen(false);
+                          handleOpenUrunTalebi(matchedItem || null);
+                        }}
+                        className="px-3.5 py-2.5 sm:py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-slate-950 text-xs font-black uppercase tracking-wider rounded-xl transition cursor-pointer shadow flex items-center justify-center gap-1.5"
+                        title="Depodan Çıkan Talebi Oluştur ('ONAY BEKLEYENLER -AT802' Sayfasına İlet)"
+                      >
+                        <Package className="w-3.5 h-3.5 text-slate-950" />
+                        <span>ÜRÜN TALEBİ</span>
+                      </button>
+                    </div>
                   </form>
                 </div>
               )}
@@ -2172,29 +2296,52 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                               EŞLEŞEN FORM ONE & KALİTE BELGELERİ
                             </div>
                             <div className="divide-y divide-slate-800">
-                              {formOneResults.map((doc, idx) => (
-                                <div key={idx} className="py-2 flex items-center justify-between gap-3 text-xs">
-                                  <div>
-                                    <div className="font-bold text-white flex items-center gap-2">
-                                      <span className="text-amber-400 font-mono">{doc.belgeNo}</span>
-                                      <span className="text-[10px] bg-blue-950 text-blue-300 border border-blue-800 px-1.5 py-0.5 rounded font-sans">
-                                        Form One
-                                      </span>
+                              {formOneResults.map((doc, idx) => {
+                                const docUnit = doc.unit || (selectedUnit || 'at802').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                                const pdfOpenUrl = doc.viewUrl || `/api/sertifika-tarama/pdf?unit=${encodeURIComponent(docUnit)}${doc.page ? `#page=${doc.page}` : ''}`;
+                                const pdfDownloadUrl = `/api/sertifika-tarama/pdf?unit=${encodeURIComponent(docUnit)}&download=1`;
+                                const pdfFileName = `SERTIFIKA_${docUnit}${doc.page ? `_Sayfa_${doc.page}` : ''}.pdf`;
+                                const isMobileDevice = typeof navigator !== 'undefined' && (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768);
+                                return (
+                                  <div key={idx} className="py-2 flex items-center justify-between gap-3 text-xs flex-wrap sm:flex-nowrap">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="font-bold text-white flex items-center gap-2 flex-wrap">
+                                        <span className="text-amber-400 font-mono">{doc.belgeNo}</span>
+                                        <span className="text-[10px] bg-blue-950 text-blue-300 border border-blue-800 px-1.5 py-0.5 rounded font-sans">
+                                          Form One
+                                        </span>
+                                      </div>
+                                      <div className="text-[11px] text-slate-300 mt-0.5">{doc.aciklama}</div>
+                                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                        P/N: {doc.pn} | S/N: {doc.sn} | Tarih: {doc.tarih}
+                                      </div>
                                     </div>
-                                    <div className="text-[11px] text-slate-300 mt-0.5">{doc.aciklama}</div>
-                                    <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                                      P/N: {doc.pn} | S/N: {doc.sn} | Tarih: {doc.tarih}
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <a
+                                        href={isMobileDevice ? pdfDownloadUrl : pdfOpenUrl}
+                                        target={isMobileDevice ? undefined : '_blank'}
+                                        rel={isMobileDevice ? undefined : 'noopener noreferrer'}
+                                        download={isMobileDevice ? pdfFileName : undefined}
+                                        className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-[11px] font-bold rounded-lg transition cursor-pointer inline-flex items-center gap-1"
+                                      >
+                                        {isMobileDevice ? <Download className="w-3.5 h-3.5" /> : <ExternalLink className="w-3.5 h-3.5" />}
+                                        <span>{isMobileDevice ? 'PDF İNDİR / AÇ' : 'GÖSTER / AÇ'}</span>
+                                      </a>
+                                      {!isMobileDevice && (
+                                        <a
+                                          href={pdfDownloadUrl}
+                                          download={pdfFileName}
+                                          title="PDF Olarak İndir"
+                                          className="px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-bold rounded-lg transition cursor-pointer inline-flex items-center gap-1"
+                                        >
+                                          <Download className="w-3.5 h-3.5" />
+                                          <span>İndir</span>
+                                        </a>
+                                      )}
                                     </div>
                                   </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => alert(`📄 ${doc.belgeNo} Form One Belgesi Görüntüleniyor...\nP/N: ${doc.pn}\nS/N: ${doc.sn}\nSertifika No: ${doc.belgeNo}`)}
-                                    className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-[11px] font-bold rounded-lg shrink-0 transition cursor-pointer"
-                                  >
-                                    GÖSTER / AÇ
-                                  </button>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -2314,7 +2461,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                             {sayimDepoBolge} ({sayimCategory === 'kimyasal' ? 'Kimyasal' : 'Sarf & Parça'}) deposunda sayılacak kalem bulunamadı.
                           </div>
                         ) : (
-                          <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/80 rounded-2xl border border-slate-800 bg-slate-900/40">
+                          <div className="max-h-64 overflow-y-auto overscroll-contain divide-y divide-slate-800/80 rounded-2xl border border-slate-800 bg-slate-900/40">
                             {sessionItemsToCount.map((item, idx) => {
                               const key = getCountItemKey(item);
                               const isCounted = scannedInSession.has(key);
@@ -2330,7 +2477,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                                     setMissingSayimSerialSelect('');
                                     setSayilanAdetInput(isCounted && countedVal !== undefined ? countedVal : sistemStok);
                                   }}
-                                  className={`px-3 py-2 flex items-center justify-between gap-2 cursor-pointer transition text-xs ${
+                                  className={`px-3 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer transition text-xs ${
                                     isCounted ? 'bg-emerald-950/25 hover:bg-emerald-950/40' : 'hover:bg-slate-800/60'
                                   }`}
                                 >
@@ -2351,7 +2498,7 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                                       </div>
                                     </div>
                                   </div>
-                                  <div className="flex items-center gap-2 shrink-0 font-mono">
+                                  <div className="flex items-center flex-wrap gap-1.5 pl-7 sm:pl-0 shrink-0 font-mono">
                                     {sistemStok <= 0 ? (
                                       <span className="px-2 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-700/60 text-[10px] font-bold">
                                         0 EA • Önceden Gelmiş
@@ -2498,8 +2645,8 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
                     const fark = isNaN(sayilan) ? 0 : sayilan - sistemStok;
 
                     return (
-                      <div className="fixed inset-0 z-[10300] bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
-                        <div className="bg-slate-950 p-6 rounded-3xl border-2 border-amber-500/50 shadow-2xl space-y-5 max-w-xl w-full">
+                      <div className="fixed inset-0 z-[10300] bg-slate-900/95 sm:backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
+                        <div className="bg-slate-950 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border-2 border-amber-500/50 shadow-2xl space-y-4 sm:space-y-5 max-w-xl w-full max-h-[94dvh] overflow-y-auto">
                           <div className="flex items-start justify-between border-b border-slate-800 pb-3">
                             <div>
                               <span className="text-[10px] font-mono font-bold text-amber-400 uppercase tracking-widest">
@@ -2734,14 +2881,14 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
 
       {/* MODALS SIBLINGS (REMAINING ITEMS & EXCESS PROMPT) */}
       {showRemainingModal && (
-        <div className="fixed inset-0 z-[10200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 p-6 rounded-3xl border-2 border-slate-700 shadow-2xl max-w-lg w-full flex flex-col max-h-[80vh]">
+        <div className="fixed inset-0 z-[10200] flex items-center justify-center p-2 sm:p-4 bg-black/85 sm:backdrop-blur-sm">
+          <div className="bg-slate-900 p-4 sm:p-6 rounded-2xl sm:rounded-3xl border-2 border-slate-700 shadow-2xl max-w-lg w-full flex flex-col max-h-[88dvh]">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
               <h4 className="text-sm font-black text-white uppercase tracking-widest">OKUTULMAYAN ÜRÜNLER (KALANLAR)</h4>
               <button onClick={() => setShowRemainingModal(false)} className="text-slate-400 hover:text-white text-lg">✕</button>
             </div>
             
-            <div className="overflow-y-auto space-y-2 flex-1">
+            <div className="overflow-y-auto overscroll-contain space-y-2 flex-1">
               {sessionItemsToCount
                 .filter(i => !scannedInSession.has(getCountItemKey(i)))
                 .map((item, idx) => (
@@ -2792,437 +2939,534 @@ export const BarkodOkuyucuModal: React.FC<BarkodOkuyucuModalProps> = ({
         </div>
       )}
 
-      {/* ─── ÜRÜN TALEBİ (ÇIKAN TALEBİ) MODALI (ONAY BEKLEYENLER -AT802 - ÇOKLU PARÇA VE KORUMALI VERİ) ─── */}
+      {/* ─── ÜRÜN TALEBİ (ÇIKAN TALEBİ) MODALI — SADE 3 ADIMLI SİHİRBAZ ─── */}
       {isUrunTalebiModalOpen && (
-        <div className="fixed inset-0 z-[10500] bg-black/85 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-slate-900 border-2 border-amber-500/50 text-white rounded-3xl shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[92vh]">
-            <div className="bg-amber-950/80 px-5 py-4 border-b border-amber-900/60 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl border border-amber-500/30">
-                  <Package className="w-5 h-5" />
+        <div className="fixed inset-0 z-[10500] bg-black/90 sm:backdrop-blur-xs flex items-center justify-center p-1.5 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-slate-900 border border-amber-500/40 text-white rounded-2xl sm:rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[95dvh] sm:max-h-[92vh]">
+            {/* Header */}
+            <div className="bg-slate-950 px-4 py-3 sm:px-5 sm:py-3.5 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="p-2 bg-amber-500/15 text-amber-400 rounded-xl border border-amber-500/30 shrink-0">
+                  <Package className="w-4 h-4" />
                 </div>
-                <div>
-                  <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-200">
-                    ÜRÜN TALEBİ OLUŞTUR — AT-802F
+                <div className="min-w-0">
+                  <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-200 truncate">
+                    ÜRÜN TALEBİ OLUŞTUR — {UNITS_SECURITY.find(u => u.id === selectedUnit)?.name || selectedUnit.toUpperCase()}
                   </h3>
-                  <p className="text-[10px] text-amber-300">
-                    Seçilen ürünlerin resmi bilgileri otomatik doldurulur ve onaylanmadan stoktan düşülmez
+                  <p className="text-[10px] text-slate-400 truncate">
+                    Onaylanmadan stoktan düşülmez
                   </p>
                 </div>
               </div>
-              <button 
-                type="button" 
-                onClick={() => setIsUrunTalebiModalOpen(false)} 
-                className="text-slate-400 hover:text-white font-bold cursor-pointer"
+              <button
+                type="button"
+                onClick={() => {
+                  stopTalepCamera();
+                  setIsUrunTalebiModalOpen(false);
+                }}
+                className="text-slate-400 hover:text-white font-bold cursor-pointer p-1.5 shrink-0"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleTalepSubmit} className="p-5 space-y-4 text-xs overflow-y-auto flex-1 font-sans">
-              
-              {/* TALEBE EKLENEN PARÇALAR LİSTESİ */}
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider font-mono">
-                    TALEBE EKLENEN PARÇALAR ({talepItemList.length})
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddTalepItemOpen(prev => !prev)}
-                    className="flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-400 text-amber-950 font-black rounded-lg text-xs transition cursor-pointer shadow-xs active:scale-95"
-                  >
-                    <span className="text-sm">+</span>
-                    <span>Parça / Barkod Ekle</span>
-                  </button>
-                </div>
-
-                {/* Ekleme Açılır Kutusu (Kamera Seçimi + Barkod Okuma + Otomatik Arama / Manuel Yazma) */}
-                {isAddTalepItemOpen && (
-                  <div className="p-3.5 bg-slate-950 rounded-2xl border-2 border-amber-500/50 space-y-3 animate-fade-in">
-                    {/* 1. KAMERA SEÇİMİ & BARKOD / KAREKOD OKUTMA */}
-                    <div className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 text-[10px] font-black text-emerald-300 uppercase font-mono">
-                          <Camera className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>KAMERA İLE BARKOD / KAREKOD OKUT</span>
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <select
-                            value={selectedTalepCameraId}
-                            onChange={(e) => {
-                              const nextCam = e.target.value;
-                              setSelectedTalepCameraId(nextCam);
-                              if (isTalepCameraActive) {
-                                startTalepCamera(nextCam);
-                              }
-                            }}
-                            className="px-2 py-1 bg-slate-950 border border-slate-700 rounded-lg text-[10px] font-bold text-slate-200 max-w-[165px] focus:outline-none focus:border-emerald-500 cursor-pointer"
-                            title="Kullanılacak kamerayı seçiniz"
-                          >
-                            <option value="auto">Otomatik (Arka Kamera)</option>
-                            {talepAvailableCameras.map((cam) => (
-                              <option key={cam.id} value={cam.id}>
-                                {cam.label}
-                              </option>
-                            ))}
-                          </select>
-
-                          {isTalepCameraActive ? (
-                            <button
-                              type="button"
-                              onClick={() => stopTalepCamera()}
-                              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-black uppercase rounded-lg transition cursor-pointer flex items-center gap-1"
-                            >
-                              <X className="w-3 h-3" />
-                              <span>Kamerayı Kapat</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => startTalepCamera()}
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase rounded-lg transition cursor-pointer flex items-center gap-1 shadow-xs active:scale-95"
-                            >
-                              <Camera className="w-3 h-3" />
-                              <span>Kamerayı Aç</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className={`relative rounded-xl overflow-hidden bg-black/70 border border-slate-800 transition-all ${isTalepCameraActive || talepCameraError ? 'min-h-[190px] flex items-center justify-center' : 'hidden'}`}>
-                        <div id={talepScannerContainerId} className="w-full max-w-xs mx-auto overflow-hidden" />
-                        {talepCameraError && (
-                          <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center p-3 text-center text-[11px] text-rose-300">
-                            <AlertTriangle className="w-6 h-6 text-rose-400 mb-1.5" />
-                            <span>{talepCameraError}</span>
-                            <span className="text-[10px] text-slate-400 mt-1">Alttaki arama kutusundan yazarak devam edebilirsiniz.</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* 2. OTOMATİK ARAMA VEYA YAZARAK DEVAM ETME */}
-                    <div className="space-y-1.5">
-                      <label className="block text-[9.5px] font-bold text-amber-300 uppercase font-mono">
-                        OTOMATİK BARKOD ARAMA VEYA P/N / MALZEME ADI YAZARAK EKLE
-                      </label>
-                      <div className="relative">
-                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
-                        <input
-                          ref={addTalepInputRef}
-                          type="text"
-                          value={addTalepSearchQuery}
-                          onChange={(e) => setAddTalepSearchQuery(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              const q = addTalepSearchQuery.trim();
-                              if (!q) return;
-                              const { found } = resolveInventoryItemByCode(q);
-                              if (found) {
-                                playBeep();
-                                stopTalepCamera();
-                                handleAddTalepItemFromInventory(found);
-                              } else if (showNotification) {
-                                showNotification(`⚠️ "${q}" ile eşleşen ürün bulunamadı. Listeden seçebilirsiniz.`);
-                              }
-                            }
-                          }}
-                          placeholder="Barkod/QR okutun veya P/N / malzeme adı yazarak devam edin..."
-                          className="w-full pl-8 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-400"
-                        />
-                      </div>
-                      <div className="max-h-44 overflow-y-auto divide-y divide-slate-800 rounded-xl bg-slate-900/60 border border-slate-800">
-                        {(() => {
-                          const sourceInv = (activeInventory && activeInventory.length > 0) ? activeInventory : inventory;
-                          const q = addTalepSearchQuery.toLowerCase().trim();
-                          const filtered = !q
-                            ? sourceInv.slice(0, 12)
-                            : sourceInv
-                                .filter(i => {
-                                  const d = (i.description || i.name || (i as any).MALZEME_ADI || '').toLowerCase();
-                                  const p = (i.partNumber || i.pn || (i as any).MALZEME_PN || '').toLowerCase();
-                                  const s = (i.serialAndNotes || i.sn || (i as any).SERI_NO || '').toLowerCase();
-                                  const l = (i.lokasyonNo || i.location || '').toLowerCase();
-                                  return p.includes(q) || d.includes(q) || s.includes(q) || l.includes(q);
-                                })
-                                .sort((a, b) => {
-                                  const pa = (a.partNumber || a.pn || (a as any).MALZEME_PN || '').toLowerCase();
-                                  const pb = (b.partNumber || b.pn || (b as any).MALZEME_PN || '').toLowerCase();
-                                  const aExact = pa === q ? 0 : pa.startsWith(q) ? 1 : 2;
-                                  const bExact = pb === q ? 0 : pb.startsWith(q) ? 1 : 2;
-                                  return aExact - bExact;
-                                })
-                                .slice(0, 15);
-
-                          if (filtered.length === 0) {
-                            return (
-                              <div className="p-3 text-center text-[11px] text-slate-400">
-                                "{addTalepSearchQuery}" ile eşleşen malzeme bulunamadı.
-                              </div>
-                            );
-                          }
-
-                          return filtered.map((item, idx) => (
-                            <div
-                              key={idx}
-                              onClick={() => {
-                                playBeep();
-                                stopTalepCamera();
-                                handleAddTalepItemFromInventory(item);
-                              }}
-                              className="p-2.5 hover:bg-amber-950/50 cursor-pointer text-xs flex items-center justify-between gap-2 transition"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="font-bold text-white truncate">{item.description || item.name || (item as any).MALZEME_ADI}</div>
-                                <div className="text-[10px] font-mono text-slate-400 truncate">
-                                  P/N: <strong className="text-amber-300">{item.partNumber || item.pn || (item as any).MALZEME_PN || '-'}</strong>
-                                  {item.lokasyonNo || item.location ? ` | Raf: ${item.lokasyonNo || item.location}` : ''}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span className="text-[10px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-800 px-2 py-0.5 rounded-full">
-                                  {item.category === 'kimyasal' ? '🧪 Kimyasal' : '📦 Sarf'}
-                                </span>
-                                <span className="text-[10px] font-black bg-emerald-600/20 text-emerald-300 border border-emerald-600/40 px-2 py-0.5 rounded-md">
-                                  + Ekle
-                                </span>
-                              </div>
-                            </div>
-                          ));
-                        })()}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Eklenen Parçalar Kart Listesi */}
-                {talepItemList.length > 0 ? (
-                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                    {talepItemList.map((it, idx) => (
-                      <div key={it.id} className="p-3 bg-slate-950 rounded-2xl border border-slate-800 flex flex-col gap-2 relative group hover:border-amber-500/40 transition">
-                        <div className="flex items-start justify-between gap-2 border-b border-slate-900 pb-2">
-                          <div>
-                            <div className="text-xs font-black text-white">{it.itemName}</div>
-                            <div className="text-[10px] font-mono text-slate-400 flex items-center gap-2 mt-0.5">
-                              <span>P/N: <strong className="text-amber-300">{it.pn || '-'}</strong></span>
-                              <span className="text-slate-600">|</span>
-                              <span className="text-amber-400 font-bold">OTOMATİK DOLDURULDU (DÜZENLENEMEZ)</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className="text-[10px] font-mono font-bold bg-amber-950/80 text-amber-300 border border-amber-800/80 px-2 py-0.5 rounded-md">
-                              {it.category === 'kimyasal' ? '🧪 Kimyasal Depo' : '📦 Sarf Depo'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveTalepItem(it.id)}
-                              className="text-rose-400 hover:text-rose-200 font-bold p-1 hover:bg-rose-950/50 rounded-lg transition"
-                              title="Bu parçayı listeden çıkar"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className={`grid ${it.category === 'kimyasal' ? 'grid-cols-2' : 'grid-cols-3'} gap-2 text-[11px]`}>
-                          <div>
-                            <label className="block text-[9px] font-bold text-slate-400 uppercase font-mono mb-0.5">Miktar (Adet)</label>
-                            <input
-                              type="number"
-                              min={1}
-                              value={it.quantity}
-                              onChange={(e) => handleUpdateTalepItemField(it.id, 'quantity', Math.max(1, parseInt(e.target.value) || 1))}
-                              className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-white font-mono font-bold"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[9px] font-bold text-slate-400 uppercase font-mono mb-0.5">Depo Seçimi</label>
-                            <select
-                              value={it.depot}
-                              onChange={(e) => handleUpdateTalepItemField(it.id, 'depot', e.target.value)}
-                              className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-white font-bold"
-                            >
-                              <option value="ANKARA">ANKARA</option>
-                              <option value="KARAİN">KARAİN</option>
-                              <option value="ÇANAKKALE">ÇANAKKALE</option>
-                              <option value="MİLAS">MİLAS</option>
-                              <option value="BURSA">BURSA</option>
-                            </select>
-                          </div>
-
-                          {it.category !== 'kimyasal' && (
-                            <div>
-                              <label className="block text-[9px] font-bold text-slate-400 uppercase font-mono mb-0.5">Serial Number (S/N)</label>
-                              <input
-                                type="text"
-                                value={it.sn}
-                                onChange={(e) => handleUpdateTalepItemField(it.id, 'sn', e.target.value)}
-                                placeholder="S/N..."
-                                className="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-white font-mono font-bold"
-                              />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="p-4 bg-slate-950/60 rounded-2xl border border-slate-850 text-center text-slate-500 font-bold text-xs">
-                    Henüz talebe parça eklenmedi. Yukarıdaki (+) butonuna basarak ürün ekleyebilirsiniz.
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                {/* Kuyruk No (Çıkan Malzemedeki Kuyruk No Listesi) */}
-                <div>
-                  <label className="block text-[9.5px] font-black text-slate-300 uppercase font-mono mb-1">
-                    KUYRUK NO SEÇİMİ (AT-802) *
-                  </label>
-                  <select
-                    value={talepTailNo}
-                    onChange={(e) => {
-                      setTalepTailNo(e.target.value);
-                      if (e.target.value !== 'Diğer') setTalepTailNoOther('');
-                    }}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-bold focus:outline-none focus:border-amber-500"
-                  >
-                    {(AIRCRAFT_TAILS.at802 || [
-                      'ORMAN 21 (OR-2021) - AT-802', 'ORMAN 22 (OR-2022) - AT-802', 'ORMAN 23 (OR-2023) - AT-802',
-                      'ORMAN 24 (OR-2024) - AT-802', 'ORMAN 25 (OR-2025) - AT-802', 'ORMAN 26 (OR-2026) - AT-802',
-                      'ORMAN 27 (OR-2027) - AT-802', 'ORMAN 28 (OR-2028) - AT-802', 'ORMAN 29 (OR-2029) - AT-802',
-                      'ORMAN 30 (OR-2030) - AT-802', 'ORMAN 31 (OR-2031) - AT-802', 'ORMAN 36 (OR-2036) - AT-802',
-                      'ORMAN 37 (OR-2037) - AT-802', 'ORMAN 38 (OR-2038) - AT-802', 'ORMAN 39 (OR-2039) - AT-802',
-                      'ORMAN 40 (OR-2040) - AT-802'
-                    ]).map((tail, idx) => (
-                      <option key={idx} value={tail}>{tail}</option>
-                    ))}
-                    <option value="GENEL">GENEL / DEPO</option>
-                    <option value="Diğer">Diğer (Manuel Giriş)...</option>
-                  </select>
-                  {talepTailNo === 'Diğer' && (
-                    <input
-                      type="text"
-                      value={talepTailNoOther}
-                      onChange={(e) => setTalepTailNoOther(e.target.value)}
-                      placeholder="Kuyruk no manuel yazınız (Örn: OR-2045)..."
-                      required
-                      className="w-full mt-1.5 px-3 py-1.5 bg-amber-950/40 border border-amber-500/50 rounded-lg text-amber-200 font-mono text-xs focus:outline-none focus:border-amber-500 font-bold"
-                    />
-                  )}
-                  {/* İŞ EMRİ / CRS NO / DEFTER SIRA NO */}
-                  <div className="mt-2">
-                    <label className="block text-[9.5px] font-black text-amber-300 uppercase font-mono mb-1 flex items-center justify-between gap-1">
-                      <span>İŞ EMRİ / CRS NO / DEFTER SIRA NO *</span>
-                      <span className="text-[8.5px] text-amber-400 font-bold shrink-0">3'ünden Biri Zorunlu</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={talepWorkOrderOrCrs}
-                      onChange={(e) => setTalepWorkOrderOrCrs(e.target.value)}
-                      placeholder="İş Emri, CRS No veya Defter Sıra No yazınız..."
-                      required
-                      className="w-full px-3 py-2 bg-amber-950/40 border border-amber-500/50 rounded-xl text-amber-100 font-mono text-xs focus:outline-none focus:border-amber-400 font-bold"
-                    />
-                  </div>
-                </div>
-
-                {/* Tarih */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-[9.5px] font-black text-slate-300 uppercase font-mono">
-                      TALEP TARİHİ (TAKVİM) *
-                    </label>
+            {/* Sade Stepper Çubuğu */}
+            <div className="px-4 py-2.5 bg-slate-950/60 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              {[
+                { step: 1 as const, label: '1. Parça Seçimi' },
+                { step: 2 as const, label: '2. Talep Bilgileri' },
+                { step: 3 as const, label: '3. Onay & Gönder' }
+              ].map((s, idx) => {
+                const isActive = talepStep === s.step;
+                const isDone = talepStep > s.step;
+                return (
+                  <React.Fragment key={s.step}>
                     <button
                       type="button"
                       onClick={() => {
-                        const pad = (n: number) => String(n).padStart(2, '0');
-                        const now = new Date();
-                        setTalepDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`);
+                        if (s.step === 1) setTalepStep(1);
+                        else if (s.step === 2 && talepItemList.length > 0) setTalepStep(2);
+                        else if (s.step === 3 && talepItemList.length > 0 && talepWorkOrderOrCrs.trim() && talepRequestedBy.trim()) setTalepStep(3);
                       }}
-                      className="text-[9px] text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[10.5px] font-bold transition cursor-pointer ${
+                        isActive
+                          ? 'bg-amber-500 text-slate-950 shadow-sm font-black'
+                          : isDone
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-slate-800/80 text-slate-400'
+                      }`}
                     >
-                      📅 Şimdiki Zaman
+                      <span>{s.label}</span>
                     </button>
+                    {idx < 2 && <div className={`flex-1 h-0.5 rounded-full ${talepStep > s.step ? 'bg-emerald-500/50' : 'bg-slate-800'}`} />}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                if (talepStep !== 3) {
+                  e.preventDefault();
+                  return;
+                }
+                handleTalepSubmit(e);
+              }}
+              className="p-4 sm:p-5 space-y-4 text-xs overflow-y-auto overscroll-contain flex-1 font-sans flex flex-col justify-between"
+            >
+              <div className="space-y-4">
+                {/* ─── ADIM 1: PARÇA SEÇİMİ ─── */}
+                {talepStep === 1 && (
+                  <div className="space-y-3 animate-fade-in">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-black text-white">Parça Listesi ({talepItemList.length})</div>
+                        <div className="text-[10.5px] text-slate-400">Miktar, depo ve varsa seri numarasını kontrol edin</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsAddTalepItemOpen(prev => !prev)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs transition cursor-pointer shadow-xs active:scale-95"
+                      >
+                        <span>{isAddTalepItemOpen ? '✕ Kapat' : '+ Parça / Barkod Ekle'}</span>
+                      </button>
+                    </div>
+
+                    {isAddTalepItemOpen && (
+                      <div className="p-3 bg-slate-950 rounded-2xl border border-amber-500/40 space-y-2.5 animate-fade-in">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[10px] font-black text-emerald-300 uppercase font-mono flex items-center gap-1.5">
+                            <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Kamera ile Okut</span>
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={selectedTalepCameraId}
+                              onChange={(e) => {
+                                const nextCam = e.target.value;
+                                setSelectedTalepCameraId(nextCam);
+                                if (isTalepCameraActive) startTalepCamera(nextCam);
+                              }}
+                              className="px-2 py-1 bg-slate-900 border border-slate-700 rounded-lg text-[10px] font-bold text-slate-200 max-w-[150px]"
+                            >
+                              <option value="auto">Otomatik (Arka Kamera)</option>
+                              {talepAvailableCameras.map((cam) => (
+                                <option key={cam.id} value={cam.id}>{cam.label}</option>
+                              ))}
+                            </select>
+                            {isTalepCameraActive ? (
+                              <button
+                                type="button"
+                                onClick={() => stopTalepCamera()}
+                                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-black rounded-lg cursor-pointer"
+                              >
+                                Kapat
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => startTalepCamera()}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black rounded-lg cursor-pointer"
+                              >
+                                Aç
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className={`relative rounded-xl overflow-hidden bg-black/70 border border-slate-800 ${isTalepCameraActive || talepCameraError ? 'min-h-[170px] flex items-center justify-center' : 'hidden'}`}>
+                          <div id={talepScannerContainerId} className="w-full max-w-xs mx-auto overflow-hidden" />
+                          {talepCameraError && (
+                            <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center p-3 text-center text-[11px] text-rose-300">
+                              <span>{talepCameraError}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                          <input
+                            ref={addTalepInputRef}
+                            type="text"
+                            value={addTalepSearchQuery}
+                            onChange={(e) => setAddTalepSearchQuery(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const q = addTalepSearchQuery.trim();
+                                if (!q) return;
+                                const { found } = resolveInventoryItemByCode(q);
+                                if (found) {
+                                  playBeep();
+                                  stopTalepCamera();
+                                  handleAddTalepItemFromInventory(found);
+                                }
+                              }
+                            }}
+                            placeholder="P/N veya malzeme adı yazınız..."
+                            className="w-full pl-8 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-400"
+                          />
+                        </div>
+
+                        <div className="max-h-36 overflow-y-auto divide-y divide-slate-800 rounded-xl bg-slate-900/60 border border-slate-800">
+                          {talepAddMatches.length === 0 ? (
+                            <div className="p-3 text-center text-[11px] text-slate-400">Eşleşen malzeme bulunamadı.</div>
+                          ) : (
+                            talepAddMatches.map((item, idx) => (
+                              <div
+                                key={idx}
+                                onClick={() => {
+                                  playBeep();
+                                  stopTalepCamera();
+                                  handleAddTalepItemFromInventory(item);
+                                }}
+                                className="p-2 hover:bg-amber-950/50 cursor-pointer text-xs flex items-center justify-between gap-2"
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-bold text-white truncate">{item.description || item.name || (item as any).MALZEME_ADI}</div>
+                                  <div className="text-[10px] font-mono text-slate-400 truncate">
+                                    P/N: <strong className="text-amber-300">{item.partNumber || item.pn || (item as any).MALZEME_PN || '-'}</strong>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-black bg-emerald-600/20 text-emerald-300 border border-emerald-600/40 px-2 py-0.5 rounded-md shrink-0">
+                                  + Ekle
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {talepItemList.length > 0 ? (
+                      <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+                        {talepItemList.map((it) => (
+                          <div key={it.id} className="p-3 bg-slate-950 rounded-2xl border border-slate-800 space-y-2.5">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-xs font-black text-white truncate">{it.itemName}</div>
+                                <div className="text-[10px] font-mono text-amber-300 mt-0.5">
+                                  P/N: {it.pn || '-'} &bull; {it.category === 'kimyasal' ? 'Kimyasal' : 'Sarf'}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveTalepItem(it.id)}
+                                className="text-rose-400 hover:text-rose-200 font-bold px-1.5 py-0.5 hover:bg-rose-950/50 rounded-lg cursor-pointer"
+                                title="Çıkar"
+                              >
+                                ✕
+                              </button>
+                            </div>
+
+                            <div className={`grid grid-cols-1 ${it.category === 'kimyasal' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'} gap-2`}>
+                              <div>
+                                <label className="block text-[9.5px] font-bold text-slate-400 mb-1">Adet</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={it.quantity}
+                                  onChange={(e) => handleUpdateTalepItemField(it.id, 'quantity', Math.max(1, parseInt(e.target.value) || 1))}
+                                  className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono font-bold"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9.5px] font-bold text-slate-400 mb-1">Depo</label>
+                                <select
+                                  value={it.depot}
+                                  onChange={(e) => handleUpdateTalepItemField(it.id, 'depot', e.target.value)}
+                                  className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-bold"
+                                >
+                                  <option value="ANKARA">ANKARA</option>
+                                  <option value="KARAİN">KARAİN</option>
+                                  <option value="ÇANAKKALE">ÇANAKKALE</option>
+                                  <option value="MİLAS">MİLAS</option>
+                                  <option value="BURSA">BURSA</option>
+                                </select>
+                              </div>
+                              {it.category !== 'kimyasal' && (
+                                <div>
+                                  <label className="block text-[9.5px] font-bold text-slate-400 mb-1">Seri No (S/N)</label>
+                                  <input
+                                    type="text"
+                                    value={it.sn}
+                                    onChange={(e) => handleUpdateTalepItemField(it.id, 'sn', e.target.value)}
+                                    placeholder="Opsiyonel..."
+                                    className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono font-bold"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-6 bg-slate-950/60 rounded-2xl border border-dashed border-slate-800 text-center text-slate-400 text-xs">
+                        Henüz parça eklenmedi. Yukarıdaki <strong>+ Parça / Barkod Ekle</strong> butonuna tıklayın.
+                      </div>
+                    )}
                   </div>
-                  <input
-                    type="datetime-local"
-                    value={(() => {
-                      if (!talepDate) return '';
-                      if (talepDate.includes('T')) return talepDate;
-                      const parts = talepDate.split(' ');
-                      if (parts.length === 2 && parts[0].includes('.')) {
-                        const dParts = parts[0].split('.');
-                        return `${dParts[2]}-${dParts[1]}-${dParts[0]}T${parts[1]}`;
-                      }
-                      return talepDate;
-                    })()}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (!val) {
-                        setTalepDate('');
-                        return;
-                      }
-                      const [d, t] = val.split('T');
-                      if (d && t) {
-                        const [y, m, day] = d.split('-');
-                        setTalepDate(`${day}.${m}.${y} ${t}`);
-                      } else {
-                        setTalepDate(val);
-                      }
-                    }}
-                    required
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono focus:outline-none focus:border-amber-500 cursor-pointer color-scheme-dark"
-                  />
-                </div>
+                )}
+
+                {/* ─── ADIM 2: TALEP BİLGİLERİ ─── */}
+                {talepStep === 2 && (
+                  <div className="space-y-3.5 animate-fade-in">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                        Kuyruk No *
+                      </label>
+                      <select
+                        value={talepTailNo}
+                        onChange={(e) => {
+                          setTalepTailNo(e.target.value);
+                          if (e.target.value !== 'Diğer') setTalepTailNoOther('');
+                        }}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-bold focus:outline-none focus:border-amber-500"
+                      >
+                        {(AIRCRAFT_TAILS.at802 || [
+                          'ORMAN 21 (OR-2021) - AT-802', 'ORMAN 22 (OR-2022) - AT-802', 'ORMAN 23 (OR-2023) - AT-802',
+                          'ORMAN 24 (OR-2024) - AT-802', 'ORMAN 25 (OR-2025) - AT-802', 'ORMAN 26 (OR-2026) - AT-802',
+                          'ORMAN 27 (OR-2027) - AT-802', 'ORMAN 28 (OR-2028) - AT-802', 'ORMAN 29 (OR-2029) - AT-802',
+                          'ORMAN 30 (OR-2030) - AT-802', 'ORMAN 31 (OR-2031) - AT-802', 'ORMAN 36 (OR-2036) - AT-802',
+                          'ORMAN 37 (OR-2037) - AT-802', 'ORMAN 38 (OR-2038) - AT-802', 'ORMAN 39 (OR-2039) - AT-802',
+                          'ORMAN 40 (OR-2040) - AT-802'
+                        ]).map((tail, idx) => (
+                          <option key={idx} value={tail}>{tail}</option>
+                        ))}
+                        <option value="GENEL">GENEL / DEPO</option>
+                        <option value="Diğer">Diğer (Manuel Giriş)...</option>
+                      </select>
+                      {talepTailNo === 'Diğer' && (
+                        <input
+                          type="text"
+                          value={talepTailNoOther}
+                          onChange={(e) => setTalepTailNoOther(e.target.value)}
+                          placeholder="Örn: OR-2045"
+                          className="w-full mt-2 px-3 py-2 bg-slate-950 border border-amber-500/50 rounded-xl text-amber-200 font-mono text-xs font-bold focus:outline-none focus:border-amber-400"
+                        />
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-[10px] font-bold text-amber-300 uppercase">
+                            İş Emri / CRS No / Defter Sıra No *
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setShowWorkOrderInfo(v => !v)}
+                            className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 border border-amber-400/50 cursor-pointer transition-colors"
+                            title="Bilgi"
+                          >
+                            <Info className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                        <span className="text-[9px] text-amber-400">3'ünden Biri Zorunlu</span>
+                      </div>
+                      {showWorkOrderInfo && (
+                        <div className="mb-2 p-2.5 rounded-xl bg-amber-950/70 border border-amber-500/40 text-[10.5px] text-amber-100 leading-relaxed">
+                          Hava aracı eğer ki yıllık bakımda ise <strong>İş Emri veya CRS No</strong>; periyodik başka bir bakım ise <strong>CRS No</strong>; eğer ki hava aracı hat bakım sürecinde (uçuş öncesi veya sonrası bakımda) tespit edilen arıza sonucu ise o arızanın gerçekleştiği uçuşun <strong>Defter Sıra No</strong> yazılır.
+                        </div>
+                      )}
+                      <input
+                        type="text"
+                        value={talepWorkOrderOrCrs}
+                        onChange={(e) => setTalepWorkOrderOrCrs(e.target.value)}
+                        placeholder="İş Emri, CRS No veya Defter Sıra No..."
+                        className="w-full px-3 py-2 bg-slate-950 border border-amber-500/50 rounded-xl text-white font-mono text-xs font-bold focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                        Teslim Alan Personel *
+                      </label>
+                      <PersonnelAutocomplete
+                        value={talepRequestedBy}
+                        onChange={setTalepRequestedBy}
+                        placeholder="Personel seçiniz veya yazınız..."
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[10px] font-bold text-slate-300 uppercase">Tarih *</label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const pad = (n: number) => String(n).padStart(2, '0');
+                              const now = new Date();
+                              setTalepDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()}`);
+                            }}
+                            className="text-[9.5px] text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
+                          >
+                            Bugün
+                          </button>
+                        </div>
+                        <input
+                          type="date"
+                          value={(() => {
+                            if (!talepDate) return '';
+                            const dateOnly = talepDate.split(' ')[0];
+                            if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) return dateOnly;
+                            const dParts = dateOnly.split('.');
+                            if (dParts.length === 3) {
+                              return `${dParts[2]}-${dParts[1].padStart(2, '0')}-${dParts[0].padStart(2, '0')}`;
+                            }
+                            return '';
+                          })()}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) {
+                              setTalepDate('');
+                              return;
+                            }
+                            const [y, m, day] = val.split('-');
+                            if (y && m && day) {
+                              setTalepDate(`${day}.${m}.${y}`);
+                            } else {
+                              setTalepDate(val);
+                            }
+                          }}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-[11px] focus:outline-none focus:border-amber-500 color-scheme-dark"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-300 uppercase mb-1">
+                          Not (Opsiyonel)
+                        </label>
+                        <input
+                          type="text"
+                          value={talepNotes}
+                          onChange={(e) => setTalepNotes(e.target.value)}
+                          placeholder="Bakım / değişim notu..."
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ─── ADIM 3: ÖZET & GÖNDER ─── */}
+                {talepStep === 3 && (
+                  <div className="space-y-3 animate-fade-in">
+                    <div className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 space-y-2">
+                      <div className="text-[10.5px] font-black text-amber-400 uppercase font-mono">
+                        Talep Edilen Parçalar ({talepItemList.length})
+                      </div>
+                      <div className="divide-y divide-slate-800/80 max-h-40 overflow-y-auto">
+                        {talepItemList.map((it) => (
+                          <div key={it.id} className="py-1.5 flex items-center justify-between gap-2 text-xs">
+                            <div className="min-w-0">
+                              <div className="font-bold text-white truncate">{it.itemName}</div>
+                              <div className="text-[10px] font-mono text-slate-400">
+                                P/N: {it.pn || '-'} &bull; Depo: {it.depot}{it.sn ? ` • S/N: ${it.sn}` : ''}
+                              </div>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 font-mono font-black shrink-0">
+                              {it.quantity} Adet
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 space-y-1.5 text-xs">
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-400">Kuyruk No:</span>
+                        <span className="font-bold text-white text-right">{talepTailNo === 'Diğer' ? (talepTailNoOther || '-') : talepTailNo}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-400">İş Emri / CRS / Defter No:</span>
+                        <span className="font-mono font-black text-amber-300 text-right">{talepWorkOrderOrCrs}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-400">Teslim Alan:</span>
+                        <span className="font-bold text-white text-right">{talepRequestedBy}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-400">Tarih:</span>
+                        <span className="font-mono text-slate-200 text-right">{talepDate || '-'}</span>
+                      </div>
+                      {talepNotes.trim() && (
+                        <div className="flex justify-between gap-2 pt-1 border-t border-slate-800/80">
+                          <span className="text-slate-400">Not:</span>
+                          <span className="text-slate-200 text-right">{talepNotes}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Teslim Alan Personel */}
-              <div>
-                <label className="block text-[9.5px] font-black text-slate-300 uppercase font-mono mb-1">
-                  TESLİM ALAN PERSONEL (LİSTEDEN SEÇİNİZ) *
-                </label>
-                <PersonnelAutocomplete
-                  value={talepRequestedBy}
-                  onChange={setTalepRequestedBy}
-                  placeholder="Kendi adınızı seçiniz veya yazınız..."
-                />
-              </div>
-
-              {/* Açıklama */}
-              <div>
-                <label className="block text-[9.5px] font-black text-slate-300 uppercase font-mono mb-1">
-                  AÇIKLAMA / İŞ EMRİ / TALEP NOTU
-                </label>
-                <textarea
-                  rows={2}
-                  value={talepNotes}
-                  onChange={(e) => setTalepNotes(e.target.value)}
-                  placeholder="Talep gerekçesi, bakım görevi, parça değişim nedeni..."
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-amber-500 resize-none font-sans"
-                />
-              </div>
-
-              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2 shrink-0 font-sans">
+              {/* Footer Navigasyon */}
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0 font-sans">
                 <button
                   type="button"
-                  onClick={() => setIsUrunTalebiModalOpen(false)}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl font-bold transition cursor-pointer"
+                  onClick={() => {
+                    if (talepStep === 1) {
+                      stopTalepCamera();
+                      setIsUrunTalebiModalOpen(false);
+                    } else {
+                      setTalepStep(prev => (prev === 3 ? 2 : 1));
+                    }
+                  }}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold transition cursor-pointer"
                 >
-                  İptal
+                  {talepStep === 1 ? 'İptal' : '← Geri'}
                 </button>
-                <button
-                  type="submit"
-                  disabled={isTalepSubmitting}
-                  className="px-5 py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 disabled:opacity-50 text-slate-950 font-black uppercase rounded-xl shadow-lg transition cursor-pointer active:scale-95 flex items-center gap-2"
-                >
-                  <Send className="w-4 h-4 text-slate-950" />
-                  <span>{isTalepSubmitting ? 'Kaydediliyor...' : 'TALEBİ KAYDET VE İLET'}</span>
-                </button>
+
+                {talepStep === 1 && (
+                  <button
+                    type="button"
+                    disabled={talepItemList.length === 0}
+                    onClick={() => {
+                      stopTalepCamera();
+                      setTalepStep(2);
+                    }}
+                    className="px-5 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-black uppercase rounded-xl shadow transition cursor-pointer"
+                  >
+                    İleri →
+                  </button>
+                )}
+
+                {talepStep === 2 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!talepWorkOrderOrCrs.trim()) {
+                        showNotification?.('⚠️ Lütfen İş Emri, CRS No veya Defter Sıra No giriniz.');
+                        return;
+                      }
+                      if (talepTailNo === 'Diğer' && !talepTailNoOther.trim()) {
+                        showNotification?.('⚠️ Lütfen manuel kuyruk numarasını giriniz.');
+                        return;
+                      }
+                      if (!talepRequestedBy.trim()) {
+                        showNotification?.('⚠️ Lütfen teslim alacak personeli seçiniz.');
+                        return;
+                      }
+                      setTalepStep(3);
+                    }}
+                    className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black uppercase rounded-xl shadow transition cursor-pointer"
+                  >
+                    Özete Geç →
+                  </button>
+                )}
+
+                {talepStep === 3 && (
+                  <button
+                    type="submit"
+                    disabled={isTalepSubmitting}
+                    className="px-5 py-2 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 disabled:opacity-50 text-slate-950 font-black uppercase rounded-xl shadow-lg transition cursor-pointer active:scale-95 flex items-center gap-2"
+                  >
+                    <Send className="w-4 h-4 text-slate-950" />
+                    <span>{isTalepSubmitting ? 'Kaydediliyor...' : 'TALEBİ KAYDET VE İLET'}</span>
+                  </button>
+                )}
               </div>
             </form>
           </div>

@@ -346,7 +346,7 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
 
   const pullFromDrive = async () => {
     setIsLoadingDrive(true);
-    showNotification(`Google Drive'dan ${currentCategory.name} verileri canlı olarak alınıyor...`);
+    showNotification(`Bulut Arşivinden ${currentCategory.name} verileri canlı olarak alınıyor...`);
     try {
       const candidates = [
         currentCategory.driveFileName,
@@ -408,7 +408,7 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
           }
 
           saveRows(selectedCategoryKey, cleanedRows);
-          showNotification(`✅ ${currentCategory.shortLabel} güncellendi: ${cleanedRows.length} kayıt Google Drive'dan aktarıldı.`);
+          showNotification(`✅ ${currentCategory.shortLabel} güncellendi: ${cleanedRows.length} kayıt Bulut Arşivinden aktarıldı.`);
         }
       } else {
         showNotification(`⚠️ Drive üzerinde dosya okundu ancak satır bulunamadı.`);
@@ -1069,7 +1069,7 @@ export function DepoApp({ initialCategory, isEmbedded }: { initialCategory?: str
                         ]);
                       }
                       saveRows(selectedCategoryKey, newRows);
-                      showNotification(`✅ ${newRows.length} ürün yüklendi ve hem sisteme hem Google Drive Excel'e kalıcı aktarıldı!`);
+                      showNotification(`✅ ${newRows.length} ürün yüklendi ve hem sisteme hem Bulut Arşivi Excel'e kalıcı aktarıldı!`);
                     } catch (err: any) {
                       showNotification(`❌ Excel hatası: ${err.message}`);
                     }

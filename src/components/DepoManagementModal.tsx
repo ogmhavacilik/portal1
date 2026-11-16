@@ -27,7 +27,8 @@ import {
   ChevronDown,
   Barcode,
   FileSearch,
-  Wrench
+  Wrench,
+  Info
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { DepoTransaction } from '../types';
@@ -715,6 +716,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const [movementDepoYeri, setMovementDepoYeri] = useState<string>('');
   const [movementNotes, setMovementNotes] = useState<string>('');
   const [movementWorkOrderOrCrs, setMovementWorkOrderOrCrs] = useState<string>('');
+  const [showWorkOrderInfo, setShowWorkOrderInfo] = useState<boolean>(false);
 
   // Filo / Birim Değiştiğinde Hareket Modalı Verilerini Anında Adapte Eden Fonksiyon
   const handleSwitchMovementUnit = (unitId: string) => {
@@ -1188,6 +1190,14 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const [isBulkExcelModalOpen, setIsBulkExcelModalOpen] = useState<boolean>(false);
   const [isExcelTypeModalOpen, setIsExcelTypeModalOpen] = useState<boolean>(false);
   const [selectedExcelUploadCategory, setSelectedExcelUploadCategory] = useState<'sarf' | 'kimyasal' | 'yasam_destek'>('sarf');
+  const [excelUploadProgress, setExcelUploadProgress] = useState<{
+    active: boolean;
+    percent: number;
+    message: string;
+    subMessage?: string;
+    isCompleted?: boolean;
+    summaryText?: string;
+  }>({ active: false, percent: 0, message: 'Veri Yükleniyor...' });
   const [bulkExcelRows, setBulkExcelRows] = useState<Array<{
     id: number;
     pn: string;
@@ -1836,7 +1846,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
         .then(res => res.json())
         .then(result => {
           if (result && result.status === 'success') {
-            showNotification('✅ Yaşam Destek verileri Google Drive ile senkronize edildi.');
+            showNotification('✅ Yaşam Destek verileri bulut arşivi ile senkronize edildi.');
             fetchYasamDestekData();
           } else {
             showNotification('❌ Senkronizasyon hatası: ' + (result.message || 'Bilinmeyen hata'));
@@ -2169,12 +2179,12 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
                   return [...filtered, ...mergedItems];
                 });
                 if (forceNotify) {
-                  showNotification(`✅ Google Drive'dan ${parsedItems.length} malzeme başarıyla aktarıldı.`);
+                  showNotification(`✅ Bulut arşivinden ${parsedItems.length} malzeme başarıyla aktarıldı.`);
                 }
               } else {
                 setInventory(prev => prev.filter(i => !(getItemResolvedUnit(i) === activeUnit && i.category === targetCat)));
                 if (forceNotify) {
-                  showNotification(`ℹ️ Google Drive üzerinde ${targetFileName} dosyasında kayıt bulunamadı (0 kayıt).`);
+                  showNotification(`ℹ️ Bulut arşivinde ${targetFileName} dosyasında kayıt bulunamadı (0 kayıt).`);
                 }
               }
             }
@@ -2184,7 +2194,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
         } else {
           setInventory(prev => prev.filter(i => !(getItemResolvedUnit(i) === activeUnit && i.category === targetCat)));
           if (forceNotify) {
-            showNotification(`ℹ️ Google Drive üzerinde ${targetFileName} dosyası bulunamadı (0 kayıt).`);
+            showNotification(`ℹ️ Bulut arşivinde ${targetFileName} dosyası bulunamadı (0 kayıt).`);
           }
         }
       })
@@ -2192,7 +2202,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
         console.warn("Drive read error:", err);
         setInventory(prev => prev.filter(i => !(getItemResolvedUnit(i) === activeUnit && i.category === targetCat)));
         if (forceNotify) {
-          showNotification(`ℹ️ Google Drive dosyasına erişilemedi (0 kayıt).`);
+          showNotification(`ℹ️ Bulut dosyasına erişilemedi (0 kayıt).`);
         }
       })
       .finally(() => {
@@ -2265,13 +2275,13 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
   const handleFetchLiveAndSearch = async () => {
     if (currentDepoType === 'yasam_destek') {
       setIsLoadingDrive(true);
-      if (showNotification) showNotification('🔄 Yaşam Destek canlı verileri Google Drive/E-Tablo veritabanından çekiliyor...');
+      if (showNotification) showNotification('🔄 Yaşam Destek canlı verileri veritabanından çekiliyor...');
       await fetchYasamDestekData();
       setIsLoadingDrive(false);
       if (showNotification) showNotification('✅ Yaşam Destek canlı verileri başarıyla yüklendi.');
     } else if (currentDepoType === 'transactions') {
       setIsLoadingDrive(true);
-      if (showNotification) showNotification('🔄 Depo Hareket Geçmişi canlı verileri Google Drive veritabanından çekiliyor...');
+      if (showNotification) showNotification('🔄 Depo Hareket Geçmişi canlı verileri veritabanından çekiliyor...');
       
       try {
         const res = await fetch('/api/depo-transactions');
@@ -3021,7 +3031,9 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
     setMovementItemSearch('');
     setMovementQty(1);
     const now = new Date();
-    setMovementDate(`${now.toLocaleDateString('tr-TR')} ${now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}`);
+    const padD = (n: number) => String(n).padStart(2, '0');
+    setMovementDate(`${padD(now.getDate())}.${padD(now.getMonth() + 1)}.${now.getFullYear()}`);
+    setShowWorkOrderInfo(false);
     
     let allowedTypes: string[] = [];
 
@@ -3854,7 +3866,7 @@ export const DepoManagementModal: React.FC<DepoManagementModalProps> = ({
       setIsOnayBekleyenlerModalOpen(true);
       fetchOnayBekleyenler();
     } else {
-      setOnayPasswordError('Hatalı Şifre! Yetkili şifresini (1839) giriniz.');
+      setOnayPasswordError('Hatalı Şifre! Yetkili şifresini giriniz.');
     }
   };
 
@@ -4575,15 +4587,180 @@ const handleDownloadFilteredExcel = () => {
   showNotification(`✅ ${rowsToExport.length} filtrelenmiş malzeme "${downloadFileName}" olarak tablo başlık renk dolguları ile başarıyla indirildi.`);
 };
 
-  // EXCEL YÜKLE - MEVCUT VERİ YÜKLEME GÜNCELLEME İLE BİREBİR UYUMLU VE DRIVE ENTEGRASYONU
+  // EXCEL YÜKLE - MEVCUT VERİ YÜKLEME GÜNCELLEME İLE BİREBİR UYUMLU, TRANSFER GEÇMİŞİ AKTARIMI VE DRIVE ENTEGRASYONU
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    showNotification("Excel dosyası çözümleniyor ve Google Drive'a aktarılıyor...");
+    const yieldToUi = () => new Promise<void>(resolve => setTimeout(resolve, 35));
+    const unitKey = currentUnit !== 'all' ? currentUnit : 'at802';
+    const normalizeSheetTitle = (s: string) =>
+      String(s || '')
+        .toUpperCase()
+        .replace(/İ/g, 'I')
+        .replace(/İ/g, 'I')
+        .replace(/Ç/g, 'C')
+        .replace(/Ğ/g, 'G')
+        .replace(/Ö/g, 'O')
+        .replace(/Ş/g, 'S')
+        .replace(/Ü/g, 'U')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const formatExcelCellDate = (val: any): string => {
+      if (val === undefined || val === null || val === '') return new Date().toLocaleDateString('tr-TR');
+      if (typeof val === 'number' && val > 20000 && val < 90000) {
+        const utcDays = Math.floor(val - 25569);
+        const dt = new Date(utcDays * 86400 * 1000);
+        if (!isNaN(dt.getTime())) {
+          const d = String(dt.getUTCDate()).padStart(2, '0');
+          const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+          const y = dt.getUTCFullYear();
+          const frac = val - Math.floor(val);
+          if (frac > 0.0001) {
+            const totalMins = Math.round(frac * 24 * 60);
+            const hh = String(Math.floor(totalMins / 60) % 24).padStart(2, '0');
+            const mm = String(totalMins % 60).padStart(2, '0');
+            return `${d}.${m}.${y} ${hh}:${mm}`;
+          }
+          return `${d}.${m}.${y}`;
+        }
+      }
+      return String(val).trim();
+    };
+
+    const parseTransferHistorySheet = (ws: XLSX.WorkSheet): DepoTransaction[] => {
+      unmergeAndFillWorksheet(ws);
+      const tRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (!tRows || tRows.length <= 1) return [];
+
+      let tHeaderIdx = 0;
+      for (let r = 0; r < Math.min(12, tRows.length); r++) {
+        const rowStr = (tRows[r] || []).map(c => normalizeSheetTitle(String(c || ''))).join(' ');
+        if (
+          rowStr.includes('MALZEME') ||
+          rowStr.includes('ISLEM') ||
+          rowStr.includes('TARIH') ||
+          rowStr.includes('PARCA') ||
+          rowStr.includes('P/N') ||
+          rowStr.includes('ADET') ||
+          rowStr.includes('MIKTAR') ||
+          rowStr.includes('SERI')
+        ) {
+          tHeaderIdx = r;
+          break;
+        }
+      }
+
+      const hNorm = (tRows[tHeaderIdx] || []).map(c => normalizeSheetTitle(String(c || '')));
+      const findCol = (preds: ((c: string) => boolean)[]) =>
+        hNorm.findIndex(c => preds.some(fn => fn(c)));
+
+      const itemCol = findCol([c => c.includes('MALZEME') || c.includes('TANIM') || c.includes('DESCRIPTION') || c.includes('URUN')]);
+      const pnCol = findCol([c => c === 'PN' || c === 'P/N' || c.includes('PARCA NO') || c.includes('PART')]);
+      const snCol = findCol([c => c === 'SN' || c === 'S/N' || c.includes('SERI') || c.includes('SERIAL')]);
+      const qtyCol = findCol([c => c === 'ADET' || c === 'MIKTAR' || c.includes('ADET') || c.includes('MIKTAR') || c.includes('QTY')]);
+      const dateCol = findCol([c => c.includes('TARIH') || c.includes('DATE') || c.includes('ZAMAN')]);
+      const typeCol = findCol([c => c.includes('ISLEM TURU') || c.includes('HAREKET') || c === 'ISLEM' || c === 'TUR' || c === 'TIPI']);
+      const woCol = findCol([c => c.includes('IS EMRI') || c.includes('WORK ORDER') || c.includes('CRS') || c.includes('DEFTER')]);
+      const tailCol = findCol([c => c.includes('KUYRUK') || c.includes('TAIL') || c.includes('HAVA ARACI')]);
+      const opCol = findCol([c => c.includes('TESLIM ALAN') || c.includes('TESLIM EDEN') || c.includes('PERSONEL') || c.includes('OPERATOR') || c.includes('TEKNISYEN')]);
+      const recCol = findCol([c => c.includes('KABUL') || c.includes('DEPO SORUMLUSU') || c.includes('ONAY')]);
+      const locCol = findCol([c => c.includes('DEPO YERI') || c.includes('BOLGE') || c.includes('LOKASYON') || c.includes('DEPO') || c.includes('KONUM')]);
+      const noteCol = findCol([c => c.includes('ACIKLAMA') || c.includes('NOT') || c.includes('DETAY')]);
+
+      const parsedTx: DepoTransaction[] = [];
+      const targetSheet = getDepoSheetNameForUnit(unitKey);
+      const batchStamp = Date.now();
+
+      for (let r = tHeaderIdx + 1; r < tRows.length; r++) {
+        const row = tRows[r];
+        if (!row || row.every(cell => cell === undefined || cell === null || String(cell).trim() === '')) continue;
+
+        const rowUpper = row.map(c => normalizeSheetTitle(String(c || ''))).join(' ');
+        if (
+          rowUpper.includes('MALZEME ADI') &&
+          (rowUpper.includes('ISLEM TURU') || rowUpper.includes('TARIH'))
+        ) {
+          continue;
+        }
+
+        const rawItem = String(row[itemCol >= 0 ? itemCol : 0] ?? '').trim();
+        const rawPn = pnCol >= 0 ? String(row[pnCol] ?? '').trim() : '';
+        if (!rawItem && !rawPn) continue;
+        const itemUpper = normalizeSheetTitle(rawItem);
+        if (itemUpper === 'TOPLAM' || itemUpper === 'GENEL TOPLAM' || itemUpper === 'MALZEME ADI') continue;
+
+        const rawQtyStr = String(row[qtyCol >= 0 ? qtyCol : (itemCol === 0 ? 1 : 2)] ?? '1').replace(/[^0-9.,-]/g, '').replace(',', '.');
+        const parsedQty = Number(rawQtyStr);
+        const qty = !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : 1;
+
+        const rawDateVal = dateCol >= 0 ? row[dateCol] : (itemCol === 0 ? row[2] : row[1]);
+        const formattedDate = formatExcelCellDate(rawDateVal);
+
+        const rawType = String(row[typeCol >= 0 ? typeCol : 3] ?? 'TRANSFER').trim() || 'TRANSFER';
+        const rawWo = woCol >= 0 ? String(row[woCol] ?? '-').trim() || '-' : '-';
+        const rawSn = snCol >= 0 ? String(row[snCol] ?? '-').trim() || '-' : String(row[4] ?? '-').trim() || '-';
+        const rawTail = tailCol >= 0 ? String(row[tailCol] ?? '-').trim() || '-' : String(row[5] ?? '-').trim() || '-';
+        const rawOp = opCol >= 0 ? String(row[opCol] ?? '-').trim() || '-' : String(row[6] ?? '-').trim() || '-';
+        const rawRec = recCol >= 0 ? String(row[recCol] ?? '-').trim() || '-' : String(row[7] ?? '-').trim() || '-';
+        const rawLoc = locCol >= 0
+          ? (String(row[locCol] ?? '').trim() || (selectedExcelUploadCategory === 'kimyasal' ? 'KİMYASAL DEPO' : `${unitKey.toUpperCase()} DEPO`))
+          : (selectedExcelUploadCategory === 'kimyasal' ? 'KİMYASAL DEPO' : `${unitKey.toUpperCase()} DEPO`);
+        const rawNotes = noteCol >= 0 ? String(row[noteCol] ?? '').trim() : '';
+
+        parsedTx.push({
+          id: `tx_excel_${unitKey}_${batchStamp}_${r}`,
+          timestamp: formattedDate,
+          date: formattedDate,
+          type: rawType.toUpperCase(),
+          islemTuru: rawType.toUpperCase(),
+          itemName: rawItem || rawPn,
+          name: rawItem || rawPn,
+          pn: rawPn || '-',
+          partNumber: rawPn || '-',
+          sn: rawSn,
+          quantity: qty,
+          adet: qty,
+          workOrderOrCrs: rawWo,
+          tailNo: rawTail,
+          operator: rawOp,
+          receivedBy: rawRec,
+          location: rawLoc,
+          unit: unitKey,
+          category: selectedExcelUploadCategory === 'kimyasal' ? 'kimyasal' : 'sarf',
+          sheetName: targetSheet,
+          notes: rawNotes || `${unitKey.toUpperCase()} Excel Yükleme (TRANSFER GEÇMİŞİ)`
+        } as DepoTransaction);
+      }
+
+      return parsedTx;
+    };
+
+    const transferSheetName = (wb: XLSX.WorkBook) =>
+      wb.SheetNames.find(name => {
+        const n = normalizeSheetTitle(name);
+        return n.includes('TRANSFER GECMIS') || n === 'TRANSFER' || n.includes('HAREKET GECMIS');
+      });
+
+    setExcelUploadProgress({
+      active: true,
+      percent: 8,
+      message: 'Veri Yükleniyor...',
+      subMessage: `"${file.name}" dosyası okunuyor...`
+    });
+    await yieldToUi();
 
     try {
       const arrayBuffer = await file.arrayBuffer();
+      setExcelUploadProgress({
+        active: true,
+        percent: 22,
+        message: 'Veri Yükleniyor...',
+        subMessage: 'Excel çalışma sayfaları çözümleniyor...'
+      });
+      await yieldToUi();
+
       const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
 
       // YAŞAM DESTEK EXCEL YÜKLEME VE SERİ NO ÇÖZÜMLEME MODÜLÜ
@@ -4591,15 +4768,20 @@ const handleDownloadFilteredExcel = () => {
         const canYelegiParsed: any[] = [];
         const spareAirParsed: any[] = [];
         const helmetKitParsed: any[] = [];
+        let parsedTransfers: DepoTransaction[] = [];
 
         workbook.SheetNames.forEach(sName => {
           const ws = workbook.Sheets[sName];
           if (!ws) return;
+          const sUpper = normalizeSheetTitle(sName);
+          if (sUpper.includes('TRANSFER GECMIS') || sUpper.includes('HAREKET GECMIS')) {
+            parsedTransfers = [...parsedTransfers, ...parseTransferHistorySheet(ws)];
+            return;
+          }
           unmergeAndFillWorksheet(ws);
           const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
           if (!rows || rows.length < 1) return;
 
-          const sUpper = sName.toUpperCase().replace(/İ/g, 'I');
           const isCanYelegi = sUpper.includes('CAN YELEG') || sUpper.includes('LIFE VEST') || sUpper.includes('YELEK');
           const isSpareAir = sUpper.includes('SPARE AIR') || sUpper.includes('HEED') || sUpper.includes('YEDEK HAVA');
           const isHelmetKit = sUpper.includes('HELMET') || sUpper.includes('DAVID CLARK') || sUpper.includes('KASK') || sUpper.includes('DOLGU');
@@ -4756,7 +4938,16 @@ const handleDownloadFilteredExcel = () => {
           }
         });
 
-        // Convert array buffer to base64 & upload to Drive
+        const totalYasamRows = canYelegiParsed.length + spareAirParsed.length + helmetKitParsed.length;
+
+        setExcelUploadProgress({
+          active: true,
+          percent: 62,
+          message: 'Veri Yükleniyor...',
+          subMessage: `${totalYasamRows} satır yaşam destek verisi ve ${parsedTransfers.length} satır hareket geçmişi aktarılıyor...`
+        });
+        await yieldToUi();
+
         let binary = '';
         const bytes = new Uint8Array(arrayBuffer);
         for (let i = 0; i < bytes.byteLength; i++) {
@@ -4773,7 +4964,6 @@ const handleDownloadFilteredExcel = () => {
           );
         } catch (e) {}
 
-        // Backend'e aktar ve Google E-Tablo senkronizasyonunu tetikle
         await fetch('/api/yasam-destek/upload-excel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4785,24 +4975,64 @@ const handleDownloadFilteredExcel = () => {
           })
         });
 
+        if (parsedTransfers.length > 0) {
+          setTransactions(prev => [...parsedTransfers, ...prev]);
+          try {
+            await fetch('/api/save-depo-transfers', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                spreadsheetId: '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0',
+                sheetName: getDepoSheetNameForUnit(unitKey),
+                transfers: parsedTransfers
+              })
+            });
+            await fetch('/api/depo-transactions', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ transfers: parsedTransfers })
+            });
+          } catch {}
+        }
+
         await fetchYasamDestekData();
         setCurrentDepoType('yasam_destek');
-        showNotification(`✅ Yaşam Destek Exceli Başarıyla Yüklendi! (Can Yeleği: ${canYelegiParsed.length}, Spare Air: ${spareAirParsed.length}, Helmet Kit: ${helmetKitParsed.length} adet serno ve stok aktarıldı)`);
+        const summaryText = `Başlıklar hariç ${totalYasamRows} satır depo verisi (Can Yeleği: ${canYelegiParsed.length}, Spare Air: ${spareAirParsed.length}, Helmet Kit: ${helmetKitParsed.length}) ve ${parsedTransfers.length} satır hareket / transfer geçmişi başarıyla yüklendi.`;
+        setExcelUploadProgress({
+          active: true,
+          percent: 100,
+          message: 'Yükleme Tamamlandı',
+          subMessage: 'at-802_yasam_destek_ekipmanlari.xlsx',
+          isCompleted: true,
+          summaryText
+        });
+        showNotification(`✅ ${summaryText}`);
         if (fileInputRef.current) fileInputRef.current.value = '';
         return;
       }
 
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
+      const detectedTransferSheetName = transferSheetName(workbook);
+      const primarySheetName =
+        workbook.SheetNames.find(name => name !== detectedTransferSheetName) || workbook.SheetNames[0];
+      const sheet = workbook.Sheets[primarySheetName];
 
       // Birleştirilmiş hücreleri unmerge yap ve değerleri yay
       unmergeAndFillWorksheet(sheet);
 
       const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
       if (!rawRows || rawRows.length < 2) {
+        setExcelUploadProgress({ active: false, percent: 0, message: '' });
         alert("Excel dosyasında veri bulunamadı.");
         return;
       }
+
+      setExcelUploadProgress({
+        active: true,
+        percent: 40,
+        message: 'Veri Yükleniyor...',
+        subMessage: 'Depo stok kalemleri işleniyor...'
+      });
+      await yieldToUi();
 
       // Başlık satırını bul
       let headerRowIdx = 0;
@@ -4885,7 +5115,6 @@ const handleDownloadFilteredExcel = () => {
         if (pnCol < 0) pnCol = 1;
       }
 
-      const unitKey = currentUnit !== 'all' ? currentUnit : 'at802';
       const parsedItems: DepoItem[] = [];
 
       for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
@@ -4929,7 +5158,7 @@ const handleDownloadFilteredExcel = () => {
         const bursaMevcut = Number(row[bursaMevcutCol >= 0 ? bursaMevcutCol : 22]) || 0;
 
         const aciklama = String(row[aciklamaCol >= 0 ? aciklamaCol : 23] !== undefined ? row[aciklamaCol >= 0 ? aciklamaCol : 23] : '-').trim() || '-';
-        const loc = String(row[locCol >= 0 ? locCol : 3] !== undefined ? row[locCol >= 0 ? locCol : 3] : 'KİMYASAL DEPO').trim() || 'KİMYASAL DEPO';
+        const loc = String(row[locCol >= 0 ? locCol : 3] !== undefined ? row[locCol >= 0 ? locCol : 3] : (isKimyasalUpload ? 'KİMYASAL DEPO' : '-')).trim() || (isKimyasalUpload ? 'KİMYASAL DEPO' : '-');
 
         const computedToplam = (toplamStokCol >= 0 && Number(row[toplamStokCol]) > 0)
           ? Number(row[toplamStokCol])
@@ -4978,11 +5207,72 @@ const handleDownloadFilteredExcel = () => {
       if (parsedItems.length > 0) {
         setInventory(prev => {
           const filtered = prev.filter(i => !(i.unit === unitKey && i.category === selectedExcelUploadCategory));
-          const updated = [...parsedItems, ...filtered];
-          // LocalStorage removed
-          return updated;
+          return [...parsedItems, ...filtered];
         });
       }
+
+      // Check for "TRANSFER GEÇMİŞİ" worksheet inside the uploaded workbook
+      let parsedTransfers: DepoTransaction[] = [];
+      if (detectedTransferSheetName && workbook.Sheets[detectedTransferSheetName]) {
+        setExcelUploadProgress({
+          active: true,
+          percent: 58,
+          message: 'Veri Yükleniyor...',
+          subMessage: `"${detectedTransferSheetName}" sayfası (${unitKey.toUpperCase()}) okunuyor...`
+        });
+        await yieldToUi();
+        parsedTransfers = parseTransferHistorySheet(workbook.Sheets[detectedTransferSheetName]);
+      }
+
+      if (parsedTransfers.length > 0) {
+        setExcelUploadProgress({
+          active: true,
+          percent: 72,
+          message: 'Veri Yükleniyor...',
+          subMessage: `${parsedTransfers.length} satır transfer geçmişi ${unitKey.toUpperCase()} deposuna aktarılıyor...`
+        });
+        await yieldToUi();
+
+        setTransactions(prev => {
+          const makeKey = (t: any) =>
+            `${String(t.unit || 'at802').toLowerCase()}_${String(t.itemName || t.name || '').trim().toLowerCase()}_${String(t.date || t.timestamp || '').trim()}_${String(t.islemTuru || t.type || '').trim().toLowerCase()}_${Number(t.quantity || t.adet || 1)}_${String(t.sn || '-').trim().toLowerCase()}`;
+          const existingKeys = new Set(prev.map(makeKey));
+          const uniqueIncoming = parsedTransfers.filter(t => {
+            const k = makeKey(t);
+            if (existingKeys.has(k)) return false;
+            existingKeys.add(k);
+            return true;
+          });
+          return [...uniqueIncoming, ...prev];
+        });
+
+        try {
+          await fetch('/api/save-depo-transfers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              spreadsheetId: '17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0',
+              sheetName: getDepoSheetNameForUnit(unitKey),
+              transfers: parsedTransfers
+            })
+          });
+          await fetch('/api/depo-transactions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transfers: parsedTransfers })
+          });
+        } catch (txErr) {
+          console.warn('Transfer geçmişi aktarım uyarısı:', txErr);
+        }
+      }
+
+      setExcelUploadProgress({
+        active: true,
+        percent: 86,
+        message: 'Veri Yükleniyor...',
+        subMessage: 'Dosya bulut arşivine kaydediliyor...'
+      });
+      await yieldToUi();
 
       // Convert array buffer to base64 & upload to Drive (Mevcut Veri Güncelleme Mantığı)
       let binary = '';
@@ -5005,9 +5295,27 @@ const handleDownloadFilteredExcel = () => {
         console.warn('Drive yükleme uyarısı:', driveErr);
       }
 
-      showNotification(`✅ "${standardFileName}" Google Drive'a kaydedildi ve ${parsedItems.length} kayıt envantere aktarıldı!`);
+      const transferMsg =
+        parsedTransfers.length > 0
+          ? `${parsedTransfers.length} satır hareket / transfer geçmişi`
+          : detectedTransferSheetName
+          ? '0 satır hareket / transfer geçmişi'
+          : '0 satır hareket / transfer geçmişi ("TRANSFER GEÇMİŞİ" sayfası bulunmadı)';
+      const summaryText = `Başlıklar hariç ${parsedItems.length} satır depo verisi ve ${transferMsg} başarıyla ${unitKey.toUpperCase()} deposuna yüklendi.`;
+
+      setExcelUploadProgress({
+        active: true,
+        percent: 100,
+        message: 'Yükleme Tamamlandı',
+        subMessage: standardFileName,
+        isCompleted: true,
+        summaryText
+      });
+
+      showNotification(`✅ ${summaryText}`);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err) {
+      setExcelUploadProgress({ active: false, percent: 0, message: '' });
       alert("Excel yükleme hatası: " + (err as Error).message);
     }
   };
@@ -5384,7 +5692,7 @@ const handleDownloadFilteredExcel = () => {
                 <th style="border:1px solid #64748b; padding:6px; background-color:#e2e8f0;">İŞLEM TÜRÜ</th>
                 <th style="border:1px solid #64748b; padding:6px; background-color:#e2e8f0;">SERİAL NUMBER</th>
                 <th style="border:1px solid #64748b; padding:6px; background-color:#e2e8f0;">KUYRUK KODU</th>
-                <th style="border:1px solid #64748b; padding:6px; background-color:#fef08a;">İŞ EMRİ / CRS NO / DEFTER SIRA NO</th>
+                <th style="border:1px solid #64748b; padding:6px; background-color:#fef08a;">İŞ EMRİ / CRS NO / DEFTER SIRA NO *</th>
                 <th style="border:1px solid #64748b; padding:6px; background-color:#e2e8f0;">TESLİM ALAN</th>
                 <th style="border:1px solid #64748b; padding:6px; background-color:#e2e8f0;">KABUL YAPAN</th>
                 <th style="border:1px solid #64748b; padding:6px; background-color:#fef08a;">DEPO YERİ</th>
@@ -5667,7 +5975,7 @@ const handleDownloadFilteredExcel = () => {
   // E-Tabloya Kaydet
   const handleSyncWithGoogleSheet = async () => {
     setIsSyncingCloud(true);
-    showNotification("Merkezi Google E-Tabloya veriler aktarılıyor...");
+    showNotification("Merkezi Canlı E-Tabloya veriler aktarılıyor...");
     try {
       const at802Items = inventory.filter(i => i.unit === 'at802' || i.unit === 'all');
       await fetch(GOOGLE_SCRIPT_URL, {
@@ -5842,7 +6150,7 @@ const handleDownloadFilteredExcel = () => {
       input !== '1234' &&
       input !== '8902'
     ) {
-      setRowEditPasswordError('Hatalı Şifre! Düzenleme yetkisi için lütfen birim şifresini veya yetkili şifreyi (1839) giriniz.');
+      setRowEditPasswordError('Hatalı Şifre! Düzenleme yetkisi için lütfen birim şifresini veya yetkili şifresini giriniz.');
       return;
     }
 
@@ -5929,7 +6237,7 @@ const handleDownloadFilteredExcel = () => {
       });
       const data = await res.json();
       if (data && data.status === 'success') {
-        showNotification('🗑️ Hareket kaydı sistemden ve Google Sheets tablosundan kalıcı olarak silindi.');
+        showNotification('🗑️ Hareket kaydı sistemden ve canlı çizelge tablosundan kalıcı olarak silindi.');
       }
     } catch (err) {
       console.warn("Delete tx sync warn:", err);
@@ -6449,7 +6757,7 @@ const handleDownloadFilteredExcel = () => {
                     <th className="py-1 px-2 border-r border-slate-300 min-w-[130px] leading-tight">İŞLEM TÜRÜ</th>
                     <th className="py-1 px-2 border-r border-slate-300 font-mono min-w-[120px] leading-tight">SERİAL NUMBER</th>
                     <th className="py-1 px-2 border-r border-slate-300 min-w-[130px] leading-tight">KUYRUK KODU</th>
-                    <th className="py-1 px-2 border-r border-slate-300 min-w-[150px] leading-tight bg-amber-100 text-amber-950 font-black">İŞ EMRİ / CRS NO / DEFTER SIRA NO</th>
+                    <th className="py-1 px-2 border-r border-slate-300 min-w-[150px] leading-tight bg-amber-100 text-amber-950 font-black">İŞ EMRİ / CRS NO / DEFTER SIRA NO *</th>
                     <th className="py-1 px-2 border-r border-slate-300 min-w-[110px] leading-tight">TESLİM ALAN</th>
                     <th className="py-1 px-2 border-r border-slate-300 min-w-[110px] leading-tight">KABUL YAPAN</th>
                     <th className="py-1 px-2 border-r border-slate-300 min-w-[130px] leading-tight">DEPO YERİ</th>
@@ -7113,7 +7421,7 @@ type="button"
 onClick={handleFetchLiveAndSearch}
 disabled={isLoadingDrive}
 className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-black transition shadow-sm cursor-pointer active:scale-95"
-title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri tazeler ve getirir"
+title="Bulut arşivindeki Excel/veritabanından anında canlı verileri tazeler ve getirir"
 >
 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDrive ? 'animate-spin' : ''}`} />
 <span>{isLoadingDrive ? 'Canlı Veriler Yükleniyor...' : 'ARA / CANLI VERİLERİ GETİR'}</span>
@@ -8094,14 +8402,14 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                           <span className="text-[10px] text-indigo-700 font-sans cursor-pointer font-bold hover:underline" onClick={() => {
                             const now = new Date();
                             const pad = (n: number) => String(n).padStart(2, '0');
-                            setMovementDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`);
+                            setMovementDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()}`);
                           }}>📅 Bugün</span>
                         </label>
                         <input 
                           type="text" 
                           value={movementDate}
                           onChange={(e) => setMovementDate(e.target.value)}
-                          placeholder="GG.AA.YYYY SS:DK"
+                          placeholder="GG.AA.YYYY"
                           className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl font-mono text-slate-700 text-xs font-bold" 
                         />
                       </div>
@@ -8368,14 +8676,14 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                           <span className="text-[10px] text-emerald-700 font-sans cursor-pointer font-bold hover:underline" onClick={() => {
                             const now = new Date();
                             const pad = (n: number) => String(n).padStart(2, '0');
-                            setMovementDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`);
+                            setMovementDate(`${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()}`);
                           }}>📅 Bugün</span>
                         </label>
                         <input 
                           type="text" 
                           value={movementDate}
                           onChange={(e) => setMovementDate(e.target.value)}
-                          placeholder="GG.AA.YYYY SS:DK"
+                          placeholder="GG.AA.YYYY"
                           className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-700 text-xs font-bold" 
                         />
                       </div>
@@ -8457,15 +8765,28 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                     {/* İŞ EMRİ / CRS VEYA DEFTER SIRA NUMARASI (Zorunlu Çıkış Kutucuğu) */}
                     {movementDirection === 'cikis' && (
                       <div className="p-3 bg-rose-50/90 border-2 border-rose-300 rounded-2xl shadow-sm">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-black text-rose-950 uppercase font-mono tracking-wide flex items-center gap-1.5">
+                        <div className="flex items-center justify-between mb-1.5 gap-2">
+                          <label className="text-xs font-black text-rose-950 uppercase font-mono tracking-wide flex items-center gap-1.5 flex-wrap">
                             <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse"></span>
-                            İŞ EMRİ (WORK ORDER), CRS NO VEYA DEFTER SIRA NO <span className="text-rose-600 font-extrabold">* (ZORUNLU)</span>
+                            <span>İŞ EMRİ (WORK ORDER), CRS NO VEYA DEFTER SIRA NO <span className="text-rose-600 font-extrabold">* (ZORUNLU)</span></span>
+                            <button
+                              type="button"
+                              onClick={() => setShowWorkOrderInfo(v => !v)}
+                              className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-rose-200 hover:bg-rose-300 text-rose-900 border border-rose-400 cursor-pointer transition-colors shrink-0"
+                              title="Bilgi"
+                            >
+                              <Info className="w-3 h-3" />
+                            </button>
                           </label>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-200 text-rose-900 uppercase tracking-wider">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-200 text-rose-900 uppercase tracking-wider shrink-0">
                             Bu 3'ünden Biri Şart
                           </span>
                         </div>
+                        {showWorkOrderInfo && (
+                          <div className="mb-2 p-2.5 rounded-xl bg-amber-50 border border-amber-300 text-[11px] text-amber-950 leading-relaxed font-sans font-medium">
+                            Hava aracı eğer ki yıllık bakımda ise <strong>İş Emri veya CRS No</strong>; periyodik başka bir bakım ise <strong>CRS No</strong>; eğer ki hava aracı hat bakım sürecinde (uçuş öncesi veya sonrası bakımda) tespit edilen arıza sonucu ise o arızanın gerçekleştiği uçuşun <strong>Defter Sıra No</strong> yazılır.
+                          </div>
+                        )}
                         <input 
                           type="text"
                           value={movementWorkOrderOrCrs}
@@ -8622,6 +8943,76 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* EXCEL YÜKLEME FLU ARKA PLAN & YÜZDELİK İLERLEME MODALI */}
+      {excelUploadProgress.active && (
+        <div className="fixed inset-0 z-[10600] bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full border border-slate-200 p-6 text-center space-y-4">
+            <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
+              <svg className="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="42"
+                  fill="none"
+                  stroke="#e2e8f0"
+                  strokeWidth="8"
+                />
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="42"
+                  fill="none"
+                  stroke={excelUploadProgress.isCompleted ? '#16a34a' : '#0b3d1d'}
+                  strokeWidth="8"
+                  strokeLinecap="round"
+                  strokeDasharray={263.89}
+                  strokeDashoffset={263.89 - (263.89 * Math.min(100, Math.max(0, excelUploadProgress.percent))) / 100}
+                  className="transition-all duration-300"
+                />
+              </svg>
+              <span className="absolute text-xl font-black font-mono text-slate-900">
+                %{excelUploadProgress.percent}
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-base font-black text-slate-900 uppercase tracking-wide">
+                {excelUploadProgress.message}
+              </h3>
+              {excelUploadProgress.subMessage && (
+                <p className="text-xs font-medium text-slate-500">
+                  {excelUploadProgress.subMessage}
+                </p>
+              )}
+            </div>
+
+            <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+              <div
+                className={`h-full transition-all duration-300 ${
+                  excelUploadProgress.isCompleted ? 'bg-emerald-600' : 'bg-[#0b3d1d]'
+                }`}
+                style={{ width: `${Math.min(100, Math.max(0, excelUploadProgress.percent))}%` }}
+              />
+            </div>
+
+            {excelUploadProgress.isCompleted && excelUploadProgress.summaryText && (
+              <div className="space-y-3 pt-1">
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-bold text-emerald-900 leading-relaxed">
+                  ✅ {excelUploadProgress.summaryText}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExcelUploadProgress({ active: false, percent: 0, message: '' })}
+                  className="w-full py-2.5 bg-[#0b3d1d] hover:bg-[#072612] text-white rounded-xl text-xs font-black uppercase tracking-wider transition cursor-pointer shadow-sm"
+                >
+                  Tamam
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -9755,6 +10146,7 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                             <th className="py-2 px-3 border-r border-slate-200 text-left">İŞLEM TÜRÜ</th>
                             <th className="py-2 px-2 border-r border-slate-200">ADET</th>
                             <th className="py-2 px-2 border-r border-slate-200">TARİH</th>
+                            <th className="py-2 px-2 border-r border-slate-200 bg-amber-50 text-amber-950 font-black">İŞ EMRİ / CRS NO / DEFTER SIRA NO *</th>
                             <th className="py-2 px-3 border-r border-slate-200 text-left">DEPO / BÖLGE</th>
                             <th className="py-2 px-3 border-r border-slate-200 text-left">TESLİM ALAN / KABUL</th>
                             <th className="py-2 px-2">KUYRUK KODU</th>
@@ -9765,6 +10157,7 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                             const typeStr = (t.type || t.islemTuru || '').toUpperCase();
                             const isTransfer = typeStr.includes('TRANSFER') || typeStr.includes('FİLO DIŞI') || typeStr.includes('FILO DISI');
                             const isGiris = !isTransfer && (typeStr.includes('GİREN') || typeStr.includes('GİRİŞ') || typeStr.includes('GELEN') || typeStr.includes('YENİ ÜRÜN'));
+                            const woVal = (t as any).workOrderOrCrs || t.workOrderNo || (t as any).crsNo || '-';
 
                             return (
                               <tr key={i} className="hover:bg-slate-50">
@@ -9786,6 +10179,7 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                                   {t.quantity || t.adet || 1}
                                 </td>
                                 <td className="py-2 px-2 font-mono text-slate-600 border-r border-slate-200">{t.date || t.timestamp || '-'}</td>
+                                <td className="py-2 px-2 font-mono font-bold text-amber-950 bg-amber-50/40 border-r border-slate-200">{woVal}</td>
                                 <td className="py-2 px-3 font-semibold text-slate-800 border-r border-slate-200 text-left font-sans">{t.location || t.depoYeri || '-'}</td>
                                 <td className="py-2 px-3 text-slate-700 border-r border-slate-200 text-left font-sans">
                                   <div className="truncate max-w-[120px]" title={`Alan: ${t.operator || '-'} | Kabul: ${t.receivedBy || '-'}`}>
@@ -10182,12 +10576,12 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
               </div>
 
               <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-[11px] text-rose-300 leading-relaxed">
-                ⚠️ Bu hareket kaydı veritabanından ve Google Drive Excel sayfasındaki satırdan kalıcı olarak silinecektir. İşlemi onaylamak için yetkili şifresini giriniz.
+                ⚠️ Bu hareket kaydı veritabanından ve bulut Excel sayfasındaki satırdan kalıcı olarak silinecektir. İşlemi onaylamak için yetkili şifresini giriniz.
               </div>
 
               <div>
                 <label className="block text-[10px] font-black text-slate-300 uppercase font-mono mb-1">
-                  YETKİLİ ŞİFRESİ (1839 veya Birim Şifresi) *
+                  YETKİLİ ŞİFRESİ (veya Birim Şifresi) *
                 </label>
                 <input
                   type="password"
@@ -10387,7 +10781,7 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
 
               <div className="pt-2">
                 <label className="block text-[10px] font-black text-emerald-400 uppercase font-mono mb-1">
-                  YETKİLİ ŞİFRESİ (1839 veya Birim Şifresi) *
+                  YETKİLİ ŞİFRESİ (veya Birim Şifresi) *
                 </label>
                 <input
                   type="password"
@@ -10691,7 +11085,7 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
             </div>
             <form onSubmit={handleOnayPasswordSubmit} className="p-5 space-y-4 text-xs font-sans">
               <p className="text-[11px] text-slate-300">
-                Depo çıkış taleplerini görüntülemek ve onaylamak için yetkili şifresini (1839) giriniz.
+                Depo çıkış taleplerini görüntülemek ve onaylamak için yetkili şifresini giriniz.
               </p>
               <div>
                 <input
@@ -11424,7 +11818,7 @@ title="Google Drive üzerindeki Excel/veritabanından anında canlı verileri ta
                           <th className="py-2 px-2 border-r border-slate-200 text-center">MİKTAR</th>
                           <th className="py-2 px-2 border-r border-slate-200 text-center">TARİH</th>
                           <th className="py-2 px-2 border-r border-slate-200 text-center">KUYRUK</th>
-                          <th className="py-2 px-2 border-r border-slate-200 text-center bg-amber-50 text-amber-950 font-black">İŞ EMRİ / CRS</th>
+                          <th className="py-2 px-2 border-r border-slate-200 text-center bg-amber-50 text-amber-950 font-black">İŞ EMRİ / CRS NO / DEFTER SIRA NO *</th>
                           <th className="py-2 px-2 border-r border-slate-200">TESLİM ALAN</th>
                         </tr>
                       </thead>

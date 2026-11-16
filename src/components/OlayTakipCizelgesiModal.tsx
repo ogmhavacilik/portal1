@@ -245,7 +245,7 @@ const DEFAULT_AT802_SHEETS: OlayTakipSheet[] = [
   {
     id: 'sheet_at802_sari_ikaz',
     sheetName: 'Sarı İkaz Ng Takip',
-    title: 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI GOOGLE E-TABLO & EXCEL)',
+    title: 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI ÇİZELGE & EXCEL)',
     columns: [
       '#',
       'Kuyruk No',
@@ -556,7 +556,7 @@ export const deduplicateSheets = (sheets: OlayTakipSheet[]): OlayTakipSheet[] =>
           ...sheet,
           id: 'sheet_at802_sari_ikaz',
           sheetName: 'Sarı İkaz Ng Takip',
-          title: sheet.title || 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI GOOGLE E-TABLO & EXCEL)'
+          title: sheet.title || 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI E-TABLO & EXCEL)'
         });
       }
       // Drop any subsequent yellow warning sheet! Only 1 sheet allowed!
@@ -787,40 +787,88 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
   // Prompt state for "PDF Yüklendi mi?" with checkbox & EVET button (matches Personel Eğitim workflow)
   const [promptRowKey, setPromptRowKey] = useState<string | null>(null);
   const [isPdfConfirmedChecked, setIsPdfConfirmedChecked] = useState<boolean>(true);
+  const [pendingZipConfirmRowIndex, setPendingZipConfirmRowIndex] = useState<number | null>(null);
+
+  const buildRowLinkSignature = (sheetColumns: string[], row: string[], rowIndex: number): string => {
+    const cleanCols = sheetColumns || [];
+    const primaryVals = cleanCols
+      .map((c, idx) => (/belge|d[oö]k[uü]man|baglanti|link|ek dosya/i.test(normalizeTurkish(c)) ? '' : String(row[idx] || '').trim()))
+      .filter(Boolean)
+      .slice(0, 4)
+      .join('|');
+    return primaryVals || `row_${rowIndex}`;
+  };
 
   const handleOlayBelgeEkleClick = (originalIndex: number) => {
+    setPendingZipConfirmRowIndex(originalIndex);
+  };
+
+  const confirmZipNoticeAndOpenUpload = () => {
+    if (pendingZipConfirmRowIndex === null) return;
+    const originalIndex = pendingZipConfirmRowIndex;
+    setPendingZipConfirmRowIndex(null);
     window.open('https://bulut.ogm.gov.tr/OLAYBELGE', '_blank');
     setPromptRowKey(`${selectedUnit}_${activeSheetIndex}_${originalIndex}`);
     setIsPdfConfirmedChecked(true);
-    showNotification('📄 Olay Belge yükleme sayfası yeni sekmede açıldı (https://bulut.ogm.gov.tr/OLAYBELGE). Lütfen yükleme onayını veriniz.', 'info');
+    showNotification('📄 Olay Belge yükleme sayfası yeni sekmede açıldı (https://bulut.ogm.gov.tr/OLAYBELGE). Yükledikten sonra EVET butonuna basınız.', 'info');
   };
 
-  const handleConfirmOlayPdfUpload = (originalIndex: number) => {
-    const sheets = allUnitsData[selectedUnit] || [];
-    const curSheet = sheets[activeSheetIndex];
-    if (!curSheet) return;
+  const handleConfirmOlayPdfUpload = async (originalIndex: number) => {
+    const rawSheets = [...(allUnitsData[selectedUnit] || [])];
+    const activeDisplayedSheet = currentSheet;
+    let targetSheetIdx = rawSheets.findIndex(
+      (s) =>
+        (activeDisplayedSheet?.id && s.id === activeDisplayedSheet.id) ||
+        (activeDisplayedSheet?.sheetName &&
+          normalizeTurkish(s.sheetName) === normalizeTurkish(activeDisplayedSheet.sheetName))
+    );
+    if (targetSheetIdx < 0) targetSheetIdx = activeSheetIndex;
 
-    const colIdx = curSheet.columns.findIndex(c => /belge|d[oö]k[uü]man/i.test(c));
-    const finalColIdx = colIdx >= 0 ? colIdx : curSheet.columns.length - 1;
-    const linkIdx = curSheet.columns.findIndex(c => isLinkColumnName(c));
+    const curSheetRaw = rawSheets[targetSheetIdx] || activeDisplayedSheet;
+    if (!curSheetRaw) return;
 
-    const updatedRows = [...curSheet.rows];
+    const { sheet: ensuredSheet, colIndex: ensuredLinkIdx } = ensureEkDosyaLinkColumn(curSheetRaw);
+    const colIdx = ensuredSheet.columns.findIndex(c => /belge|d[oö]k[uü]man/i.test(c));
+    const finalColIdx = colIdx >= 0 ? colIdx : Math.max(0, ensuredLinkIdx - 1);
+
+    const updatedRows = [...ensuredSheet.rows];
     const targetRow = [...(updatedRows[originalIndex] || [])];
-    targetRow[finalColIdx] = 'https://bulut.ogm.gov.tr/OLAYBELGEGOR';
-    if (linkIdx >= 0) {
-      targetRow[linkIdx] = 'https://bulut.ogm.gov.tr/OLAYBELGEGOR';
-    }
+    while (targetRow.length < ensuredSheet.columns.length) targetRow.push('');
+    const targetUrl = 'https://bulut.ogm.gov.tr/OLAYBELGEGOR';
+    targetRow[finalColIdx] = targetUrl;
+    targetRow[ensuredLinkIdx] = targetUrl;
     updatedRows[originalIndex] = targetRow;
 
-    const updatedSheet = { ...curSheet, rows: updatedRows };
-    const updatedList = [...sheets];
-    updatedList[activeSheetIndex] = updatedSheet;
+    const updatedSheet = { ...ensuredSheet, rows: updatedRows };
+    if (targetSheetIdx >= 0 && targetSheetIdx < rawSheets.length) {
+      rawSheets[targetSheetIdx] = updatedSheet;
+    } else {
+      rawSheets.push(updatedSheet);
+    }
 
-    const full = { ...allUnitsData, [selectedUnit]: updatedList };
-    persistAndSyncToDrive(full);
-
+    const full = { ...allUnitsData, [selectedUnit]: rawSheets };
     setPromptRowKey(null);
-    showNotification('✅ Belge onaylandı. Artık "BELGE GÖR" ile görüntülenebilir.', 'success');
+    showNotification('💾 Ek dosya bağlantı linki Excel ve sisteme kaydediliyor...', 'info');
+
+    // Çift katmanlı kalıcılık: hem sunucu bağlantı yedeğine hem Bulut Excel dosyasına yaz
+    const sig = buildRowLinkSignature(updatedSheet.columns, targetRow, originalIndex);
+    fetch('/api/olay-takip-links', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        unitKey: selectedUnit,
+        sheetName: updatedSheet.sheetName,
+        rowSignature: sig,
+        url: targetUrl
+      })
+    }).catch(() => {});
+
+    const excelOk = await persistAndSyncToDrive(full);
+    if (excelOk) {
+      showNotification('✅ Belge onaylandı ve ek dosya bağlantı linki Excel dosyasına kaydedildi.', 'success');
+    } else {
+      showNotification('✅ Belge onaylandı ve ek dosya bağlantı linki kaydedildi. Artık "BELGE GÖR" kullanılabilir.', 'success');
+    }
   };
 
   // Load Hangar PDF documents from IndexedDB and sync from Google Drive
@@ -896,32 +944,96 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
     syncYellowNgToOlayTakipSheet();
   }, [isOpen, selectedUnit]);
 
-  // Google E-Tablodan Sarı İkaz Ng Takip satırlarını canlı çekip AT-802 sayfasına ekle/güncelle
+  // Canlı E-Tablodan Sarı İkaz Ng Takip satırlarını canlı çekip AT-802 sayfasına ekle/güncelle
   const syncYellowNgToOlayTakipSheet = async (notify = false) => {
     try {
-      const res = await fetch(`/api/yellow-ng?_t=${Date.now()}`, {
-        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
-      });
+      const [res, linksRes] = await Promise.all([
+        fetch(`/api/yellow-ng?_t=${Date.now()}`, {
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+        }),
+        fetch('/api/olay-takip-links').catch(() => null)
+      ]);
+      let savedLinks: Record<string, string> = {};
+      if (linksRes && linksRes.ok) {
+        try {
+          const lj = await linksRes.json();
+          if (lj && lj.links && typeof lj.links === 'object') savedLinks = lj.links;
+        } catch {}
+      }
+
       if (res.ok) {
         const json = await res.json();
         if (json && json.status === 'success' && Array.isArray(json.data?.records)) {
           const records = json.data.records;
-          const rows: string[][] = records.map((r: any, idx: number) => [
-            String(r['#'] || r.id || (idx + 1)),
-            String(r.tailCode || r['Kuyruk No'] || ''),
-            String(r.motorSn || r['Motor S/N'] || ''),
-            String(r.olayNo || r['Olay Numarası'] || ''),
-            String(r.zamanAraligi || r['Zaman Aralığı (TIME)'] || ''),
-            String(r.olayTepesi || r['Olay Tepesi'] || ''),
-            String(r.satirAraligi || r['Satır Aralığı'] || ''),
-            String(r.sure || r['Süre'] || ''),
-            String(r.sistemKayitTarihi || r['Sisteme Kayıt Tarihi'] || ''),
-            String(r.fileName || r['Dosya Adı'] || ''),
-            '',
-            ''
-          ]);
+          const yellowCols = [
+            '#',
+            'Kuyruk No',
+            'Motor S/N',
+            'Olay Numarası',
+            'Zaman Aralığı (TIME)',
+            'Olay Tepesi',
+            'Satır Aralığı',
+            'Süre',
+            'Sisteme Kayıt Tarihi',
+            'Dosya Adı',
+            'Belge / Döküman',
+            'EK DOSYA BAĞLANTI LİNKİ'
+          ];
+
           setAllUnitsData(prev => {
             const at802Sheets = prev['at802'] ? [...prev['at802']] : [...DEFAULT_AT802_SHEETS];
+            const prevYellowSheet = at802Sheets.find(s => {
+              const norm = normalizeTurkish(s.sheetName || '');
+              return norm.includes('sari ikaz') || norm.includes('sarı ikaz') || s.id?.includes('sari_ikaz');
+            });
+
+            const existingLinkByOlayKey = new Map<string, string>();
+            if (prevYellowSheet && Array.isArray(prevYellowSheet.rows)) {
+              const prevLinkCol = prevYellowSheet.columns.findIndex(c => isLinkColumnName(c));
+              const prevBelgeCol = prevYellowSheet.columns.findIndex(c => /belge|d[oö]k[uü]man/i.test(c));
+              prevYellowSheet.rows.forEach((pr, pIdx) => {
+                const lnk = (prevLinkCol >= 0 ? String(pr[prevLinkCol] || '').trim() : '') ||
+                            (prevBelgeCol >= 0 && isValidUrlOrWebLink(String(pr[prevBelgeCol] || '')) ? String(pr[prevBelgeCol] || '').trim() : '');
+                if (lnk) {
+                  const keySig = `${String(pr[1] || '').trim()}|${String(pr[3] || '').trim()}|${String(pr[9] || '').trim()}`;
+                  existingLinkByOlayKey.set(keySig, lnk);
+                  existingLinkByOlayKey.set(`idx_${pIdx}`, lnk);
+                }
+              });
+            }
+
+            const rows: string[][] = records.map((r: any, idx: number) => {
+              const tailCode = String(r.tailCode || r['Kuyruk No'] || '');
+              const olayNo = String(r.olayNo || r['Olay Numarası'] || '');
+              const fileName = String(r.fileName || r['Dosya Adı'] || '');
+              const baseRow = [
+                String(r['#'] || r.id || (idx + 1)),
+                tailCode,
+                String(r.motorSn || r['Motor S/N'] || ''),
+                olayNo,
+                String(r.zamanAraligi || r['Zaman Aralığı (TIME)'] || ''),
+                String(r.olayTepesi || r['Olay Tepesi'] || ''),
+                String(r.satirAraligi || r['Satır Aralığı'] || ''),
+                String(r.sure || r['Süre'] || ''),
+                String(r.sistemKayitTarihi || r['Sisteme Kayıt Tarihi'] || ''),
+                fileName,
+                '',
+                ''
+              ];
+              const keySig = `${tailCode.trim()}|${olayNo.trim()}|${fileName.trim()}`;
+              const sig = buildRowLinkSignature(yellowCols, baseRow, idx);
+              const matchedUrl =
+                existingLinkByOlayKey.get(keySig) ||
+                savedLinks[`at802::Sarı İkaz Ng Takip::${sig}`] ||
+                existingLinkByOlayKey.get(`idx_${idx}`) ||
+                '';
+              if (matchedUrl) {
+                baseRow[10] = matchedUrl;
+                baseRow[11] = matchedUrl;
+              }
+              return baseRow;
+            });
+
             // Remove ANY existing yellow warning sheets to prevent duplicates
             const nonYellowSheets = at802Sheets.filter(s => {
               const norm = normalizeTurkish(s.sheetName || '');
@@ -934,21 +1046,8 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
             const singleYellowSheet: OlayTakipSheet = {
               id: 'sheet_at802_sari_ikaz',
               sheetName: 'Sarı İkaz Ng Takip',
-              title: 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI GOOGLE E-TABLO & EXCEL)',
-              columns: [
-                '#',
-                'Kuyruk No',
-                'Motor S/N',
-                'Olay Numarası',
-                'Zaman Aralığı (TIME)',
-                'Olay Tepesi',
-                'Satır Aralığı',
-                'Süre',
-                'Sisteme Kayıt Tarihi',
-                'Dosya Adı',
-                'Belge / Döküman',
-                'EK DOSYA BAĞLANTI LİNKİ'
-              ],
+              title: 'AT-802 SARI İKAZ NG TAKİP ADEDİ VE LİSTESİ (CANLI E-TABLO & EXCEL)',
+              columns: yellowCols,
               rows
             };
 
@@ -959,7 +1058,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
             return fullUpdated;
           });
           if (notify) {
-            showNotification(`Google E-Tablo ve Excel'den ${records.length} adet Ng sarı ikaz satırı başarıyla güncellendi!`, 'success');
+            showNotification(`Canlı E-Tablo ve Excel'den ${records.length} adet Ng sarı ikaz satırı başarıyla güncellendi!`, 'success');
           }
         }
       }
@@ -1005,7 +1104,18 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
         fileName.replace(/_/g, '-')
       ];
 
-      const data = await remoteFetchExcelFromDrive(fileName, candidateNames, DRIVE_FOLDER_ID);
+      const [data, linksRes] = await Promise.all([
+        remoteFetchExcelFromDrive(fileName, candidateNames, DRIVE_FOLDER_ID),
+        fetch('/api/olay-takip-links').catch(() => null)
+      ]);
+
+      let savedLinks: Record<string, string> = {};
+      if (linksRes && linksRes.ok) {
+        try {
+          const lj = await linksRes.json();
+          if (lj && lj.links && typeof lj.links === 'object') savedLinks = lj.links;
+        } catch {}
+      }
 
       if (data && data.status === 'success' && data.base64) {
         const binaryString = atob(data.base64);
@@ -1024,22 +1134,41 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
 
             const merged = [...currentList];
             parsedSheets.forEach(pSheet => {
-              const stripped = stripEkDosyaLinkColumn(pSheet);
-              const pNorm = normalizeTurkish(stripped.sheetName);
+              const { sheet: ensuredParsed, colIndex: linkColIdx } = ensureEkDosyaLinkColumn(pSheet);
+              const belgeCol = ensuredParsed.columns.findIndex(c => /belge|d[oö]k[uü]man/i.test(c));
+              // Apply any saved server backup links if the row's Excel link cell is empty
+              ensuredParsed.rows = ensuredParsed.rows.map((r, rIdx) => {
+                const rowCopy = [...r];
+                while (rowCopy.length < ensuredParsed.columns.length) rowCopy.push('');
+                const curLink = String(rowCopy[linkColIdx] || '').trim();
+                if (!curLink) {
+                  const sig = buildRowLinkSignature(ensuredParsed.columns, rowCopy, rIdx);
+                  const backupUrl = savedLinks[`${unitKey}::${ensuredParsed.sheetName}::${sig}`];
+                  if (backupUrl) {
+                    rowCopy[linkColIdx] = backupUrl;
+                    if (belgeCol >= 0 && !String(rowCopy[belgeCol] || '').trim()) {
+                      rowCopy[belgeCol] = backupUrl;
+                    }
+                  }
+                }
+                return rowCopy;
+              });
+
+              const pNorm = normalizeTurkish(ensuredParsed.sheetName);
               const matchIdx = merged.findIndex(s => {
                 const sNorm = normalizeTurkish(s.sheetName);
-                return sNorm === pNorm || (s.id && stripped.id && s.id === stripped.id);
+                return sNorm === pNorm || (s.id && ensuredParsed.id && s.id === ensuredParsed.id);
               });
               if (matchIdx >= 0) {
                 merged[matchIdx] = {
                   ...merged[matchIdx],
-                  sheetName: stripped.sheetName,
-                  title: stripped.title || merged[matchIdx].title,
-                  columns: stripped.columns && stripped.columns.length > 0 ? stripped.columns : merged[matchIdx].columns,
-                  rows: stripped.rows && stripped.rows.length > 0 ? stripped.rows : merged[matchIdx].rows
+                  sheetName: ensuredParsed.sheetName,
+                  title: ensuredParsed.title || merged[matchIdx].title,
+                  columns: ensuredParsed.columns && ensuredParsed.columns.length > 0 ? ensuredParsed.columns : merged[matchIdx].columns,
+                  rows: ensuredParsed.rows && ensuredParsed.rows.length > 0 ? ensuredParsed.rows : merged[matchIdx].rows
                 };
               } else {
-                merged.push(stripped);
+                merged.push(ensuredParsed);
               }
             });
 
@@ -1163,24 +1292,23 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
   };
 
   /**
-    * Save updated rows in background to Google Drive as an updated XLSX.
+    * Save updated rows to Bulut Excel (returns true when upload completes).
     */
-  const persistAndSyncToDrive = (updated: Record<string, OlayTakipSheet[]>) => {
-    // Keep sheets clean without extra link column
+  const persistAndSyncToDrive = async (updated: Record<string, OlayTakipSheet[]>): Promise<boolean> => {
     const standardized = ensureLinkColumnInAllUnitsData(updated);
     setAllUnitsData(standardized);
     safeSetJSON(STORAGE_KEY, standardized);
 
     try {
       const sheets = standardized[selectedUnit];
-      if (!sheets || sheets.length === 0) return;
+      if (!sheets || sheets.length === 0) return false;
 
       const wb = XLSX.utils.book_new();
       sheets.forEach((sheet) => {
-        const cleanSheet = stripEkDosyaLinkColumn(sheet);
+        const cleanSheet = ensureEkDosyaLinkColumn(sheet).sheet;
         const aoa: any[][] = [];
         aoa.push(cleanSheet.columns);
-        
+
         cleanSheet.rows.forEach((r) => {
           const rowCopy = [...r];
           while (rowCopy.length < cleanSheet.columns.length) rowCopy.push('');
@@ -1209,11 +1337,10 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
       const base64Data = btoa(binary);
       const standardFileName = getOlayTakipDriveFileName(selectedUnit);
 
-      remoteUploadExcelToDrive(standardFileName, base64Data, `olay_takip_${selectedUnit}`, DRIVE_FOLDER_ID).catch(err => {
-        console.warn('Background sync warning:', err);
-      });
+      return await remoteUploadExcelToDrive(standardFileName, base64Data, `olay_takip_${selectedUnit}`, DRIVE_FOLDER_ID);
     } catch (e) {
       console.warn('Background XLSX generation warning:', e);
+      return false;
     }
   };
 
@@ -2321,13 +2448,13 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                     <div className="flex items-center gap-2">
                       <span className="inline-flex items-center gap-1.5 text-[10px] bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-full border border-emerald-300 font-mono font-bold">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        Canlı Google E-Tablo & olay_takip_cizelgesi_at-802.xlsx
+                        Canlı E-Tablo &amp; olay_takip_cizelgesi_at-802.xlsx
                       </span>
                       <button
                         type="button"
                         onClick={() => syncYellowNgToOlayTakipSheet(true)}
                         className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer transition-colors"
-                        title="Google E-Tablodan Canlı Yenile"
+                        title="Canlı E-Tablodan Yenile"
                       >
                         <RotateCw className="w-3 h-3 text-emerald-800" />
                         <span>Canlı Yenile</span>
@@ -2337,7 +2464,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                         target="_blank"
                         rel="noreferrer"
                         className="flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] shadow-xs cursor-pointer transition-colors"
-                        title="Google E-Tabloyu Yeni Sekmede Aç"
+                        title="Canlı E-Tabloyu Yeni Sekmede Aç"
                       >
                         <ExternalLink className="w-3 h-3" />
                         <span>E-Tabloyu Aç ↗</span>
@@ -2354,7 +2481,22 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
               </div>
 
               {/* Responsive Scrollable Table */}
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 overflow-auto relative">
+                {isSyncing && (
+                  <div className="absolute inset-0 z-20 bg-white/75 backdrop-blur-md flex flex-col items-center justify-center gap-3 p-6">
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-50 border-2 border-emerald-500/40 flex items-center justify-center shadow-lg">
+                      <RotateCw className="w-7 h-7 text-emerald-700 animate-spin" />
+                    </div>
+                    <div className="text-center">
+                      <div className="text-sm font-black text-slate-800 tracking-wide uppercase">
+                        Veriler yükleniyor...
+                      </div>
+                      <div className="text-[11px] text-slate-500 font-medium mt-0.5">
+                        Bulut &amp; Canlı Çizelge verileri getiriliyor, lütfen bekleyiniz.
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <table className="w-full text-left border-collapse bg-white">
                   <thead className="sticky top-0 z-10 bg-slate-100/95 backdrop-blur-xs border-b border-slate-200 shadow-xs">
                     <tr>
@@ -2431,6 +2573,11 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {processedRows.length === 0 ? (
+                      isSyncing ? (
+                        <tr>
+                          <td colSpan={currentSheet.columns.length + (isCol0Sira ? 1 : 2)} className="px-6 py-24 text-center" />
+                        </tr>
+                      ) : (
                       <tr>
                         <td
                           colSpan={currentSheet.columns.length + (isCol0Sira ? 1 : 2)}
@@ -2461,6 +2608,7 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                           </div>
                         </td>
                       </tr>
+                      )
                     ) : (
                       processedRows.map((row, rIdx) => {
                         const originalIndex = currentSheet.rows.indexOf(row);
@@ -2525,11 +2673,15 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                               if (isDocCol) {
                                 const rawBelge = String(cellValue || '').trim();
                                 const rawLink = (ekDosyaLinkColIndex >= 0 ? String(row[ekDosyaLinkColIndex] || '') : '').trim();
-                                const isRowPdfConfirmed = rawBelge.includes('OLAYBELGEGOR') ||
-                                  rawBelge.includes('BELGE GÖR') ||
-                                  rawLink.includes('OLAYBELGEGOR') ||
-                                  rawLink.includes('BELGE GÖR') ||
-                                  rowDocs.length > 0;
+                                const hasAssignedEkLink = Boolean(
+                                  rawLink &&
+                                  rawLink !== '-' &&
+                                  rawLink !== '—' &&
+                                  !/^\+?\s*link\s*ekle$/i.test(rawLink)
+                                );
+                                const isRowPdfConfirmed = ekDosyaLinkColIndex >= 0
+                                  ? hasAssignedEkLink
+                                  : (rawBelge.includes('OLAYBELGEGOR') || rawBelge.includes('BELGE GÖR') || rowDocs.length > 0);
 
                                 const rowKey = `${selectedUnit}_${activeSheetIndex}_${originalIndex}`;
                                 const isPromptActive = promptRowKey === rowKey;
@@ -3733,6 +3885,53 @@ export const OlayTakipCizelgesiModal: React.FC<OlayTakipCizelgesiModalProps> = (
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ZIP FORMAT WARNING CONFIRMATION MODAL BEFORE UPLOAD */}
+      {pendingZipConfirmRowIndex !== null && (
+        <div className="fixed inset-0 z-[10006] flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white text-slate-800 w-full max-w-md rounded-2xl shadow-2xl border-2 border-amber-400 overflow-hidden">
+            <div className="px-5 py-4 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs shrink-0">
+                  <Archive className="w-5 h-5" />
+                </div>
+                <h4 className="text-sm font-black text-amber-950 uppercase tracking-wide">
+                  BELGE YÜKLEME UYARISI
+                </h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingZipConfirmRowIndex(null)}
+                className="text-slate-400 hover:text-slate-700 font-bold text-sm p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-300 text-amber-950 text-xs sm:text-[13px] font-extrabold leading-relaxed text-center uppercase tracking-wide">
+                LÜTFEN OLAYIN BELGELERİNİ TEK BİR ZİP DOSYASI İÇİNDE VE ZİP DOSYASI ADINI (PİLOT ADI-OLAY TARİHİ-HAVA ARACI KUYRUK NUMARASI) FORMATINDA EKLEYİNİZ.
+              </div>
+              <div className="flex items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPendingZipConfirmRowIndex(null)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                >
+                  İptal
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmZipNoticeAndOpenUpload}
+                  className="flex-1 py-2.5 px-5 rounded-xl bg-[#0b3d1d] hover:bg-[#072612] text-white font-black text-xs uppercase tracking-wider cursor-pointer shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>OKUDUM, ANLADIM</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

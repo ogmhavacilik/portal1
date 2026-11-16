@@ -571,9 +571,9 @@ export async function syncHangarPdfDocsFromDrive(googleScriptUrl?: string): Prom
         fileName: parsedFileName || rawName,
         fileData: '', // will be loaded on demand via proxy / getPdfBase64
         docType: 'Bakım / Kontrol Evrakı',
-        firma: 'OGM / Google Drive',
+        firma: 'OGM / Bulut Arşivi',
         uploadDate: file.lastUpdated || new Date().toLocaleDateString('tr-TR'),
-        fileSize: file.size || 'Google Drive PDF',
+        fileSize: file.size || 'Bulut Arşivi PDF',
         uploadedAt: file.lastUpdated || '',
         driveFileId: file.id,
         driveUrl: file.viewUrl || `https://drive.google.com/file/d/${file.id}/preview`

@@ -353,7 +353,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
 
   const pullFromDrive = async () => {
     setIsLoadingDrive(true);
-    showNotification("Google Drive'dan kara araçları güncel verileri alınıyor...");
+    showNotification("Bulut Arşivinden kara araçları güncel verileri alınıyor...");
     try {
       const url = `${GOOGLE_SCRIPT_URL}?action=read_excel&folderId=${DRIVE_FOLDER_ID}&fileName=${encodeURIComponent('hangar_yer_destek_kara_araclari.xlsx')}&t=${Date.now()}`;
       const res = await fetch(url);
@@ -717,7 +717,7 @@ export function KaraAraclariApp({ isEmbedded }: { isEmbedded?: boolean }) {
                   onClick={pullFromDrive}
                   disabled={isLoadingDrive}
                   className="px-4 py-3 bg-[#0b3d1d] hover:bg-[#072612] disabled:opacity-50 active:scale-95 text-white font-black font-mono text-xs rounded-2xl flex items-center gap-2 transition-all cursor-pointer shadow-lg border border-emerald-600 shrink-0"
-                  title="Google Drive üzerindeki Excel dosyasından anında canlı verileri tazeler"
+                  title="Bulut Arşivi üzerindeki Excel dosyasından anında canlı verileri tazeler"
                 >
                   <RefreshCw className={`w-4 h-4 text-emerald-300 ${isLoadingDrive ? 'animate-spin' : ''}`} />
                   <span>{isLoadingDrive ? 'DRİVE BAĞLANIYOR...' : 'DRİVE İLE SENKRONİZE ET'}</span>

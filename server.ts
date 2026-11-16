@@ -31,7 +31,7 @@ async function startServer() {
   // API Route: Taskline EBYS Proxy
   app.get("/api/taskline-ebys", async (req, res) => {
     const scriptUrl = req.query.scriptUrl as string;
-    const targetUrl = scriptUrl || "https://script.google.com/macros/s/AKfycbyZweW0GUB9DbW1CCEaEoAJjq4iYBMannyYGnp2Szr9YcxsrQi6oUGh035tncgmXwoKTw/exec";
+    const targetUrl = scriptUrl || "https://script.google.com/macros/s/AKfycbxuivDglCOCOl32raOdzjV_gjDk6k7i70pepzYp8ak9tcc1D8t5L9gJNI2YxYXZi7wa/exec";
     const finalUrl = targetUrl.replace(/\/dev$/, "/exec");
     const spreadsheetId = (req.query.spreadsheetId as string) || "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
     
@@ -1654,7 +1654,7 @@ async function startServer() {
           return tSheet === sName || tSheet === targetSheetName || !t.sheetName || tSheet.includes("AT-802");
         });
 
-        const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
+        const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO / DEFTER SIRA NO", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
         const rows = [
           headers,
           ...sheetSpecificTransfers.map((t: any) => {
@@ -2145,7 +2145,7 @@ async function startServer() {
         return tSheet === targetSheet;
       });
 
-      const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
+      const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO / DEFTER SIRA NO", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
       const rows = [
         headers,
         ...sheetSpecificTransfers.map((t: any) => [
@@ -2296,6 +2296,603 @@ async function startServer() {
       return res.json({ status: "success", items: visibleItems });
     } catch (err: any) {
       return res.json({ status: "success", items: [] });
+    }
+  });
+
+  // ─── ONAY BEKLEYEN TALEPLER (10. TALEP OLUŞTUR MODÜLÜ) ───
+  const ONAY_BEKLEYEN_TALEPLER_FILE = path.resolve(process.cwd(), "data/onay_bekleyen_talepler.json");
+  const OLAY_TAKIP_LINKS_FILE = path.resolve(process.cwd(), "data/olay_takip_links.json");
+
+  const readOnayBekleyenTalepler = (): any[] => {
+    try {
+      if (fs.existsSync(ONAY_BEKLEYEN_TALEPLER_FILE)) {
+        const raw = fs.readFileSync(ONAY_BEKLEYEN_TALEPLER_FILE, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+      const pubFallback = path.resolve(process.cwd(), "public/onay_bekleyen_talepler.json");
+      if (fs.existsSync(pubFallback)) {
+        const raw = fs.readFileSync(pubFallback, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  };
+
+  const writeOnayBekleyenTalepler = (items: any[]) => {
+    try {
+      const dir = path.dirname(ONAY_BEKLEYEN_TALEPLER_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(ONAY_BEKLEYEN_TALEPLER_FILE, JSON.stringify(items, null, 2), "utf-8");
+      const pubPath = path.resolve(process.cwd(), "public/onay_bekleyen_talepler.json");
+      fs.writeFileSync(pubPath, JSON.stringify(items, null, 2), "utf-8");
+    } catch (err) {
+      console.warn("Error writing onay_bekleyen_talepler:", err);
+    }
+  };
+
+  const OGM_WET_SIGNED_UPLOAD_URL = "https://bulut.ogm.gov.tr/SARTNAMELER";
+  const OGM_WET_SIGNED_VIEW_URL = "https://bulut.ogm.gov.tr/app/tr-TR/Klasor/Paylas/OGMDrive/4324a6cd-7f8a-4c6b-86bc-92e0990d26c3";
+
+  async function syncOnayBekleyenTaleplerToSheet(items: any[]) {
+    try {
+      const spreadsheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+      const sheetName = "ONAY BEKLEYEN TALEPLER";
+      const headers = [
+        "TALEP NO (YYYY-SIRA NO)",
+        "TALEP TÜRÜ",
+        "FORM BAŞLIĞI",
+        "BİRİM / HAVA ARACI",
+        "KUYRUK / TESCİL NO",
+        "MALZEME / İŞLEM ÖZETİ",
+        "TALEP EDEN PERSONEL",
+        "TARİH",
+        "DURUM",
+        "ISLAK İMZALI BELGE",
+        "BELGE YÜKLEME TARİHİ",
+        "BELGE LİNKİ"
+      ];
+      const rows = [
+        headers,
+        ...items.map((t: any) => [
+          t.talepNo || t.id || "",
+          t.formTypeLabel || t.formType || "",
+          t.formTitle || "",
+          t.unitLabel || t.unit || "-",
+          t.tailNo || "-",
+          t.summary || "-",
+          t.requestedBy || "-",
+          t.date || "",
+          t.status || "ONAY BEKLİYOR",
+          t.wetSignedDocUploaded ? "BELGE GÖR (YÜKLENDİ)" : "BELGE YÜKLE",
+          t.wetSignedUploadedAt || t.wetSignedClickedAt || "-",
+          t.wetSignedDocUploaded ? (t.wetSignedDocUrl || OGM_WET_SIGNED_VIEW_URL) : OGM_WET_SIGNED_UPLOAD_URL
+        ])
+      ];
+
+      // Arşiv / Onaylanmış & Belgeli Kayıtlar için "ARŞİV ŞARTNAMELER" tablosu
+      const archiveHeaders = [
+        "TALEP NO",
+        "TALEP TÜRÜ",
+        "BİRİM / HAVA ARACI",
+        "KUYRUK / TESCİL NO",
+        "ÖZET",
+        "TALEP EDEN PERSONEL",
+        "TALEP TARİHİ",
+        "DURUM",
+        "BELGE STATÜSÜ",
+        "BELGE YÜKLEME TARİHİ (GG.AA.YYYY SS:DD)",
+        "BELGE LİNKİ"
+      ];
+      const archiveItems = items.filter((t: any) => {
+        const st = normalizeStatusText(t.status);
+        return st === "ONAYLANDI" || Boolean(t.wetSignedDocUploaded) || Boolean(t.wetSignedClickedAt);
+      });
+      const archiveRows = [
+        archiveHeaders,
+        ...archiveItems.map((t: any) => [
+          t.talepNo || t.id || "",
+          t.formTypeLabel || t.formType || "",
+          t.unitLabel || t.unit || "-",
+          t.tailNo || "-",
+          t.summary || "-",
+          t.requestedBy || "-",
+          t.date || "",
+          t.status || "ONAY BEKLİYOR",
+          t.wetSignedDocUploaded ? "BELGE GÖR" : "BELGE YÜKLE",
+          t.wetSignedUploadedAt || t.wetSignedClickedAt || "-",
+          t.wetSignedDocUploaded ? (t.wetSignedDocUrl || OGM_WET_SIGNED_VIEW_URL) : OGM_WET_SIGNED_UPLOAD_URL
+        ])
+      ];
+
+      const scriptUrls = [
+        "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+      ];
+      for (const sUrl of scriptUrls) {
+        try {
+          const r1 = await fetch(sUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "updateSheet",
+              sheetName,
+              spreadsheetId,
+              data: rows
+            }),
+            signal: AbortSignal.timeout(10000)
+          });
+          if (r1.ok) {
+            if (archiveRows.length > 1) {
+              fetch(sUrl, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({
+                  action: "updateSheet",
+                  sheetName: "ARŞİV ŞARTNAMELER",
+                  spreadsheetId,
+                  data: archiveRows
+                }),
+                signal: AbortSignal.timeout(10000)
+              }).catch(() => {});
+            }
+            break;
+          }
+        } catch {}
+      }
+    } catch (err) {
+      console.warn("syncOnayBekleyenTaleplerToSheet error:", err);
+    }
+  }
+
+  const normalizeStatusText = (val: any): string =>
+    String(val || "")
+      .trim()
+      .toLocaleUpperCase("tr-TR")
+      .replace(/\s+/g, " ");
+
+  const normalizeMatchCode = (val: any): string =>
+    String(val || "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+
+  app.get("/api/onay-bekleyen-talepler", async (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      const current = readOnayBekleyenTalepler();
+      const spreadsheetId = "17ScGYYx0erzDwHDk6RGiHOdJATdfmmExXFBY39dXpF0";
+      const sheetName = "ONAY BEKLEYEN TALEPLER";
+      const scriptUrls = [
+        "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
+        "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
+      ];
+
+      let sheetRows: any[] | null = null;
+      for (const sUrl of scriptUrls) {
+        try {
+          const qs = new URLSearchParams({
+            action: "readSheet",
+            sheetName,
+            spreadsheetId,
+            t: String(Date.now())
+          });
+          const resp = await fetch(`${sUrl}?${qs.toString()}`, {
+            signal: AbortSignal.timeout(7000)
+          });
+          if (resp.ok) {
+            const json = await resp.json().catch(() => null);
+            if (json && json.status === "success" && Array.isArray(json.data)) {
+              sheetRows = json.data;
+              break;
+            }
+          }
+        } catch {}
+      }
+
+      if (sheetRows && sheetRows.length > 0) {
+        const merged = [...current];
+        let changed = false;
+
+        for (const sRow of sheetRows) {
+          const sTalepNo = String(sRow["TALEP NO (YYYY-SIRA NO)"] || sRow["TALEP NO"] || "").trim();
+          const sFormTypeLabel = String(sRow["TALEP TÜRÜ"] || "").trim();
+          const sFormTitle = String(sRow["FORM BAŞLIĞI"] || "").trim();
+          const sUnitLabel = String(sRow["BİRİM / HAVA ARACI"] || "").trim();
+          const sTailNo = String(sRow["KUYRUK / TESCİL NO"] || "").trim();
+          const sSummary = String(sRow["MALZEME / İŞLEM ÖZETİ"] || "").trim();
+          const sRequestedBy = String(sRow["TALEP EDEN PERSONEL"] || "").trim();
+          const sDate = String(sRow["TARİH"] || "").trim();
+          const sStatus = String(sRow["DURUM"] || "").trim();
+          const sBelgeDurum = String(sRow["ISLAK İMZALI BELGE"] || "").trim();
+          const sBelgeTarih = String(sRow["BELGE YÜKLEME TARİHİ"] || "").trim();
+          const sBelgeLink = String(sRow["BELGE LİNKİ"] || "").trim();
+          const sheetHasWetDoc = sBelgeDurum.toUpperCase().includes("BELGE GÖR") || sBelgeDurum.toUpperCase().includes("YÜKLENDİ");
+          if (!sTalepNo && !sSummary) continue;
+
+          // 1. Exact Talep No match
+          let localIdx = merged.findIndex(
+            (it: any) => String(it?.talepNo || it?.id || "").trim() === sTalepNo && sTalepNo !== ""
+          );
+
+          // 2. Fallback signature match in case user replaced TALEP NO in Google Sheet with EBYS/Taskline code
+          if (localIdx === -1 && sRequestedBy && sDate) {
+            localIdx = merged.findIndex(
+              (it: any) =>
+                String(it?.requestedBy || "").trim() === sRequestedBy &&
+                String(it?.date || "").trim() === sDate &&
+                String(it?.formTitle || "").trim() === sFormTitle &&
+                String(it?.summary || "").trim() === sSummary
+            );
+          }
+
+          if (localIdx !== -1) {
+            const existing = merged[localIdx];
+            const nextStatus = sStatus || existing.status || "ONAY BEKLİYOR";
+            const nextTalepNo = sTalepNo || existing.talepNo;
+            const nextWetUploaded = Boolean(existing.wetSignedDocUploaded) || sheetHasWetDoc;
+            const nextWetUploadedAt = existing.wetSignedUploadedAt || (sheetHasWetDoc && sBelgeTarih && sBelgeTarih !== "-" ? sBelgeTarih : "");
+            const nextWetUrl = existing.wetSignedDocUrl || (sheetHasWetDoc ? (sBelgeLink || OGM_WET_SIGNED_VIEW_URL) : "");
+            if (
+              normalizeStatusText(existing.status) !== normalizeStatusText(nextStatus) ||
+              String(existing.talepNo || "") !== nextTalepNo ||
+              Boolean(existing.wetSignedDocUploaded) !== nextWetUploaded ||
+              String(existing.wetSignedUploadedAt || "") !== String(nextWetUploadedAt || "")
+            ) {
+              merged[localIdx] = {
+                ...existing,
+                talepNo: nextTalepNo,
+                status: nextStatus,
+                wetSignedDocUploaded: nextWetUploaded,
+                wetSignedUploadedAt: nextWetUploadedAt || undefined,
+                wetSignedDocUrl: nextWetUrl || undefined
+              };
+              changed = true;
+            }
+          } else if (sTalepNo) {
+            merged.push({
+              id: sTalepNo,
+              talepNo: sTalepNo,
+              formType: "parca_talep",
+              formTypeLabel: sFormTypeLabel || "TALEP",
+              formTitle: sFormTitle || "TALEP FORMU",
+              unit: "genel",
+              unitLabel: sUnitLabel || "-",
+              tailNo: sTailNo || "-",
+              summary: sSummary || "-",
+              requestedBy: sRequestedBy || "-",
+              date: sDate || "",
+              timestamp: new Date().toISOString(),
+              status: sStatus || "ONAY BEKLİYOR",
+              wetSignedDocUploaded: sheetHasWetDoc,
+              wetSignedUploadedAt: sBelgeTarih && sBelgeTarih !== "-" ? sBelgeTarih : undefined,
+              wetSignedDocUrl: sheetHasWetDoc ? (sBelgeLink || OGM_WET_SIGNED_VIEW_URL) : undefined,
+              formData: null,
+              items: []
+            });
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          writeOnayBekleyenTalepler(merged);
+        }
+        return res.json({ status: "success", items: merged });
+      }
+
+      return res.json({ status: "success", items: current });
+    } catch {
+      return res.json({ status: "success", items: readOnayBekleyenTalepler() });
+    }
+  });
+
+  app.get("/api/taskline-flow", async (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      const rawTalepNo = String(req.query?.talepNo || req.query?.code || "").trim();
+      if (!rawTalepNo) {
+        return res.status(400).json({ status: "error", message: "Talep No parametresi gerekli." });
+      }
+
+      const tasklineScriptUrl =
+        "https://script.google.com/macros/s/AKfycbxuivDglCOCOl32raOdzjV_gjDk6k7i70pepzYp8ak9tcc1D8t5L9gJNI2YxYXZi7wa/exec";
+      const tasklineSpreadsheetId = "1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ";
+
+      const extractDemandsArray = (payload: any): any[] => {
+        if (!payload) return [];
+        if (Array.isArray(payload)) return payload;
+        if (Array.isArray(payload.data)) return payload.data;
+        if (Array.isArray(payload.demands)) return payload.demands;
+        const combined: any[] = [];
+        if (Array.isArray(payload.active)) combined.push(...payload.active);
+        if (Array.isArray(payload.completed)) combined.push(...payload.completed);
+        if (Array.isArray(payload.islemdeki)) combined.push(...payload.islemdeki);
+        if (Array.isArray(payload.tamamlanan)) combined.push(...payload.tamamlanan);
+        return combined;
+      };
+
+      let demandList: any[] = [];
+      let lastStatus = 0;
+
+      // 1. Primary POST getDemands
+      try {
+        const resp = await fetch(tasklineScriptUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            action: "getDemands",
+            spreadsheetId: tasklineSpreadsheetId
+          }),
+          signal: AbortSignal.timeout(15000)
+        });
+        lastStatus = resp.status;
+        if (resp.ok) {
+          const text = await resp.text();
+          if (!text.trim().startsWith("<!DOCTYPE") && !text.trim().startsWith("<html")) {
+            const json = JSON.parse(text);
+            demandList = extractDemandsArray(json);
+          }
+        }
+      } catch {}
+
+      // 2. Fallback GET if POST yielded empty or failed
+      if (demandList.length === 0) {
+        const getUrls = [
+          `${tasklineScriptUrl}?action=getDemands&spreadsheetId=${encodeURIComponent(tasklineSpreadsheetId)}&t=${Date.now()}`,
+          `${tasklineScriptUrl}?spreadsheetId=${encodeURIComponent(tasklineSpreadsheetId)}&t=${Date.now()}`
+        ];
+        for (const gUrl of getUrls) {
+          try {
+            const gResp = await fetch(gUrl, { signal: AbortSignal.timeout(12000) });
+            lastStatus = gResp.status || lastStatus;
+            if (gResp.ok) {
+              const text = await gResp.text();
+              if (!text.trim().startsWith("<!DOCTYPE") && !text.trim().startsWith("<html")) {
+                const json = JSON.parse(text);
+                const list = extractDemandsArray(json);
+                if (list.length > 0) {
+                  demandList = list;
+                  break;
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+
+      if (demandList.length === 0 && lastStatus >= 500) {
+        return res.status(502).json({ status: "error", message: "Taskline online sistemine ulaşılamadı." });
+      }
+
+      const getEbysField = (d: any): string =>
+        String(
+          d?.ebysNumber ??
+          d?.["EBYS Numarası"] ??
+          d?.["EBYS NUMARASI"] ??
+          d?.["ebysNo"] ??
+          d?.["H"] ??
+          ""
+        ).trim();
+
+      const getProgressField = (d: any): any =>
+        d?.progressHistory ??
+        d?.["Akış Geçmişi (JSON)"] ??
+        d?.["Akış Geçmişi"] ??
+        d?.["AKIŞ GEÇMİŞİ"] ??
+        d?.["K"];
+
+      const qRawLower = rawTalepNo.toLowerCase();
+      const qNorm = normalizeMatchCode(rawTalepNo);
+
+      // Search H column (ebysNumber) across both "İşlemdeki Talepler" and "Tamamlanan Talepler"
+      let matched = demandList.find((d: any) => {
+        const ebysStr = getEbysField(d);
+        if (!ebysStr) return false;
+        if (ebysStr.toLowerCase() === qRawLower) return true;
+        if (qNorm && normalizeMatchCode(ebysStr) === qNorm) return true;
+        const tokens = ebysStr
+          .split(/[\s,;\/|]+/)
+          .map(t => normalizeMatchCode(t))
+          .filter(Boolean);
+        return qNorm ? tokens.includes(qNorm) : false;
+      });
+
+      if (!matched && qNorm.length >= 4) {
+        matched = demandList.find((d: any) => {
+          const ebysNorm = normalizeMatchCode(getEbysField(d));
+          return ebysNorm && (ebysNorm.includes(qNorm) || qNorm.includes(ebysNorm));
+        });
+      }
+
+      if (!matched) {
+        return res.json({
+          status: "success",
+          matched: false,
+          talepNo: rawTalepNo,
+          totalScanned: demandList.length,
+          history: []
+        });
+      }
+
+      let rawHistory: any[] = [];
+      const rawProgressVal = getProgressField(matched);
+      if (Array.isArray(rawProgressVal)) {
+        rawHistory = rawProgressVal;
+      } else if (typeof rawProgressVal === "string" && rawProgressVal.trim()) {
+        try {
+          const parsed = JSON.parse(rawProgressVal);
+          if (Array.isArray(parsed)) rawHistory = parsed;
+        } catch {}
+      }
+
+      const history = rawHistory
+        .filter((h: any) => h && (h.description || h.date))
+        .map((h: any) => ({
+          date: String(h.date || "").trim(),
+          description: String(h.description || "").trim(),
+          isSupportNote: Boolean(h.isSupportNote),
+          isKalanIsler: Boolean(h.isKalanIsler)
+        }))
+        .sort((a, b) => {
+          const ta = a.date ? Date.parse(a.date) : 0;
+          const tb = b.date ? Date.parse(b.date) : 0;
+          if (!isNaN(ta) && !isNaN(tb)) return ta - tb;
+          return 0;
+        });
+
+      return res.json({
+        status: "success",
+        matched: true,
+        talepNo: rawTalepNo,
+        totalScanned: demandList.length,
+        demand: {
+          id: String(matched.id ?? matched["ID"] ?? ""),
+          title: String(matched.title ?? matched["Başlık"] ?? ""),
+          description: String(matched.description ?? matched["Açıklama"] ?? ""),
+          type: String(matched.type ?? matched["Talep Türü"] ?? ""),
+          requestingUnit: String(matched.requestingUnit ?? matched["Talep Eden Birim"] ?? ""),
+          priority: String(matched.priority ?? matched["Öncelik"] ?? ""),
+          status: String(matched.status ?? matched["Durum"] ?? ""),
+          ebysNumber: getEbysField(matched),
+          ebysDate: String(matched.ebysDate ?? matched["EBYS Tarihi"] ?? ""),
+          createdAt: String(matched.createdAt ?? matched["Oluşturma Tarihi"] ?? "")
+        },
+        history
+      });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Taskline akış geçmişi okunamadı." });
+    }
+  });
+
+  app.post("/api/onay-bekleyen-talepler", async (req, res) => {
+    try {
+      const current = readOnayBekleyenTalepler();
+      const year = String(new Date().getFullYear());
+      let maxSeq = 0;
+      for (const it of current) {
+        const noStr = String(it?.talepNo || it?.id || "");
+        const m = noStr.match(new RegExp(`^${year}-(\\d+)$`));
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (!isNaN(n) && n > maxSeq) maxSeq = n;
+        }
+      }
+      const nextSeq = String(maxSeq + 1).padStart(4, "0");
+      const talepNo = `${year}-${nextSeq}`;
+
+      const body = req.body || {};
+      const newEntry = {
+        id: talepNo,
+        talepNo,
+        formType: String(body.formType || ""),
+        formTypeLabel: String(body.formTypeLabel || body.formType || ""),
+        formTitle: String(body.formTitle || ""),
+        unit: String(body.unit || "-"),
+        unitLabel: String(body.unitLabel || body.unit || "-"),
+        tailNo: String(body.tailNo || "-"),
+        summary: String(body.summary || "-"),
+        requestedBy: String(body.requestedBy || "Personel"),
+        date: String(body.date || new Date().toLocaleDateString("tr-TR")),
+        timestamp: new Date().toISOString(),
+        status: "ONAY BEKLİYOR",
+        formData: body.formData || null,
+        items: Array.isArray(body.items) ? body.items : []
+      };
+
+      const updated = [newEntry, ...current];
+      writeOnayBekleyenTalepler(updated);
+      syncOnayBekleyenTaleplerToSheet(updated).catch(() => {});
+
+      return res.json({
+        status: "success",
+        talepNo,
+        request: newEntry,
+        message: `Talebiniz sisteme işlendi (Talep No: ${talepNo}).`
+      });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Talep kaydedilemedi" });
+    }
+  });
+
+  app.post("/api/onay-bekleyen-talepler/durum", async (req, res) => {
+    try {
+      const { id, talepNo, status } = req.body || {};
+      const key = String(talepNo || id || "").trim();
+      const current = readOnayBekleyenTalepler();
+      const updated = current.map((it: any) =>
+        String(it.talepNo || it.id) === key ? { ...it, status: String(status || "ONAY BEKLİYOR") } : it
+      );
+      writeOnayBekleyenTalepler(updated);
+      syncOnayBekleyenTaleplerToSheet(updated).catch(() => {});
+      return res.json({ status: "success", items: updated });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Güncelleme hatası" });
+    }
+  });
+
+  app.post("/api/onay-bekleyen-talepler/belge", async (req, res) => {
+    try {
+      const { id, talepNo, wetSignedDocUploaded, wetSignedUploadedAt, wetSignedClickedAt, wetSignedDocUrl } = req.body || {};
+      const key = String(talepNo || id || "").trim();
+      if (!key) {
+        return res.status(400).json({ status: "error", message: "Talep No gerekli." });
+      }
+      const current = readOnayBekleyenTalepler();
+      let found = false;
+      const updated = current.map((it: any) => {
+        if (String(it.talepNo || it.id).trim() !== key) return it;
+        found = true;
+        return {
+          ...it,
+          wetSignedDocUploaded:
+            typeof wetSignedDocUploaded === "boolean" ? wetSignedDocUploaded : Boolean(it.wetSignedDocUploaded),
+          wetSignedClickedAt: wetSignedClickedAt ? String(wetSignedClickedAt) : it.wetSignedClickedAt,
+          wetSignedUploadedAt: wetSignedUploadedAt ? String(wetSignedUploadedAt) : it.wetSignedUploadedAt,
+          wetSignedDocUrl:
+            wetSignedDocUrl ? String(wetSignedDocUrl) : (it.wetSignedDocUrl || OGM_WET_SIGNED_VIEW_URL)
+        };
+      });
+      if (found) {
+        writeOnayBekleyenTalepler(updated);
+        syncOnayBekleyenTaleplerToSheet(updated).catch(() => {});
+      }
+      return res.json({ status: "success", items: updated });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Belge kaydı güncellenemedi." });
+    }
+  });
+
+  // ─── OLAY TAKİP BELGE LİNKİ YEDEKLEME (EXCEL İLE ÇİFT KATMANLI KAYIT) ───
+  app.get("/api/olay-takip-links", (_req, res) => {
+    try {
+      if (fs.existsSync(OLAY_TAKIP_LINKS_FILE)) {
+        const raw = fs.readFileSync(OLAY_TAKIP_LINKS_FILE, "utf-8");
+        return res.json({ status: "success", links: JSON.parse(raw) || {} });
+      }
+    } catch {}
+    return res.json({ status: "success", links: {} });
+  });
+
+  app.post("/api/olay-takip-links", (req, res) => {
+    try {
+      const { unitKey, sheetName, rowSignature, url } = req.body || {};
+      if (!rowSignature) return res.json({ status: "ok" });
+      let current: Record<string, string> = {};
+      if (fs.existsSync(OLAY_TAKIP_LINKS_FILE)) {
+        try {
+          current = JSON.parse(fs.readFileSync(OLAY_TAKIP_LINKS_FILE, "utf-8")) || {};
+        } catch {}
+      }
+      const key = `${unitKey || 'at802'}::${sheetName || 'sheet'}::${rowSignature}`;
+      if (url) current[key] = String(url);
+      else delete current[key];
+      const dir = path.dirname(OLAY_TAKIP_LINKS_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(OLAY_TAKIP_LINKS_FILE, JSON.stringify(current, null, 2), "utf-8");
+      return res.json({ status: "success", links: current });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message });
     }
   });
 
@@ -2755,7 +3352,7 @@ async function startServer() {
       try {
         const xlsx = await import("xlsx");
         const wb = xlsx.utils.book_new();
-        const headerRow = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO", "AÇIKLAMA / NOTLAR", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
+        const headerRow = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO / DEFTER SIRA NO", "AÇIKLAMA / NOTLAR", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
 
         const unitSheetConfigs = [
           { name: "DEPO HAREKET GEÇMİŞİ-AT-802", unit: "at802" },
@@ -4824,7 +5421,7 @@ async function startServer() {
       }
 
       const targetSheet = sheetName || "DEPO HAREKET GEÇMİŞİ-AT-802";
-      const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
+      const headers = ["MALZEME ADI", "ADET", "TARİH", "İŞLEM TÜRÜ", "İŞ EMRİ / CRS NO / DEFTER SIRA NO", "SERİAL NUMBER", "KUYRUK KODU", "TESLİM ALAN", "KABUL YAPAN", "DEPO YERİ", "SAYFA ADI"];
       
       // CRITICAL BUG FIX: Filter by targetSheet specifically, so we don't wipe/mix other tabs!
       const sheetSpecificTransfers = updatedList.filter((t: any) => {
@@ -4842,6 +5439,7 @@ async function startServer() {
             String(t.quantity !== undefined ? t.quantity : (t.adet || 1)),
             t.date || t.timestamp || "",
             String(t.islemTuru || t.type || "TRANSFER").toUpperCase(),
+            t.workOrderOrCrs || t.workOrderNo || t.crsNo || "-",
             t.sn || t.serialNumber || "-",
             t.tailNo || t.kuyrukKodu || t.kuyrukNo || "-",
             t.operator || t.teslimAlan || "-",
@@ -4944,8 +5542,8 @@ async function startServer() {
   let excelDriveListCache: { timestamp: number; data: any[] } = { timestamp: 0, data: [] };
 
   const KNOWN_DRIVE_EXCEL_FILES: Record<string, string> = {
-    "hava_araçları_yer_destek_at-802.xlsx": "1PY6ZHqBS5iELDHBZX-wUdOeyUNkqbSf3",
-    "hava_araclari_yer_destek_at-802.xlsx": "1PY6ZHqBS5iELDHBZX-wUdOeyUNkqbSf3",
+    "hava_araçları_yer_destek_at-802.xlsx": "1CA2kJJsb5MqM0dP2eKeVovRbnl6oTiBD",
+    "hava_araclari_yer_destek_at-802.xlsx": "1CA2kJJsb5MqM0dP2eKeVovRbnl6oTiBD",
     "at-802_sarf_ve_parca_deposu.xlsx": "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7",
     "at802_sarf_ve_parca_deposu.xlsx": "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7",
     "at-802_sarf_depo.xlsx": "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7",
@@ -4982,11 +5580,16 @@ async function startServer() {
     "hangar_kimyasal_deposu.xlsx": "1_NO_EXISTING_ID_YET",
     "hava_araçları_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
     "hava_araclari_yer_destek_t-70_bumbi_backet.xlsx": "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q",
+    "hava_araçları_yer_destek_t-70_helitak.xlsx": "",
+    "hava_araclari_yer_destek_t-70_helitak.xlsx": "",
     "hangar_depo_hareket_gecmisi.xlsx": "1RXIhJps-PxUQAkTlLDyvcDWnpUbg2KzG",
     "olay_takip_cizelgesi_at-802.xlsx": "1S-ktkzrs7p5CIcwUihuQsJDecmLpXmpp",
     "personel_egitim_listesi.xlsx": "18ead-oLB8a99T1jmPOPME3Hul8iBrh7Q",
     "personel_egitim_listesi_at-802.xlsx": "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7",
-    "personel_egitim_cizelgesi.xlsx": "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7"
+    "personel_egitim_cizelgesi.xlsx": "1Y8iD4b4qTcFMLb4Ey7NA3Diq-V0L_IW7",
+    "kara_araçları_takip.xlsx": "1QrOKOWYwHAeVI4ap46ViFg8t5Akt00n6",
+    "kara_araclari_takip.xlsx": "1QrOKOWYwHAeVI4ap46ViFg8t5Akt00n6",
+    "kara_araclari_servis_cizelgesi.xlsx": "1QrOKOWYwHAeVI4ap46ViFg8t5Akt00n6"
   };
 
   const normalizeExcelName = (name: string): string => {
@@ -5066,6 +5669,14 @@ async function startServer() {
       }
     }
     if (bCand.includes('egitim') && bTarget.includes('egitim')) {
+      return true;
+    }
+    if (
+      bCand.includes('kara') &&
+      bTarget.includes('kara') &&
+      (bCand.includes('arac') || bCand.includes('takip') || bCand.includes('servis')) &&
+      (bTarget.includes('arac') || bTarget.includes('takip') || bTarget.includes('servis'))
+    ) {
       return true;
     }
     return false;
@@ -6510,8 +7121,14 @@ async function startServer() {
         return res.status(404).send("Sertifika PDF bulunamadı.");
       }
 
+      const isDownload = req.query.download === "1" || req.query.download === "true";
+      const dispositionType = isDownload ? "attachment" : "inline";
+      const safeAsciiName = (index.fileName || "SERTIFIKA.pdf").replace(/[^\x20-\x7E]/g, "_");
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(index.fileName)}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `${dispositionType}; filename="${safeAsciiName}"; filename*=UTF-8''${encodeURIComponent(index.fileName || "SERTIFIKA.pdf")}`
+      );
       res.setHeader("Cache-Control", "public, max-age=3600");
       return res.send(index.pdfBuffer);
     } catch (err: any) {
@@ -6751,26 +7368,183 @@ async function startServer() {
     }
   });
 
-  // State for automatic daily mail reminders (runs at 09:00 and on overdue detection)
+  // Persistent local data files for Gün Takip (Sorumlular, Tespitler & Auto Reminder State)
+  const GUN_TAKIP_SORUMLULAR_FILE = path.resolve(process.cwd(), "data/gun_takip_sorumlular.json");
+  const GUN_TAKIP_TESPITLER_FILE = path.resolve(process.cwd(), "data/gun_takip_tespitler.json");
+  const AUTO_REMINDER_STATE_FILE = path.resolve(process.cwd(), "data/auto_reminder_state.json");
+
+  const ensureDataDir = () => {
+    const dir = path.resolve(process.cwd(), "data");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  };
+
   let autoReminderState = {
     enabled: true,
     lastRunDate: "",
     lastRunTimestamp: "",
     lastOverdueCount: 0,
-    statusMessage: "Otomatik E-Posta Servisi devrede (Her sabah 09:00 ve günü geçtiğinde onay sormadan otomatik gönderilir)"
+    lastMonthlyReportMonth: "",
+    lastMonthlyReportTimestamp: "",
+    statusMessage: "Otomatik E-Posta Servisi devrede (Her sabah 09:00 ve her ayın 1'inde hava aracı Aylık Rapor otomatik gönderilir)"
   };
 
-  // Helper function to trigger automatic overdue email dispatch via GAS
-  async function runDailyOverdueEmailCheck(reason: string = "09:00 Scheduled Run") {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const nowTimestamp = new Date().toLocaleString("tr-TR");
-    
-    console.log(`[Auto Mail Service] Running background overdue check (${reason}) at ${nowTimestamp}...`);
-    
+  try {
+    if (fs.existsSync(AUTO_REMINDER_STATE_FILE)) {
+      const parsedState = JSON.parse(fs.readFileSync(AUTO_REMINDER_STATE_FILE, "utf-8"));
+      if (parsedState && typeof parsedState === "object") {
+        autoReminderState = { ...autoReminderState, ...parsedState };
+      }
+    }
+  } catch {}
+
+  const saveAutoReminderState = () => {
+    try {
+      ensureDataDir();
+      fs.writeFileSync(AUTO_REMINDER_STATE_FILE, JSON.stringify(autoReminderState, null, 2), "utf-8");
+    } catch {}
+  };
+
+  const GUN_TAKIP_AIRCRAFT_ONLY_FILTER = (birimName: string): boolean => {
+    const norm = String(birimName || "")
+      .replace(/İ/g, "I").replace(/ı/g, "i")
+      .replace(/Ğ/g, "G").replace(/ğ/g, "g")
+      .replace(/Ü/g, "U").replace(/ü/g, "u")
+      .replace(/Ş/g, "S").replace(/ş/g, "s")
+      .replace(/Ö/g, "O").replace(/ö/g, "o")
+      .replace(/Ç/g, "C").replace(/ç/g, "c")
+      .toUpperCase();
+    if (!norm) return false;
+    if (norm.includes("HANGAR") || norm.includes("KARA ARAC") || norm.includes("PERSONEL BILGI") || norm.includes("PERSONEL EGITIM")) {
+      return false;
+    }
+    return (
+      norm.includes("AT-802") ||
+      norm.includes("AT802") ||
+      norm.includes("BELL") ||
+      norm.includes("T-70") ||
+      norm.includes("T70") ||
+      norm.includes("B-360") ||
+      norm.includes("B360") ||
+      norm.includes("C-650") ||
+      norm.includes("C650")
+    );
+  };
+
+  // Helper to normalize legacy separate YER DESTEK / OZEL ALET rows for Bell 429, T-70, B-360, C-650 into single combined rows
+  function normalizeGunTakipSorumlularRows(rows: any[]): any[] {
+    if (!Array.isArray(rows)) return [];
+    const combinedPrefixes = ["BELL 429", "T-70", "B-360", "C-650"];
+    const result: any[] = [];
+    const seen = new Set<string>();
+
+    const normUpper = (s: string) =>
+      String(s || "")
+        .replace(/İ/g, "I").replace(/ı/g, "i")
+        .replace(/Ğ/g, "G").replace(/ğ/g, "g")
+        .replace(/Ü/g, "U").replace(/ü/g, "u")
+        .replace(/Ş/g, "S").replace(/ş/g, "s")
+        .replace(/Ö/g, "O").replace(/ö/g, "o")
+        .replace(/Ç/g, "C").replace(/ç/g, "c")
+        .toUpperCase().trim();
+
+    for (const raw of rows) {
+      if (!raw || !raw.birim) continue;
+      let birim = String(raw.birim).trim().toUpperCase();
+      const bNorm = normUpper(birim);
+
+      for (const prefix of combinedPrefixes) {
+        const isExactYer = bNorm === `${prefix} YER DESTEK`;
+        const isExactOzel = bNorm === `${prefix} OZEL ALET`;
+        const isAlreadyCombined = bNorm === `${prefix} YER DESTEK & OZEL ALET`;
+        if (isExactYer || isExactOzel || isAlreadyCombined) {
+          birim = `${prefix} YER DESTEK & ÖZEL ALET`;
+          break;
+        }
+      }
+
+      const key = normUpper(birim);
+      if (seen.has(key)) {
+        const existingIdx = result.findIndex(r => normUpper(r.birim) === key);
+        if (existingIdx >= 0) {
+          const ex = result[existingIdx];
+          if ((!ex.adSoyad || ex.adSoyad === "Sorumlu Personel") && raw.adSoyad && raw.adSoyad !== "Sorumlu Personel") {
+            ex.adSoyad = raw.adSoyad;
+          }
+          if ((!ex.eposta || ex.eposta === "orhavak.bakimsube@gmail.com") && raw.eposta) {
+            ex.eposta = raw.eposta;
+          }
+          if (!ex.mail90 && raw.mail90) {
+            ex.mail90 = raw.mail90;
+          }
+        }
+        continue;
+      }
+
+      seen.add(key);
+      result.push({
+        birim,
+        adSoyad: String(raw.adSoyad || "Sorumlu Personel").trim(),
+        eposta: String(raw.eposta || "orhavak.bakimsube@gmail.com").trim(),
+        norm: String(raw.norm || "").trim(),
+        mail90: String(raw.mail90 || "").trim(),
+        mail60: String(raw.mail60 || "").trim(),
+        mail30: String(raw.mail30 || "").trim()
+      });
+    }
+    return result;
+  }
+
+  // Helper function to trigger automatic overdue / monthly aircraft report email dispatch via GAS
+  async function runDailyOverdueEmailCheck(
+    reason: string = "09:00 Scheduled Run",
+    options: { isMonthlyReport?: boolean; aircraftBirimList?: any[]; overdueItems?: any[]; approachingItems?: any[] } = {}
+  ) {
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    const currentMonthKey = now.toISOString().slice(0, 7); // YYYY-MM
+    const nowTimestamp = now.toLocaleString("tr-TR");
+    const isFirstOfMonth = now.getDate() === 1;
+    const shouldSendMonthly = Boolean(options.isMonthlyReport) || (isFirstOfMonth && autoReminderState.lastMonthlyReportMonth !== currentMonthKey);
+
+    console.log(`[Auto Mail Service] Running background check (${reason}${shouldSendMonthly ? " + AYLIK RAPOR" : ""}) at ${nowTimestamp}...`);
+
     const scriptUrls = [
+      "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec",
       "https://script.google.com/macros/s/AKfycbwP1uOo2NrST5a4I8vm1nGBLtI26yY2lWrmu9_e9iymwBkUhJBA9JOPCp7SNKqJbOubOw/exec",
       "https://script.google.com/macros/s/AKfycbw4kruTTc058Y9rLTyO3dKi6KloYsmdDTwV1GSiAk8ZXefyo3Z7_VDSTuurzsS9BHAQyQ/exec"
     ];
+
+    let targetBirimList = options.aircraftBirimList;
+    if (!Array.isArray(targetBirimList) || targetBirimList.length === 0) {
+      try {
+        if (fs.existsSync(GUN_TAKIP_SORUMLULAR_FILE)) {
+          const savedRows = JSON.parse(fs.readFileSync(GUN_TAKIP_SORUMLULAR_FILE, "utf-8"));
+          if (Array.isArray(savedRows)) targetBirimList = savedRows;
+        }
+      } catch {}
+    }
+
+    const aircraftOnlyBirimList = Array.isArray(targetBirimList)
+      ? targetBirimList.filter((b: any) => GUN_TAKIP_AIRCRAFT_ONLY_FILTER(b.birim))
+      : [];
+
+    const payload: any = {
+      action: "dailyReminderTrigger",
+      reason: shouldSendMonthly ? `Aylık Rapor (Hava Araçları - ${currentMonthKey})` : reason,
+      reportType: shouldSendMonthly ? "Aylık Rapor" : "Günlük Kontrol",
+      isMonthlyReport: shouldSendMonthly,
+      monthKey: currentMonthKey,
+      aircraftOnly: shouldSendMonthly,
+      birimList: shouldSendMonthly ? aircraftOnlyBirimList : (targetBirimList || []),
+      overdueItems: Array.isArray(options.overdueItems)
+        ? (shouldSendMonthly ? options.overdueItems.filter((i: any) => GUN_TAKIP_AIRCRAFT_ONLY_FILTER(i.unitName || i.birim)) : options.overdueItems)
+        : undefined,
+      approachingItems: Array.isArray(options.approachingItems)
+        ? (shouldSendMonthly ? options.approachingItems.filter((i: any) => GUN_TAKIP_AIRCRAFT_ONLY_FILTER(i.unitName || i.birim)) : options.approachingItems)
+        : undefined,
+      source: "portal_auto_background_service",
+      timestamp: nowTimestamp
+    };
 
     let success = false;
     for (const url of scriptUrls) {
@@ -6778,19 +7552,20 @@ async function startServer() {
         const response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify({
-            action: "dailyReminderTrigger",
-            reason: reason,
-            source: "portal_auto_background_service",
-            timestamp: nowTimestamp
-          })
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(15000)
         });
 
         if (response.ok) {
           success = true;
           autoReminderState.lastRunDate = todayStr;
           autoReminderState.lastRunTimestamp = nowTimestamp;
-          console.log(`[Auto Mail Service] Background overdue check completed successfully via ${url}`);
+          if (shouldSendMonthly) {
+            autoReminderState.lastMonthlyReportMonth = currentMonthKey;
+            autoReminderState.lastMonthlyReportTimestamp = nowTimestamp;
+          }
+          saveAutoReminderState();
+          console.log(`[Auto Mail Service] Background check completed successfully via ${url}`);
           break;
         }
       } catch (err: any) {
@@ -6798,19 +7573,49 @@ async function startServer() {
       }
     }
 
+    // Update SON BİLDİRİM TARİHİ (mail90) once per month for aircraft units on monthly dispatch
+    if (shouldSendMonthly && success && fs.existsSync(GUN_TAKIP_SORUMLULAR_FILE)) {
+      try {
+        const savedRows = JSON.parse(fs.readFileSync(GUN_TAKIP_SORUMLULAR_FILE, "utf-8"));
+        if (Array.isArray(savedRows)) {
+          const pad = (n: number) => String(n).padStart(2, "0");
+          const monthlyStamp = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} (${currentMonthKey} Aylık Rapor)`;
+          let changed = false;
+          const updatedRows = savedRows.map((row: any) => {
+            if (GUN_TAKIP_AIRCRAFT_ONLY_FILTER(row.birim) && !String(row.mail90 || "").includes(currentMonthKey)) {
+              changed = true;
+              return { ...row, mail90: monthlyStamp };
+            }
+            return row;
+          });
+          if (changed) {
+            ensureDataDir();
+            fs.writeFileSync(GUN_TAKIP_SORUMLULAR_FILE, JSON.stringify(updatedRows, null, 2), "utf-8");
+            saveGunTakipSorumlularToSheet(updatedRows).catch(() => {});
+          }
+        }
+      } catch {}
+    }
+
     return success;
   }
 
-  // Interval to check every 5 minutes if it's 09:00 AM and haven't run today
+  // Interval to check every 5 minutes if it's 09:00 AM (daily) or 1st of month (Aylık Rapor for aircrafts)
   setInterval(() => {
     try {
       const now = new Date();
       const currentHour = now.getHours();
       const todayStr = now.toISOString().slice(0, 10);
+      const currentMonthKey = now.toISOString().slice(0, 7);
+      const isFirstOfMonthDue = now.getDate() === 1 && autoReminderState.lastMonthlyReportMonth !== currentMonthKey;
 
-      // Run daily at 09:00 (or if server starts after 09:00 and hasn't run today)
-      if (currentHour >= 9 && autoReminderState.lastRunDate !== todayStr) {
-        runDailyOverdueEmailCheck(`Sabah 09:00 Günlük Otomatik Gönderim (${todayStr})`);
+      if (currentHour >= 9 && (autoReminderState.lastRunDate !== todayStr || isFirstOfMonthDue)) {
+        runDailyOverdueEmailCheck(
+          isFirstOfMonthDue
+            ? `Her Ayın 1'i Hava Araçları Aylık Rapor (${currentMonthKey})`
+            : `Sabah 09:00 Günlük Otomatik Gönderim (${todayStr})`,
+          { isMonthlyReport: isFirstOfMonthDue }
+        );
       }
     } catch (e) {
       console.error("[Auto Mail Service] Cron error:", e);
@@ -7249,16 +8054,320 @@ async function startServer() {
     }
   });
 
+  // Cached OGM logo proxy so canvas circular cropping & Word export never hit CORS restrictions
+  let cachedOgmLogoBuffer: Buffer | null = null;
+  app.get("/api/ogm-logo", async (_req, res) => {
+    try {
+      if (cachedOgmLogoBuffer) {
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.send(cachedOgmLogoBuffer);
+      }
+      const logoUrl = "https://upload.wikimedia.org/wikipedia/tr/d/d4/Orman_Genel_M%C3%BCd%C3%BCrl%C3%BC%C4%9F%C3%BC_logo.png?utm_source=tr.wikipedia.org&utm_campaign=index&utm_content=original";
+      const resp = await fetch(logoUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; OGM-Portal/1.0)" },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!resp.ok) {
+        return res.status(resp.status).send("Logo fetch failed");
+      }
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (buf.byteLength > 1000) {
+        cachedOgmLogoBuffer = buf;
+      }
+      res.setHeader("Content-Type", resp.headers.get("content-type") || "image/png");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.send(buf);
+    } catch (err: any) {
+      return res.status(502).send(err?.message || "Logo proxy error");
+    }
+  });
+
+  // Helper: save Gün Takip Sorumlular matrix to Google Sheet ("GÜN TAKİP")
+  async function saveGunTakipSorumlularToSheet(rows: any[]): Promise<boolean> {
+    const allUrls = [
+      "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec",
+      ...SCRIPT_URLS
+    ];
+    const headers = [
+      "SORUMLU BİRİM",
+      "ADI SOYADI",
+      "E-POSTA ADRESİ",
+      "TAKİP EDİLECEK NORM",
+      "SON BİLDİRİM TARİHİ",
+      "60 GÜN UYARISI MAİL GÖNDERİM TARİHİ",
+      "30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"
+    ];
+    const dataRows = rows.map((item: any) => [
+      String(item.birim || "").trim().toUpperCase(),
+      String(item.adSoyad || "").trim(),
+      String(item.eposta || "").trim(),
+      String(item.norm || "").trim(),
+      String(item.mail90 || "").trim(),
+      String(item.mail60 || "").trim(),
+      String(item.mail30 || "").trim()
+    ]);
+
+    let anySuccess = false;
+    for (const sUrl of allUrls) {
+      try {
+        const resp = await fetch(sUrl, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({
+            action: "updateSheet",
+            sheetName: "GÜN TAKİP",
+            spreadsheetId: SPREADSHEET_ID,
+            data: [headers, ...dataRows]
+          }),
+          signal: AbortSignal.timeout(15000)
+        });
+        if (resp.ok) {
+          const rj = await resp.json().catch(() => null);
+          if (rj && rj.status === "success") {
+            anySuccess = true;
+            break;
+          }
+        }
+      } catch {}
+    }
+
+    // Legacy action fallback for older GAS script deployments
+    if (!anySuccess) {
+      for (const sUrl of allUrls) {
+        try {
+          const resp = await fetch(sUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "updateGunTakip",
+              data: dataRows
+            }),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (resp.ok) {
+            const rj = await resp.json().catch(() => null);
+            if (rj && rj.status === "success") {
+              anySuccess = true;
+              break;
+            }
+          }
+        } catch {}
+      }
+    }
+    return anySuccess;
+  }
+
+  async function fetchGunTakipSorumlularFromSheet(): Promise<any[]> {
+    const allUrls = [
+      "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec",
+      ...SCRIPT_URLS
+    ];
+    for (const sUrl of allUrls) {
+      try {
+        const getUrl = `${sUrl}?action=readSheet&sheetName=${encodeURIComponent("GÜN TAKİP")}&spreadsheetId=${SPREADSHEET_ID}&_t=${Date.now()}`;
+        const resp = await fetch(getUrl, { signal: AbortSignal.timeout(10000) });
+        if (resp.ok) {
+          const json = await resp.json().catch(() => null);
+          if (json && json.status === "success" && Array.isArray(json.data) && json.data.length > 0) {
+            const mapped = json.data
+              .map((row: any) => ({
+                birim: String(row["SORUMLU BİRİM"] || row["Sorumlu Birim"] || row[0] || "").trim().toUpperCase(),
+                adSoyad: String(row["ADI SOYADI"] || row["Adı Soyadı"] || row["AD SOYAD"] || row[1] || "").trim(),
+                eposta: String(row["E-POSTA ADRESİ"] || row["E-posta Adresi"] || row["EPOSTA ADRESI"] || row[2] || "").trim(),
+                norm: String(row["TAKİP EDİLECEK NORM"] || row["Norm"] || row["TAKIP EDILICEK NORM"] || row[3] || "").trim(),
+                mail90: String(row["SON BİLDİRİM TARİHİ"] || row["90 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[4] || "").trim(),
+                mail60: String(row["60 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[5] || "").trim(),
+                mail30: String(row["30 GÜN UYARISI MAİL GÖNDERİM TARİHİ"] || row[6] || "").trim()
+              }))
+              .filter((item: any) => item.birim && item.birim !== "SORUMLU BİRİM");
+            if (mapped.length > 0) return normalizeGunTakipSorumlularRows(mapped);
+          }
+        }
+      } catch {}
+    }
+    return [];
+  }
+
+  // API Route: GET & POST Gün Takip Sorumluları (Server JSON + Google Sheets persistent storage)
+  app.get("/api/gun-takip/sorumlular", async (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      if (fs.existsSync(GUN_TAKIP_SORUMLULAR_FILE)) {
+        const localRows = JSON.parse(fs.readFileSync(GUN_TAKIP_SORUMLULAR_FILE, "utf-8"));
+        if (Array.isArray(localRows) && localRows.length > 0) {
+          const normalized = normalizeGunTakipSorumlularRows(localRows);
+          return res.json({ status: "success", source: "server-json", data: normalized });
+        }
+      }
+      const sheetRows = await fetchGunTakipSorumlularFromSheet();
+      if (sheetRows.length > 0) {
+        ensureDataDir();
+        fs.writeFileSync(GUN_TAKIP_SORUMLULAR_FILE, JSON.stringify(sheetRows, null, 2), "utf-8");
+        return res.json({ status: "success", source: "google-sheet", data: sheetRows });
+      }
+      return res.json({ status: "success", source: "empty", data: [] });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Okuma hatası" });
+    }
+  });
+
+  app.post("/api/gun-takip/sorumlular", async (req, res) => {
+    try {
+      const incoming = req.body?.data || req.body?.rows || req.body;
+      if (!Array.isArray(incoming) || incoming.length === 0) {
+        return res.status(400).json({ status: "error", message: "Geçerli sorumlular verisi bulunamadı." });
+      }
+      const normalized = normalizeGunTakipSorumlularRows(incoming);
+      ensureDataDir();
+      fs.writeFileSync(GUN_TAKIP_SORUMLULAR_FILE, JSON.stringify(normalized, null, 2), "utf-8");
+      const sheetSaved = await saveGunTakipSorumlularToSheet(normalized);
+      return res.json({
+        status: "success",
+        sheetSaved,
+        data: normalized,
+        message: sheetSaved
+          ? "Sorumlu personel verileri sunucuya ve Google E-Tabloya kaydedildi."
+          : "Sorumlu personel verileri sunucuya kaydedildi."
+      });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Kaydetme hatası" });
+    }
+  });
+
+  // API Route: GET & POST Gün Takip Tespitler (JSON persistence in server + Google Sheet tab "GÜN TAKİP TESPİTLER")
+  app.get("/api/gun-takip/tespitler", (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      if (fs.existsSync(GUN_TAKIP_TESPITLER_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(GUN_TAKIP_TESPITLER_FILE, "utf-8"));
+        return res.json({ status: "success", data: parsed });
+      }
+      return res.json({ status: "success", data: null });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Okuma hatası" });
+    }
+  });
+
+  app.post("/api/gun-takip/tespitler", async (req, res) => {
+    try {
+      const { tespitler, summary, updatedAt } = req.body || {};
+      const items = Array.isArray(tespitler) ? tespitler : [];
+      const timestamp = updatedAt || new Date().toLocaleString("tr-TR");
+      const payloadObj = {
+        updatedAt: timestamp,
+        summary: summary || {
+          total: items.length,
+          overdue: items.filter((i: any) => Number(i.daysDiff) <= 0).length,
+          approaching: items.filter((i: any) => Number(i.daysDiff) > 0).length
+        },
+        tespitler: items
+      };
+
+      ensureDataDir();
+      fs.writeFileSync(GUN_TAKIP_TESPITLER_FILE, JSON.stringify(payloadObj, null, 2), "utf-8");
+
+      // Sync JSON + readable columns into Google Sheet tab "GÜN TAKİP TESPİTLER"
+      const headers = [
+        "KAYIT ZAMANI",
+        "BİRİM",
+        "TESPİT TÜRÜ",
+        "MALZEME / PERSONEL",
+        "P/N",
+        "S/N",
+        "KONUM",
+        "SON İŞLEM",
+        "GELECEK TARİH",
+        "KALAN GÜN",
+        "JSON VERİSİ"
+      ];
+      const sheetRows = items.map((item: any, idx: number) => [
+        timestamp,
+        String(item.unitName || item.unitKey || ""),
+        Number(item.daysDiff) <= 0 ? "GÜNÜ GEÇTİ" : "YAKLAŞIYOR",
+        String(item.techName || ""),
+        String(item.partNo || "-"),
+        String(item.seriNo || "-"),
+        String(item.location || "-"),
+        String(item.sonTarih || "-"),
+        String(item.gelecekTarih || "-"),
+        Number(item.daysDiff) <= 0 ? `${Math.abs(Number(item.daysDiff))} GÜN GEÇTİ` : `${item.daysDiff} GÜN KALDI`,
+        idx === 0 ? JSON.stringify(payloadObj) : JSON.stringify(item)
+      ]);
+      if (sheetRows.length === 0) {
+        sheetRows.push([timestamp, "TÜM BİRİMLER", "GÜNCEL", "Uymayan kayıt bulunmamaktadır", "-", "-", "-", "-", "-", "-", JSON.stringify(payloadObj)]);
+      }
+
+      const allUrls = [
+        "https://script.google.com/macros/s/AKfycbwDCnmNcjr6ao6kKL7uAT02_kAvpQYeZUUu4ghYNI1ie6_ASetN4dZgYC_mM_mfLQBUww/exec",
+        ...SCRIPT_URLS
+      ];
+      let sheetSaved = false;
+      for (const sUrl of allUrls) {
+        try {
+          const resp = await fetch(sUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+              action: "updateSheet",
+              sheetName: "GÜN TAKİP TESPİTLER",
+              spreadsheetId: SPREADSHEET_ID,
+              data: [headers, ...sheetRows]
+            }),
+            signal: AbortSignal.timeout(15000)
+          });
+          if (resp.ok) {
+            const rj = await resp.json().catch(() => null);
+            if (rj && rj.status === "success") {
+              sheetSaved = true;
+              break;
+            }
+          }
+        } catch {}
+      }
+
+      return res.json({ status: "success", sheetSaved, count: items.length, updatedAt: timestamp });
+    } catch (err: any) {
+      return res.status(500).json({ status: "error", message: err?.message || "Tespit kaydetme hatası" });
+    }
+  });
+
   // API Route: Check Auto Reminder Status
-  app.get("/api/auto-reminder-status", (req, res) => {
+  app.get("/api/auto-reminder-status", (_req, res) => {
     res.json({
       status: "success",
       data: autoReminderState
     });
   });
 
-  // Helper to read Excel rows into 2D array from Google Drive or local mirror
-  async function readExcelRows(fileName: string, explicitFileId?: string): Promise<any[][]> {
+  // Format Excel serial/date values safely into GG.AA.YYYY when parsing worksheet matrices
+  function formatExcelCellForGunTakip(val: any): string {
+    if (val === null || val === undefined) return "";
+    if (val instanceof Date && !isNaN(val.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${pad(val.getDate())}.${pad(val.getMonth() + 1)}.${val.getFullYear()}`;
+    }
+    const s = String(val).trim();
+    if (/^\d{5}(\.\d+)?$/.test(s)) {
+      const serial = parseFloat(s);
+      if (serial >= 25000 && serial <= 90000) {
+        const utcDays = Math.floor(serial - 25569);
+        const d = new Date(utcDays * 86400 * 1000);
+        if (!isNaN(d.getTime())) {
+          const pad = (n: number) => String(n).padStart(2, "0");
+          return `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`;
+        }
+      }
+    }
+    return s;
+  }
+
+  // Helper to read Excel rows into 2D array from Google Drive, cache, or local mirror with unmerge & section tagging
+  async function readExcelRows(
+    fileName: string,
+    explicitFileId?: string,
+    options?: { forceSection?: "yer_destek" | "ozel_alet" | "depo_sarf" | "depo_kimyasal"; tagColIndex?: number; skipTransferSheets?: boolean }
+  ): Promise<any[][]> {
     try {
       let fileBuf: Buffer | null = null;
       let fileId = explicitFileId || "";
@@ -7270,30 +8379,128 @@ async function startServer() {
           }
         }
       }
+
       if (fileId) {
-        const driveUrl = `https://drive.google.com/uc?export=download&id=${fileId}&t=${Date.now()}`;
-        try {
-          const resp = await fetch(driveUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-          if (resp.ok) {
-            const ab = await resp.arrayBuffer();
-            if (ab && ab.byteLength > 500) {
-              fileBuf = Buffer.from(ab);
+        const driveUrls = [
+          `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx&t=${Date.now()}`,
+          `https://drive.google.com/uc?export=download&id=${fileId}&t=${Date.now()}`
+        ];
+        for (const driveUrl of driveUrls) {
+          try {
+            const resp = await fetch(driveUrl, {
+              headers: { "User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache" },
+              signal: AbortSignal.timeout(9000)
+            });
+            if (resp.ok) {
+              const ab = await resp.arrayBuffer();
+              const buf = Buffer.from(ab);
+              const isValidXlsx = buf.length > 500 && ((buf[0] === 0x50 && buf[1] === 0x4b) || (buf[0] === 0xd0 && buf[1] === 0xcf));
+              if (isValidXlsx) {
+                fileBuf = buf;
+                break;
+              }
             }
-          }
-        } catch (e) {}
+          } catch {}
+        }
       }
+
+      if (!fileBuf) {
+        const cached = excelFileCache.get(fileName);
+        if (cached && cached.base64) {
+          fileBuf = Buffer.from(cached.base64, "base64");
+        }
+      }
+
+      if (!fileBuf) {
+        for (const sUrl of SCRIPT_URLS) {
+          try {
+            const gasRes = await fetch(sUrl, {
+              method: "POST",
+              headers: { "Content-Type": "text/plain;charset=utf-8" },
+              body: JSON.stringify({
+                action: "readExcelFromDrive",
+                fileName,
+                fileId,
+                folderId: "1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP"
+              }),
+              signal: AbortSignal.timeout(6000)
+            });
+            if (gasRes.ok) {
+              const data = await gasRes.json().catch(() => null);
+              if (data && data.status === "success" && data.base64) {
+                fileBuf = Buffer.from(data.base64, "base64");
+                break;
+              }
+            }
+          } catch {}
+        }
+      }
+
       if (!fileBuf) {
         const localPath = path.resolve(process.cwd(), `public/${fileName}`);
         if (fs.existsSync(localPath)) {
           fileBuf = fs.readFileSync(localPath);
         }
       }
+
       if (fileBuf) {
-        const wb = XLSX.read(fileBuf, { type: "buffer" });
-        const sheetName = wb.SheetNames[0];
-        const sheet = wb.Sheets[sheetName];
-        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
-        return rows || [];
+        const wb = XLSX.read(fileBuf, { type: "buffer", cellDates: true });
+        const allRows: any[][] = [];
+        for (const sheetName of wb.SheetNames) {
+          const upperS = sheetName.toUpperCase();
+          if (options?.skipTransferSheets !== false && (upperS.includes("TRANSFER") || upperS.includes("GECMIS") || upperS.includes("GEÇMİŞ"))) {
+            continue;
+          }
+          const sheet = wb.Sheets[sheetName];
+          if (!sheet) continue;
+
+          // Unmerge cells so grouped headers/locations preserve values cleanly
+          if (Array.isArray(sheet["!merges"])) {
+            for (const m of sheet["!merges"]) {
+              const tlAddr = XLSX.utils.encode_cell(m.s);
+              const tlCell = sheet[tlAddr];
+              if (tlCell) {
+                for (let r = m.s.r; r <= m.e.r; r++) {
+                  for (let c = m.s.c; c <= m.e.c; c++) {
+                    if (r === m.s.r && c === m.s.c) continue;
+                    const addr = XLSX.utils.encode_cell({ r, c });
+                    if (!sheet[addr]) sheet[addr] = { ...tlCell };
+                  }
+                }
+              }
+            }
+          }
+
+          const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" }) as any[][];
+          let resolvedTag = options?.forceSection;
+          if (!resolvedTag) {
+            const normS = upperS
+              .replace(/İ/g, "I").replace(/ı/g, "i")
+              .replace(/Ğ/g, "G").replace(/ğ/g, "g")
+              .replace(/Ü/g, "U").replace(/ü/g, "u")
+              .replace(/Ş/g, "S").replace(/ş/g, "s")
+              .replace(/Ö/g, "O").replace(/ö/g, "o")
+              .replace(/Ç/g, "C").replace(/ç/g, "c");
+            if (normS.includes("KIMYASAL")) resolvedTag = "depo_kimyasal";
+            else if (normS.includes("SARF") || normS.includes("DEPO")) resolvedTag = "depo_sarf";
+            else if (normS.includes("OZEL")) resolvedTag = "ozel_alet";
+            else if (normS.includes("YER")) resolvedTag = "yer_destek";
+          }
+
+          const tagCol = options?.tagColIndex ?? (resolvedTag === "depo_sarf" || resolvedTag === "depo_kimyasal" ? 12 : 13);
+          for (const row of rawRows) {
+            if (!Array.isArray(row) || row.every(c => String(c || "").trim() === "")) continue;
+            const formattedRow = row.map(c => formatExcelCellForGunTakip(c));
+            if (resolvedTag) {
+              while (formattedRow.length <= tagCol) formattedRow.push("");
+              if (!formattedRow[tagCol] || options?.forceSection) {
+                formattedRow[tagCol] = resolvedTag;
+              }
+            }
+            allRows.push(formattedRow);
+          }
+        }
+        return allRows;
       }
     } catch (err) {
       console.warn(`[readExcelRows] Error reading ${fileName}:`, err);
@@ -7302,43 +8509,53 @@ async function startServer() {
   }
 
   // API Route: Live Scan All Drive Lists for Gün Takip & Otomatik Bildirim
-  app.get("/api/gun-takip-live-scan", async (req, res) => {
+  app.get("/api/gun-takip-live-scan", async (_req, res) => {
     try {
       const [
         at802Yer,
         at802Depo,
+        at802Kimyasal,
         at802Ozel,
         bell429Yer,
         bell429Depo,
         t70Yer,
         t70Depo,
+        t70BumbiBacket,
+        t70Helitak,
         hangarYer,
         hangarDepo,
         karaAraclari,
         b360Yer,
         c650Yer
       ] = await Promise.all([
-        readExcelRows("hava_araçları_yer_destek_at-802.xlsx"),
-        readExcelRows("at-802_sarf_ve_parca_deposu.xlsx"),
-        readExcelRows("at-802_ozel_bakim_aletleri.xlsx"),
-        readExcelRows("hava_araçları_yer_destek_bell-429.xlsx"),
-        readExcelRows("bell-429_sarf_ve_parca_deposu.xlsx"),
-        readExcelRows("hava_araçları_yer_destek_t-70.xlsx"),
-        readExcelRows("t-70_sarf_ve_parca_deposu.xlsx"),
-        readExcelRows("hava_araçları_yer_destek_hangar.xlsx"),
-        readExcelRows("hangar_sarf_ve_parca_deposu.xlsx"),
-        readExcelRows("kara_araclari_bakim_muayene.xlsx"),
-        readExcelRows("hava_araçları_yer_destek_b-360.xlsx"),
-        readExcelRows("hava_araçları_yer_destek_c-650.xlsx")
+        readExcelRows("hava_araçları_yer_destek_at-802.xlsx", "1CA2kJJsb5MqM0dP2eKeVovRbnl6oTiBD", { forceSection: "yer_destek", tagColIndex: 13 }),
+        readExcelRows("at-802_sarf_ve_parca_deposu.xlsx", "1VmSQPbq1pWiCMvMpnHujAOco2LOlfhJ7", { forceSection: "depo_sarf", tagColIndex: 12 }),
+        readExcelRows("at-802_kimyasal_depo.xlsx", "1JYPCRpMSaZ8AWt7qEWnXhb4DbUKguDRK", { forceSection: "depo_kimyasal", tagColIndex: 12 }),
+        readExcelRows("at-802_ozel_bakim_aletleri.xlsx", "1idYaGtP9-4zMnUP9R28yHZwd47gy_QL8", { forceSection: "ozel_alet", tagColIndex: 13 }),
+        readExcelRows("hava_araçları_yer_destek_bell-429.xlsx", "1oICd57xCIGHza96IrWfOBCh1p5jTv3mB", { tagColIndex: 13 }),
+        readExcelRows("bell-429_sarf_ve_parca_deposu.xlsx", "1cklZYmq0U3jyyoEwZ31Rw9x_orc4RSpG", { forceSection: "depo_sarf", tagColIndex: 12 }),
+        readExcelRows("hava_araçları_yer_destek_t-70.xlsx", "1xDxoQPBpKIWTvbAhcMv7cUsdTtKHxwkJ", { tagColIndex: 13 }),
+        readExcelRows("t-70_sarf_ve_parca_deposu.xlsx", undefined, { forceSection: "depo_sarf", tagColIndex: 12 }),
+        readExcelRows("hava_araçları_yer_destek_t-70_bumbi_backet.xlsx", "1AtWL0hmzeY3wyGJzVylWk4hkqKjeQe3Q", { forceSection: "yer_destek", tagColIndex: 13 }),
+        readExcelRows("hava_araçları_yer_destek_t-70_helitak.xlsx", undefined, { forceSection: "yer_destek", tagColIndex: 13 }),
+        readExcelRows("hava_araçları_yer_destek_hangar.xlsx", "1-KGVWi0EN5UnI0NEC_EC3-zORYHsbqvu", { forceSection: "yer_destek", tagColIndex: 13 }),
+        readExcelRows("hangar_sarf_ve_parca_deposu.xlsx", "1LXGmi5mjDuE_r90fJoMKS4N68KKEvTfF", { forceSection: "depo_sarf", tagColIndex: 12 }),
+        readExcelRows("kara_araçları_takip.xlsx", "1QrOKOWYwHAeVI4ap46ViFg8t5Akt00n6", { tagColIndex: 11 }),
+        readExcelRows("hava_araçları_yer_destek_b-360.xlsx", "1_oxUU31nloWuKb9dMOOU8Q8XfvD4iAkz", { tagColIndex: 13 }),
+        readExcelRows("hava_araçları_yer_destek_c-650.xlsx", "1BRvs2LxZ21BMl3YRjKL1rtMzli9J5Kuf", { tagColIndex: 13 })
       ]);
 
       res.json({
         status: "success",
         timestamp: new Date().toISOString(),
         data: {
-          at802: [...at802Yer, ...at802Depo, ...at802Ozel],
+          at802: [...at802Yer, ...at802Depo, ...at802Kimyasal],
+          at802_yer: at802Yer,
+          at802_ozel_alet: at802Ozel,
           bell429: [...bell429Yer, ...bell429Depo],
           t70: [...t70Yer, ...t70Depo],
+          t70_bumbi_backet: t70BumbiBacket,
+          t70_helitak: t70Helitak,
           hangar: [...hangarYer, ...hangarDepo],
           kara_araclari: karaAraclari,
           b360: b360Yer,
@@ -7350,23 +8567,39 @@ async function startServer() {
     }
   });
 
-  // API Route: Trigger Auto Reminders on demand (silent background)
+  // API Route: Trigger Auto Reminders on demand (supports daily and 1st-of-month aircraft Aylık Rapor)
   app.post("/api/trigger-auto-reminders", async (req, res) => {
     try {
-      const { birimList, overdueItems } = req.body || {};
-      const nowTimestamp = new Date().toLocaleString("tr-TR");
-      
-      // Update state
+      const { birimList, overdueItems, approachingItems, isMonthlyReport } = req.body || {};
+      const now = new Date();
+      const nowTimestamp = now.toLocaleString("tr-TR");
+      const currentMonthKey = now.toISOString().slice(0, 7);
+
       if (overdueItems && Array.isArray(overdueItems)) {
         autoReminderState.lastOverdueCount = overdueItems.length;
       }
 
-      await runDailyOverdueEmailCheck("Manual Background Sync / Günü Geçen Otomatik Bildirim");
-      
+      // Guard monthly report to at most once per month on 1st of month unless never sent for currentMonthKey
+      const monthlyDue = Boolean(isMonthlyReport) && autoReminderState.lastMonthlyReportMonth !== currentMonthKey;
+
+      await runDailyOverdueEmailCheck(
+        monthlyDue ? `Aylık Rapor (${currentMonthKey})` : "Manual Background Sync / Günü Geçen Otomatik Bildirim",
+        {
+          isMonthlyReport: monthlyDue,
+          aircraftBirimList: Array.isArray(birimList) ? birimList : undefined,
+          overdueItems: Array.isArray(overdueItems) ? overdueItems : undefined,
+          approachingItems: Array.isArray(approachingItems) ? approachingItems : undefined
+        }
+      );
+
       res.json({
         status: "success",
         timestamp: nowTimestamp,
-        message: "Günü geçen malzemeler için otomatik arka plan mail kontrolü tamamlandı."
+        lastMonthlyReportMonth: autoReminderState.lastMonthlyReportMonth,
+        monthlySent: monthlyDue,
+        message: monthlyDue
+          ? `Hava araçları Aylık Rapor (${currentMonthKey}) kontrolü ve mail bildirimi tamamlandı.`
+          : "Günü geçen malzemeler için otomatik arka plan mail kontrolü tamamlandı."
       });
     } catch (err: any) {
       res.status(500).json({ status: "error", message: err.message });

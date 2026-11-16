@@ -315,7 +315,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         setProgressStage("Tamamlandı!");
         setTimeout(() => {
           setIsProcessing(false);
-          showNotification(`"personel_bilgi_cizelgesi.pdf" Google Drive'a başarıyla yüklendi!`);
+          showNotification(`"personel_bilgi_cizelgesi.pdf" Bulut Arşivine başarıyla yüklendi!`);
           onClose();
         }, 500);
         return;
@@ -436,7 +436,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         setProgressStage('Tamamlandı!');
         setTimeout(() => {
           setIsProcessing(false);
-          showNotification(`✅ "${file.name}" Personel Bilgi Çizelgesi başarıyla yüklendi (${parsedPersonnelRows.length} personel kaydı), Google Drive'a yedeklendi ve E-Tablo senkronize edildi!`);
+          showNotification(`✅ "${file.name}" Personel Bilgi Çizelgesi başarıyla yüklendi (${parsedPersonnelRows.length} personel kaydı), Bulut Arşivine yedeklendi ve E-Tablo senkronize edildi!`);
           onClose();
         }, 500);
         return;
@@ -795,7 +795,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 </span>
                 <p className="text-[11px] text-slate-600 leading-relaxed font-sans">
                   {selectedTarget === '5'
-                    ? 'Yüklenen Personel Bilgi dosyası (PDF veya Excel) otomatik olarak Google Drive\'a yedeklenir, Google E-Tablo 5-Personel_Bilgi sayfasına işlenir ve eski kopyası silinerek güncellenir.'
+                    ? 'Yüklenen Personel Bilgi dosyası (PDF veya Excel) otomatik olarak Bulut Arşivine yedeklenir, Canlı E-Tablo 5-Personel_Bilgi sayfasına işlenir ve eski kopyası silinerek güncellenir.'
                     : 'Yüklenen Excel belgesi hem Merkezi Drive\'a (1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP) doğru ve standart isimle kaydedilir hem de varsa eski versiyonu otomatik silinerek yenisi ile güncellenir.'}
                 </p>
               </div>

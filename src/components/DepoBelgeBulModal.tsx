@@ -201,7 +201,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
             setSelectedFile(null);
 
             if (showNotification) {
-              showNotification(`✅ "${finalDocName}" Google Drive'a başarıyla yüklendi ve indekslendi!`);
+              showNotification(`✅ "${finalDocName}" Bulut Arşivine başarıyla yüklendi ve indekslendi!`);
             }
 
             // If there was an active search query, re-run search on new index
@@ -249,7 +249,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Google Drive master sertifika PDF'i içinde arka planda sayfa ve metin taraması
+                Bulut Arşivi master sertifika PDF'i içinde arka planda sayfa ve metin taraması
               </p>
             </div>
           </div>
@@ -263,7 +263,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
                 setIsUpdateModalOpen(true);
               }}
               className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black transition cursor-pointer shadow-md active:scale-95 border border-emerald-400/40"
-              title="Google Drive'daki Master Sertifika PDF'ini Güncelle"
+              title="Bulut Arşivindeki Master Sertifika PDF'ini Güncelle"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>Veri Güncelle</span>
@@ -425,11 +425,19 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
                   <a
                     href={`/api/sertifika-tarama/pdf?unit=${cleanUnit}#page=${previewPage}`}
                     target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 rounded-xl text-xs font-bold transition"
+                    rel="noopener noreferrer"
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 rounded-xl text-xs font-bold transition"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
                     <span>Yeni Sekmede Aç</span>
+                  </a>
+                  <a
+                    href={`/api/sertifika-tarama/pdf?unit=${cleanUnit}&download=1`}
+                    download={targetDocName}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold transition"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>PDF İndir</span>
                   </a>
                 </div>
               </div>
@@ -453,7 +461,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
               <div className="space-y-1">
                 <h3 className="text-sm font-bold text-white">Master Belge Taranıyor...</h3>
                 <p className="text-xs text-slate-400 max-w-md">
-                  Google Drive üzerindeki <span className="text-blue-400 font-mono font-bold">{targetDocName}</span> taranıyor ve sayfalar indeksleniyor...
+                  Bulut Arşivi üzerindeki <span className="text-blue-400 font-mono font-bold">{targetDocName}</span> taranıyor ve sayfalar indeksleniyor...
                 </p>
               </div>
             </div>
@@ -468,7 +476,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
                   Aramak İstediğiniz Kelimeyi veya Parça Numarasını Girin
                 </h3>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Başlangıçta gereksiz liste gösterilmez. Yukarıdaki arama kutusuna parça numarası (P/N), seri no, form no veya herhangi bir metin girip <span className="text-blue-400 font-bold">"ARA"</span> butonuna bastığınızda, arka planda Google Drive master belgesi taranarak tam eşleşen sayfalar listelenir.
+                  Başlangıçta gereksiz liste gösterilmez. Yukarıdaki arama kutusuna parça numarası (P/N), seri no, form no veya herhangi bir metin girip <span className="text-blue-400 font-bold">"ARA"</span> butonuna bastığınızda, arka planda Bulut Arşivi master belgesi taranarak tam eşleşen sayfalar listelenir.
                 </p>
               </div>
               <div className="flex items-center gap-2 pt-2">
@@ -546,7 +554,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
         {/* MODAL FOOTER */}
         <div className="bg-slate-950 px-6 py-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
           <div className="flex items-center gap-2">
-            <span className="text-emerald-400 font-bold">✓ Google Drive PDF Tarama & Sayfa İndeksi Aktif</span>
+            <span className="text-emerald-400 font-bold">✓ Bulut Arşivi PDF Tarama & Sayfa İndeksi Aktif</span>
           </div>
           <button
             type="button"
@@ -570,7 +578,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-white">MASTER PDF VERİ GÜNCELLE</h3>
-                  <p className="text-[11px] text-slate-400">Google Drive Sertifika Master Belgesini Yenile</p>
+                  <p className="text-[11px] text-slate-400">Bulut Arşivi Sertifika Master Belgesini Yenile</p>
                 </div>
               </div>
               <button
@@ -591,7 +599,7 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
               {/* TARGET FILENAME */}
               <div className="space-y-1">
                 <label className="text-slate-300 font-bold">
-                  Google Drive Hedef Belge Adı:
+                  Bulut Arşivi Hedef Belge Adı:
                 </label>
                 <input
                   type="text"
@@ -601,13 +609,13 @@ export const DepoBelgeBulModal: React.FC<DepoBelgeBulModalProps> = ({
                   placeholder="SERTİFİKA TARAMA_AT802.pdf"
                 />
                 <p className="text-[10px] text-slate-500">
-                  Sistem otomatik olarak bu dosya adını Google Drive klasörüne yazar.
+                  Sistem otomatik olarak bu dosya adını Bulut Arşivi klasörüne yazar.
                 </p>
               </div>
 
               {/* TARGET DRIVE FOLDER */}
               <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 space-y-1">
-                <div className="text-[10px] text-slate-400 font-medium">Hedef Google Drive Klasörü:</div>
+                <div className="text-[10px] text-slate-400 font-medium">Hedef Bulut Arşivi Klasörü:</div>
                 <div className="text-[11px] font-mono text-emerald-400 font-bold truncate">
                   1HQR_NYKhHQGA7_2W3nArI9pCh-LJasTP
                 </div>

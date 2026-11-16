@@ -54,11 +54,12 @@ import JSZip from 'jszip';
 export const OGM_BULUT_AT802_URL = 'https://bulut.ogm.gov.tr/app/tr-TR/Klasor/Paylas/OGMDrive/0b7eb51b-6174-4314-89bc-c26d74d78acc';
 export const OGM_EXTENSION_STORE_URL = 'https://chromewebstore.google.com/detail/iframe-unlocker-%E2%80%93-remove/jkijbninecngmcipaijcnibjhbejaoch?pli=1';
 
-// Resmi OGM & Havacılık dairesel amblem SVG veri URI'leri (Yazdırma ve Word indirme için)
+export const OGM_WIKIMEDIA_LOGO_URL = 'https://upload.wikimedia.org/wikipedia/tr/d/d4/Orman_Genel_M%C3%BCd%C3%BCrl%C3%BC%C4%9F%C3%BC_logo.png?utm_source=tr.wikipedia.org&utm_campaign=index&utm_content=original';
+
+// Resmi OGM dairesel amblem SVG fallback veri URI'si
 const OGM_LEFT_SEAL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><circle cx="60" cy="60" r="56" fill="#f0fdf4" stroke="#166534" stroke-width="5"/><circle cx="60" cy="60" r="46" fill="none" stroke="#15803d" stroke-width="1.5" stroke-dasharray="3 2"/><path d="M60 26 L44 56 H54 L40 80 H80 L66 56 H76 Z" fill="#15803d"/><rect x="56" y="80" width="8" height="12" fill="#78350f"/><text x="60" y="20" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#14532d" font-family="Arial,sans-serif">ORMAN GENEL MÜDÜRLÜĞÜ</text><text x="60" y="106" text-anchor="middle" font-size="7.5" font-weight="bold" fill="#14532d" font-family="Arial,sans-serif">T.C. TARIM VE ORMAN BAKANLIĞI</text></svg>`;
-const OGM_RIGHT_SEAL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><circle cx="60" cy="60" r="56" fill="#fefce8" stroke="#ca8a04" stroke-width="5"/><circle cx="60" cy="60" r="46" fill="#fffbeb" stroke="#166534" stroke-width="2"/><path d="M28 66 Q60 40 92 66 Q60 56 28 66 Z" fill="#15803d"/><path d="M60 32 L54 52 H66 Z" fill="#166534"/><circle cx="60" cy="70" r="10" fill="#ca8a04" opacity="0.25"/><text x="60" y="21" text-anchor="middle" font-size="8" font-weight="bold" fill="#14532d" font-family="Arial,sans-serif">HAVACILIK DAİRESİ BŞK.</text><text x="60" y="104" text-anchor="middle" font-size="8" font-weight="bold" fill="#854d0e" font-family="Arial,sans-serif">1839 • OGM</text></svg>`;
 const OGM_LEFT_SEAL_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(OGM_LEFT_SEAL_SVG)}`;
-const OGM_RIGHT_SEAL_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(OGM_RIGHT_SEAL_SVG)}`;
+const OGM_RIGHT_SEAL_DATA_URI = OGM_LEFT_SEAL_DATA_URI;
 
 export interface ZeroReportRow {
   siraNo: number;
@@ -305,6 +306,56 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
     date: ''
   });
   const [capturedCatalogImage, setCapturedCatalogImage] = useState<string>('');
+  const [circularOgmLogoDataUri, setCircularOgmLogoDataUri] = useState<string>(OGM_WIKIMEDIA_LOGO_URL);
+
+  // Render Wikimedia OGM logo into a true circular transparent-corner PNG Data URI (so Word .doc & print match preview)
+  useEffect(() => {
+    let cancelled = false;
+    const renderCircularLogo = (src: string, fallbackSrc?: string) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        if (cancelled) return;
+        try {
+          const size = 220;
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          ctx.clearRect(0, 0, size, size);
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.clip();
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, size, size);
+          const scale = Math.max(size / img.width, size / img.height);
+          const drawW = img.width * scale;
+          const drawH = img.height * scale;
+          ctx.drawImage(img, (size - drawW) / 2, (size - drawH) / 2, drawW, drawH);
+          ctx.restore();
+          const dataUri = canvas.toDataURL('image/png');
+          if (dataUri && dataUri.startsWith('data:image/png')) {
+            setCircularOgmLogoDataUri(dataUri);
+          }
+        } catch {
+          if (fallbackSrc) renderCircularLogo(fallbackSrc);
+        }
+      };
+      img.onerror = () => {
+        if (!cancelled && fallbackSrc) {
+          renderCircularLogo(fallbackSrc);
+        }
+      };
+      img.src = src;
+    };
+    renderCircularLogo('/api/ogm-logo', OGM_LEFT_SEAL_DATA_URI);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [rawScreenshotDataUrl, setRawScreenshotDataUrl] = useState<string | null>(null);
   const [isCropOverlayOpen, setIsCropOverlayOpen] = useState<boolean>(false);
   const [cropBox, setCropBox] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
@@ -1913,14 +1964,13 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
         .replace(/"/g, '&quot;');
 
     const cb = (checked: boolean) => (checked ? '&#9745;' : '&#9744;');
-    const logoLeft = OGM_LEFT_SEAL_DATA_URI;
-    const logoRight = OGM_RIGHT_SEAL_DATA_URI;
+    const logoUrl = circularOgmLogoDataUri || OGM_WIKIMEDIA_LOGO_URL;
 
     const headerBannerHtml = `
       <table style="width:100%; border-collapse:collapse; border:1.5px solid #334155; margin-bottom:10px;">
         <tr>
           <td style="width:18%; text-align:center; padding:6px; vertical-align:middle;">
-            <img src="${logoLeft}" width="54" height="54" style="width:54px; height:54px; object-fit:contain;" />
+            <img src="${logoUrl}" width="54" height="54" style="width:54px; height:54px; border-radius:50%; object-fit:cover;" />
           </td>
           <td style="width:64%; text-align:center; vertical-align:middle; padding:6px;">
             <div style="font-size:13pt; font-weight:bold; color:#64748b; letter-spacing:0.6px; font-family:Calibri,Arial,sans-serif;">
@@ -1928,7 +1978,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
             </div>
           </td>
           <td style="width:18%; text-align:center; padding:6px; vertical-align:middle;">
-            <img src="${logoRight}" width="54" height="54" style="width:54px; height:54px; object-fit:contain;" />
+            <img src="${logoUrl}" width="54" height="54" style="width:54px; height:54px; border-radius:50%; object-fit:cover;" />
           </td>
         </tr>
       </table>`;
@@ -1959,7 +2009,9 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
   <meta charset="utf-8" />
   <title>HAVA ARACI YEDEK PARÇA TALEP FORMU</title>
   <style>
-    @page { size: A4 portrait; margin: 12mm 14mm; }
+    @page { size: A4 portrait; margin: 1cm 1cm 1cm 1cm; }
+    @page WordSection1 { size: 21cm 29.7cm; margin: 1cm 1cm 1cm 1cm; mso-header-margin: 0.5cm; mso-footer-margin: 0.5cm; }
+    div.WordSection1 { page: WordSection1; }
     * { box-sizing: border-box; }
     body { margin: 0; padding: 0; font-family: Calibri, Arial, sans-serif; color: #000; background: #fff; font-size: 9.5pt; }
     .a4-page { width: 100%; page-break-after: always; padding: 4px 0; }
@@ -1968,6 +2020,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
   </style>
 </head>
 <body>
+  <div class="WordSection1">
   <div class="a4-page">
     ${headerBannerHtml}
 
@@ -2079,6 +2132,7 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
         <td style="border:1px solid #000; padding:8px 10px; width:50%;"></td>
       </tr>
     </table>
+  </div>
   </div>
 </body>
 </html>`;
@@ -4538,14 +4592,6 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
               <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => handleCaptureCatalogScreenshot(false)}
-                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 text-xs font-black flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Camera className="w-4 h-4" />
-                  <span>Ekran / Katalog Yakala</span>
-                </button>
-                <button
-                  type="button"
                   onClick={handleDownloadZeroReportWord}
                   className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer"
                 >
@@ -4584,11 +4630,11 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
 
                     {/* Top Header Box (Logos + Title) */}
                     <div className="border border-slate-700 px-3 py-2 flex items-center justify-between mb-4">
-                      <img src={OGM_LEFT_SEAL_DATA_URI} alt="OGM Amblem" className="w-12 h-12 object-contain shrink-0" />
+                      <img src={circularOgmLogoDataUri} alt="OGM Amblem" className="w-12 h-12 rounded-full object-cover shrink-0 bg-white border border-slate-200" />
                       <div className="text-center font-bold text-slate-500 tracking-wide text-sm sm:text-base px-2">
                         HAVA ARACI YEDEK PARÇA TALEP FORMU
                       </div>
-                      <img src={OGM_RIGHT_SEAL_DATA_URI} alt="Havacılık Amblem" className="w-12 h-12 object-contain shrink-0" />
+                      <img src={circularOgmLogoDataUri} alt="OGM Amblem" className="w-12 h-12 rounded-full object-cover shrink-0 bg-white border border-slate-200" />
                     </div>
 
                     {/* 1. Hava Aracı Bilgileri */}
@@ -4784,11 +4830,11 @@ export const TechnicalPublicationsModal: React.FC<TechnicalPublicationsModalProp
 
                     {/* Top Header Box (Logos + Title repeated on Page 2) */}
                     <div className="border border-slate-700 px-3 py-2 flex items-center justify-between mb-4">
-                      <img src={OGM_LEFT_SEAL_DATA_URI} alt="OGM Amblem" className="w-12 h-12 object-contain shrink-0" />
+                      <img src={circularOgmLogoDataUri} alt="OGM Amblem" className="w-12 h-12 rounded-full object-cover shrink-0 bg-white border border-slate-200" />
                       <div className="text-center font-bold text-slate-500 tracking-wide text-sm sm:text-base px-2">
                         HAVA ARACI YEDEK PARÇA TALEP FORMU
                       </div>
-                      <img src={OGM_RIGHT_SEAL_DATA_URI} alt="Havacılık Amblem" className="w-12 h-12 object-contain shrink-0" />
+                      <img src={circularOgmLogoDataUri} alt="OGM Amblem" className="w-12 h-12 rounded-full object-cover shrink-0 bg-white border border-slate-200" />
                     </div>
 
                     {/* 3. Parça Kataloğu Görseli */}

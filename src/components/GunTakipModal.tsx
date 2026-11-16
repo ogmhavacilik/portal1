@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   X,
   Clock,
@@ -51,6 +51,7 @@ export interface ApproachingItem {
   lastMailSentDate?: string;
   isNew: boolean;
   rowIndex: number;
+  lineIndex?: number;
 }
 
 export interface BirimStats {
@@ -70,6 +71,8 @@ interface GunTakipModalProps {
   unitDataMap: {
     bell429?: any[][];
     at802?: any[][];
+    at802_yer?: any[][];
+    at802_ozel_alet?: any[][];
     t70?: any[][];
     t70_bumbi_backet?: any[][];
     t70_helitak?: any[][];
@@ -241,10 +244,84 @@ export const getRowSection = (row: string[]): 'yer_destek' | 'ozel_alet' | 'depo
   return 'yer_destek';
 };
 
-// Türkçe tarih stringini JS Date nesnesine çevir
+// Yalnızca hava aracı birimleri mi? (Hangar, Kara Araçları, Personel sistemleri hariç)
+export const isAircraftBirimName = (birimName: string): boolean => {
+  const norm = normalizeTurkishStr(birimName);
+  if (!norm) return false;
+  if (norm.includes('HANGAR') || norm.includes('KARA ARAC') || norm.includes('PERSONEL BILGI') || norm.includes('PERSONEL EGITIM')) {
+    return false;
+  }
+  return (
+    norm.includes('AT-802') ||
+    norm.includes('AT802') ||
+    norm.includes('BELL') ||
+    norm.includes('T-70') ||
+    norm.includes('T70') ||
+    norm.includes('B-360') ||
+    norm.includes('B360') ||
+    norm.includes('C-650') ||
+    norm.includes('C650')
+  );
+};
+
+// BELL 429, T-70, B-360, C-650 YER DESTEK + ÖZEL ALET satırlarını tek satırda birleştir (Sadece AT-802 ayrı kalır)
+export const normalizeGunTakipSorumlularList = (rows: GunTakipBirimRow[]): GunTakipBirimRow[] => {
+  if (!Array.isArray(rows)) return [];
+  const combinedPrefixes = ['BELL 429', 'T-70', 'B-360', 'C-650'];
+  const result: GunTakipBirimRow[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of rows) {
+    if (!raw || !raw.birim) continue;
+    let birim = String(raw.birim).trim().toUpperCase();
+    const bNorm = normalizeTurkishStr(birim).trim();
+    for (const prefix of combinedPrefixes) {
+      if (bNorm === `${prefix} YER DESTEK` || bNorm === `${prefix} OZEL ALET` || bNorm === `${prefix} YER DESTEK & OZEL ALET`) {
+        birim = `${prefix} YER DESTEK & ÖZEL ALET`;
+        break;
+      }
+    }
+    const key = normalizeTurkishStr(birim).trim();
+    if (seen.has(key)) {
+      const idx = result.findIndex(r => normalizeTurkishStr(r.birim).trim() === key);
+      if (idx >= 0) {
+        const ex = result[idx];
+        if ((!ex.adSoyad || ex.adSoyad === 'Sorumlu Personel') && raw.adSoyad && raw.adSoyad !== 'Sorumlu Personel') ex.adSoyad = raw.adSoyad;
+        if ((!ex.eposta || ex.eposta === 'orhavak.bakimsube@gmail.com') && raw.eposta) ex.eposta = raw.eposta;
+        if (!ex.mail90 && raw.mail90) ex.mail90 = raw.mail90;
+      }
+      continue;
+    }
+    seen.add(key);
+    result.push({
+      birim,
+      adSoyad: String(raw.adSoyad || 'Sorumlu Personel').trim(),
+      eposta: String(raw.eposta || 'orhavak.bakimsube@gmail.com').trim(),
+      norm: String(raw.norm || '').trim(),
+      mail90: String(raw.mail90 || '').trim(),
+      mail60: String(raw.mail60 || '').trim(),
+      mail30: String(raw.mail30 || '').trim()
+    });
+  }
+  return result;
+};
+
+// Türkçe tarih stringini veya Excel seri no'yu JS Date nesnesine çevir
 function parseTrDateObj(dateStr?: string): Date | null {
   if (!dateStr || dateStr === '-' || dateStr.trim() === '') return null;
   const clean = dateStr.trim();
+
+  if (/^\d{5}(\.\d+)?$/.test(clean)) {
+    const serial = parseFloat(clean);
+    if (serial >= 25000 && serial <= 90000) {
+      const utcDays = Math.floor(serial - 25569);
+      const d = new Date(utcDays * 86400 * 1000);
+      if (!isNaN(d.getTime())) {
+        return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+      }
+    }
+  }
+
   let day = 0, month = 0, year = 0;
   if (clean.includes('.')) {
     const parts = clean.split('.');
@@ -332,7 +409,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
   unitDataMap,
   googleScriptUrl
 }) => {
-  const [list, setList] = useState<GunTakipBirimRow[]>(sorumlular);
+  const [list, setList] = useState<GunTakipBirimRow[]>(() => normalizeGunTakipSorumlularList(sorumlular));
+  const latestListRef = useRef<GunTakipBirimRow[]>(list);
   const [activeFleetFilter, setActiveFleetFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -341,7 +419,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
   const [liveServerData, setLiveServerData] = useState<Record<string, any[][]>>({});
 
   // Inline Cell Edit State (Double-click activation)
-  const [editingCell, setEditingCell] = useState<{ index: number; field: 'birim' | 'adSoyad' | 'eposta' | 'mail90' } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ index: number; field: 'birim' | 'adSoyad' | 'eposta' | 'mail90'; targetBirim?: string } | null>(null);
 
   // Yaşam Destek & Personel Canlı Veri State'leri
   const [yasamDestekData, setYasamDestekData] = useState<any[]>([]);
@@ -365,11 +443,19 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
 
   // Background auto check state
   const [isAutoChecking, setIsAutoChecking] = useState<boolean>(false);
+  const lastSavedTespitKeyRef = useRef<string>('');
+
+  // Keep latestListRef always in sync
+  useEffect(() => {
+    latestListRef.current = list;
+  }, [list]);
 
   // Sync internal list if props change
   useEffect(() => {
-    if (sorumlular && sorumlular.length > 0) {
-      setList(sorumlular);
+    if (sorumlular && sorumlular.length > 0 && !editingCell) {
+      const normalized = normalizeGunTakipSorumlularList(sorumlular);
+      latestListRef.current = normalized;
+      setList(normalized);
     }
   }, [sorumlular]);
 
@@ -410,8 +496,19 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         }
       }
 
-      // 4. Canlı Gün Takip E-Tablosu Okuma
-      if (googleScriptUrl) {
+      // 4. Kalıcı Gün Takip Sorumluları Okuma (Sunucu JSON + Google E-Tablo)
+      let loadedSorumlular: GunTakipBirimRow[] = [];
+      try {
+        const srvRes = await fetch(`/api/gun-takip/sorumlular?t=${Date.now()}`).catch(() => null);
+        if (srvRes && srvRes.ok) {
+          const srvJson = await srvRes.json().catch(() => null);
+          if (srvJson && srvJson.status === 'success' && Array.isArray(srvJson.data) && srvJson.data.length > 0) {
+            loadedSorumlular = normalizeGunTakipSorumlularList(srvJson.data);
+          }
+        }
+      } catch {}
+
+      if (loadedSorumlular.length === 0 && googleScriptUrl) {
         try {
           const targetUrl = `${googleScriptUrl}?action=readSheet&sheetName=${encodeURIComponent("GÜN TAKİP")}&t=${Date.now()}`;
           const gtRes = await fetch(targetUrl);
@@ -429,13 +526,18 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
               })).filter((item: any) => item.birim);
 
               if (mapped.length > 0) {
-                setList(mapped);
+                loadedSorumlular = normalizeGunTakipSorumlularList(mapped);
               }
             }
           }
         } catch (e) {
           console.warn('GunTakip live sheet read error:', e);
         }
+      }
+
+      if (loadedSorumlular.length > 0) {
+        latestListRef.current = loadedSorumlular;
+        setList(loadedSorumlular);
       }
     } catch (err) {
       console.warn('Live Drive Scan error:', err);
@@ -593,27 +695,48 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     // 4. HAVA ARAÇLARI, DEPOLAR, TEÇHİZAT VE KARA ARAÇLARI
     // ----------------------------------------------------
     let targetFleetKey = '';
+    const isAt802Birim = norm.includes('AT-802') || norm.includes('AT802');
+    const isAt802Ozel = isAt802Birim && (norm.includes('OZEL') || norm.includes('ÖZEL'));
+    const isAt802Yer = isAt802Birim && norm.includes('YER DESTEK');
+
     if (norm.includes('BUMBI')) targetFleetKey = 't70_bumbi_backet';
     else if (norm.includes('HELITAK')) targetFleetKey = 't70_helitak';
     else if (norm.includes('T-70') || norm.includes('T70')) targetFleetKey = 't70';
     else if (norm.includes('BELL') || norm.includes('429')) targetFleetKey = 'bell429';
-    else if (norm.includes('AT-802') || norm.includes('AT802')) targetFleetKey = 'at802';
+    else if (isAt802Ozel) targetFleetKey = 'at802_ozel_alet';
+    else if (isAt802Birim) targetFleetKey = 'at802';
     else if (norm.includes('B-360') || norm.includes('B360')) targetFleetKey = 'b360';
     else if (norm.includes('C-650') || norm.includes('C650')) targetFleetKey = 'c650';
     else if (norm.includes('HANGAR')) targetFleetKey = 'hangar';
     else if (norm.includes('KARA')) targetFleetKey = 'kara_araclari';
 
-    let targetSection: 'all' | 'depo' | 'ozel_alet' | 'yer_destek' = 'all';
-    if (activeNormStr.includes('DEPO') || norm.includes('DEPO')) {
+    const mentionsYerDestek = norm.includes('YER DESTEK');
+    const mentionsOzel = norm.includes('OZEL') || norm.includes('ÖZEL');
+
+    let targetSection: 'all' | 'depo' | 'ozel_alet' | 'yer_destek' | 'techizat_all' = 'all';
+    if (norm.includes('DEPO') || (activeNormStr.includes('DEPO') && !mentionsYerDestek && !mentionsOzel)) {
       targetSection = 'depo';
-    } else if (activeNormStr.includes('OZEL') || activeNormStr.includes('ÖZEL') || norm.includes('OZEL') || norm.includes('ÖZEL')) {
+    } else if (isAt802Ozel) {
       targetSection = 'ozel_alet';
-    } else if (activeNormStr.includes('YER DESTEK') || norm.includes('YER DESTEK')) {
+    } else if (isAt802Yer) {
+      targetSection = 'yer_destek';
+    } else if (mentionsYerDestek && mentionsOzel) {
+      targetSection = 'techizat_all';
+    } else if (mentionsOzel || activeNormStr.includes('OZEL ALET')) {
+      targetSection = 'ozel_alet';
+    } else if (mentionsYerDestek) {
       targetSection = 'yer_destek';
     }
 
-    // Canlı sunucu verisi öncelikli, yoksa unitDataMap fallback
-    const rawRows = (liveServerData as any)[targetFleetKey] || (unitDataMap as any)[targetFleetKey] || [];
+    // Canlı sunucu verisi öncelikli, yoksa unitDataMap fallback (AT-802 Yer Destek vs Özel Alet kesin ayrımı)
+    let rawRows: any[][] = [];
+    if (targetFleetKey === 'at802_ozel_alet') {
+      rawRows = (liveServerData as any).at802_ozel_alet || (unitDataMap as any).at802_ozel_alet || [];
+    } else if (targetFleetKey === 'at802' && targetSection === 'yer_destek') {
+      rawRows = (liveServerData as any).at802_yer || (liveServerData as any).at802 || (unitDataMap as any).at802_yer || (unitDataMap as any).at802 || [];
+    } else {
+      rawRows = (liveServerData as any)[targetFleetKey] || (unitDataMap as any)[targetFleetKey] || [];
+    }
     if (!Array.isArray(rawRows) || rawRows.length === 0) {
       return { totalCount: 0, approachingItems: [], overdueCount: 0, upcomingCount: 0 };
     }
@@ -625,7 +748,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
       if (!row || !Array.isArray(row)) return;
       if (isHeaderLikeRow(row)) return;
 
-      const sec = getRowSection(row);
+      const sec = targetFleetKey === 'at802_ozel_alet' ? 'ozel_alet' : getRowSection(row);
       const isKara = targetFleetKey === 'kara_araclari';
       const isDepoRow = sec === 'depo_sarf' || sec === 'depo_kimyasal';
 
@@ -636,6 +759,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         if (sec !== 'ozel_alet') return;
       } else if (targetSection === 'yer_destek') {
         if (sec !== 'yer_destek') return;
+      } else if (targetSection === 'techizat_all') {
+        if (isDepoRow) return;
       }
 
       totalCount++;
@@ -724,31 +849,69 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
         });
       }
 
-      // Tarih Bazlı Takip (3 Ay / 90 Gün Kala Uyarı)
+      // Tarih Bazlı Takip (3 Ay / 90 Gün Kala Uyarı) - Alt+Enter çok satırlı hücreleri satır hizasıyla tek tek kontrol et
       if (isMuaf || !gelecekTarih) return;
 
-      const daysDiff = calculateDaysDiff(gelecekTarih);
-      if (daysDiff === null || daysDiff > 90) return;
-
+      const gelecekLines = String(gelecekTarih).split(/\r?\n/);
+      const sonLines = String(sonTarih || '').split(/\r?\n/);
+      const seriLines = String(seriNo || '').split(/\r?\n/);
+      const locLines = String(location || '').split(/\r?\n/);
+      const isMultiLine = gelecekLines.length > 1;
       const isNew = !lastMailSentDate || lastMailSentDate.trim() === '' || lastMailSentDate.trim() === '-';
 
-      approachingItems.push({
-        unitKey: targetFleetKey,
-        unitName: targetFleetKey.toUpperCase(),
-        subSection: isDepoRow ? 'DEPO ÖMÜR' : (sec === 'ozel_alet' ? 'ÖZEL ALET' : 'YER DESTEK'),
-        techName: techName || 'Teçhizat / Malzeme',
-        partNo: partNo || '-',
-        seriNo: seriNo || '-',
-        miktar: miktar || '1',
-        location: location || '-',
-        status: status || 'Faal',
-        sonTarih,
-        gelecekTarih,
-        daysDiff,
-        lastMailSentDate,
-        isNew,
-        rowIndex: rIdx
-      });
+      if (isMultiLine) {
+        gelecekLines.forEach((rawLine, lIdx) => {
+          const cleanLineDate = rawLine.trim();
+          if (!cleanLineDate || /^x+$/i.test(cleanLineDate) || cleanLineDate === '-') return;
+
+          const lineDaysDiff = calculateDaysDiff(cleanLineDate);
+          if (lineDaysDiff === null || lineDaysDiff > 90) return;
+
+          const alignedSeri = (seriLines[lIdx] ?? (seriLines.length === 1 ? seriLines[0] : '')).trim() || '-';
+          const alignedLoc = (locLines[lIdx] ?? (locLines.length === 1 ? locLines[0] : '')).trim() || '-';
+          const alignedSon = (sonLines[lIdx] ?? (sonLines.length === 1 ? sonLines[0] : '')).trim() || '-';
+
+          approachingItems.push({
+            unitKey: targetFleetKey,
+            unitName: targetFleetKey.toUpperCase(),
+            subSection: isDepoRow ? 'DEPO ÖMÜR' : (sec === 'ozel_alet' ? 'ÖZEL ALET' : 'YER DESTEK'),
+            techName: techName || 'Teçhizat / Malzeme',
+            partNo: partNo || '-',
+            seriNo: alignedSeri,
+            miktar: miktar || '1',
+            location: alignedLoc,
+            status: status || 'Faal',
+            sonTarih: alignedSon,
+            gelecekTarih: cleanLineDate,
+            daysDiff: lineDaysDiff,
+            lastMailSentDate,
+            isNew,
+            rowIndex: rIdx,
+            lineIndex: lIdx
+          });
+        });
+      } else {
+        const daysDiff = calculateDaysDiff(gelecekTarih);
+        if (daysDiff === null || daysDiff > 90) return;
+
+        approachingItems.push({
+          unitKey: targetFleetKey,
+          unitName: targetFleetKey.toUpperCase(),
+          subSection: isDepoRow ? 'DEPO ÖMÜR' : (sec === 'ozel_alet' ? 'ÖZEL ALET' : 'YER DESTEK'),
+          techName: techName || 'Teçhizat / Malzeme',
+          partNo: partNo || '-',
+          seriNo: seriNo || '-',
+          miktar: miktar || '1',
+          location: location || '-',
+          status: status || 'Faal',
+          sonTarih,
+          gelecekTarih,
+          daysDiff,
+          lastMailSentDate,
+          isNew,
+          rowIndex: rIdx
+        });
+      }
     });
 
     approachingItems.sort((a, b) => a.daysDiff - b.daysDiff);
@@ -782,14 +945,14 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     });
   }, [list, activeFleetFilter, searchQuery]);
 
-  // Tüm filo genelindeki toplam günü geçenler ve yaklaşanlar
+  // Tüm filo genelindeki toplam günü geçenler ve yaklaşanlar (Her satır benzersiz anahtar ile korunur)
   const allOverdueItems = useMemo(() => {
     const map = new Map<string, ApproachingItem>();
     list.forEach(b => {
       const stats = getBirimStats(b.birim, b.norm);
       stats.approachingItems.filter(i => i.daysDiff <= 0).forEach(i => {
-        const key = `${i.unitKey}_${i.partNo}_${i.seriNo}_${i.gelecekTarih}`;
-        map.set(key, i);
+        const key = `${b.birim}_${i.unitKey}_${i.subSection}_${i.rowIndex}_${i.lineIndex ?? 0}_${i.techName}_${i.partNo}_${i.seriNo}_${i.gelecekTarih}`;
+        map.set(key, { ...i, unitName: b.birim });
       });
     });
     return Array.from(map.values());
@@ -800,30 +963,100 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     list.forEach(b => {
       const stats = getBirimStats(b.birim, b.norm);
       stats.approachingItems.filter(i => i.daysDiff > 0 && i.daysDiff <= 90).forEach(i => {
-        const key = `${i.unitKey}_${i.partNo}_${i.seriNo}_${i.gelecekTarih}`;
-        map.set(key, i);
+        const key = `${b.birim}_${i.unitKey}_${i.subSection}_${i.rowIndex}_${i.lineIndex ?? 0}_${i.techName}_${i.partNo}_${i.seriNo}_${i.gelecekTarih}`;
+        map.set(key, { ...i, unitName: b.birim });
       });
     });
     return Array.from(map.values());
   }, [list, unitDataMap, liveServerData, yasamDestekData, personelData]);
 
-  // Arka plan otomatik kontrol
-  const runSilentOverdueCheck = async (isManualTrigger = false) => {
-    setIsAutoChecking(true);
-    const nowTimestamp = getNowFormattedWithSeconds();
+  // Tespit edilen günü geçen ve yaklaşan verileri JSON formatında sunucuya ve E-Tabloya kaydet
+  useEffect(() => {
+    if (!isOpen || isLiveFetching) return;
+    const allFindings = [...allOverdueItems, ...allApproachingItems];
+    const sig = `${allOverdueItems.length}_${allApproachingItems.length}_${allFindings.slice(0, 8).map(f => `${f.unitName}:${f.rowIndex}:${f.daysDiff}`).join('|')}`;
+    if (lastSavedTespitKeyRef.current === sig) return;
 
-    try {
-      await fetch('/api/trigger-auto-reminders', {
+    const timer = setTimeout(() => {
+      lastSavedTespitKeyRef.current = sig;
+      fetch('/api/gun-takip/tespitler', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          birimList: list,
-          overdueItems: allOverdueItems,
-          approachingItems: allApproachingItems
+          updatedAt: getNowFormattedWithSeconds(),
+          summary: {
+            total: allFindings.length,
+            overdue: allOverdueItems.length,
+            approaching: allApproachingItems.length
+          },
+          tespitler: allFindings
         })
-      }).catch(e => console.warn('Local trigger reminder warn:', e));
+      }).catch(() => {});
+    }, 900);
 
-      if (allOverdueItems.length > 0 && googleScriptUrl) {
+    return () => clearTimeout(timer);
+  }, [isOpen, isLiveFetching, allOverdueItems, allApproachingItems]);
+
+  // Arka plan otomatik kontrol + Her ayın 1'inde Hava Araçları Aylık Rapor (ayda 1 kez)
+  const runSilentOverdueCheck = async (isManualTrigger = false) => {
+    setIsAutoChecking(true);
+    const now = new Date();
+    const nowTimestamp = getNowFormattedWithSeconds();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const currentMonthKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+    const isFirstOfMonth = now.getDate() === 1;
+    const currentList = latestListRef.current;
+
+    const needsMonthlyReport =
+      isFirstOfMonth &&
+      currentList.some(b => isAircraftBirimName(b.birim) && !String(b.mail90 || '').includes(currentMonthKey));
+
+    try {
+      const aircraftBirimList = currentList.filter(b => isAircraftBirimName(b.birim));
+      const aircraftOverdue = allOverdueItems.filter(i => isAircraftBirimName(i.unitName || i.unitKey));
+      const aircraftApproaching = allApproachingItems.filter(i => isAircraftBirimName(i.unitName || i.unitKey));
+
+      const resp = await fetch('/api/trigger-auto-reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          birimList: needsMonthlyReport ? aircraftBirimList : currentList,
+          overdueItems: needsMonthlyReport ? aircraftOverdue : allOverdueItems,
+          approachingItems: needsMonthlyReport ? aircraftApproaching : allApproachingItems,
+          isMonthlyReport: needsMonthlyReport
+        })
+      }).catch(() => null);
+
+      let monthlySentConfirmed = false;
+      if (resp && resp.ok) {
+        const rJson = await resp.json().catch(() => null);
+        if (rJson && rJson.monthlySent) monthlySentConfirmed = true;
+      }
+
+      if (needsMonthlyReport) {
+        const monthlyStamp = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} (${currentMonthKey} Aylık Rapor)`;
+        const updatedMonthly = currentList.map(item =>
+          isAircraftBirimName(item.birim) && !String(item.mail90 || '').includes(currentMonthKey)
+            ? { ...item, mail90: monthlyStamp }
+            : item
+        );
+        latestListRef.current = updatedMonthly;
+        setList(updatedMonthly);
+        await onSaveSorumlular(updatedMonthly);
+        if (monthlySentConfirmed && googleScriptUrl) {
+          fetch(googleScriptUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'dailyReminderTrigger',
+              reason: `Aylık Rapor (${currentMonthKey})`,
+              reportType: 'Aylık Rapor',
+              aircraftOnly: true,
+              timestamp: nowTimestamp
+            })
+          }).catch(() => {});
+        }
+      } else if (allOverdueItems.length > 0 && googleScriptUrl) {
         await fetch(googleScriptUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -846,10 +1079,10 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !isLiveFetching) {
       runSilentOverdueCheck(false);
     }
-  }, [isOpen]);
+  }, [isOpen, isLiveFetching]);
 
   // Yeni Birim Ekleme (E-Tabloya Anında Kaydeder)
   const handleAddNewBirim = async () => {
@@ -858,7 +1091,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
       return;
     }
     const cleanName = newBirimName.trim().toUpperCase();
-    if (list.some(item => item.birim.toUpperCase() === cleanName)) {
+    if (latestListRef.current.some(item => item.birim.toUpperCase() === cleanName)) {
       showNotification('Bu birim veya alt birim listede zaten mevcut.', 'warning');
       return;
     }
@@ -873,7 +1106,8 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
       mail90: ''
     };
 
-    const updated = [...list, newRow];
+    const updated = [...latestListRef.current, newRow];
+    latestListRef.current = updated;
     setList(updated);
     setNewBirimName('');
     setNewAdSoyad('');
@@ -889,32 +1123,33 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
     const itemToDelete = filteredList[index];
     if (!itemToDelete) return;
     if (confirm(`"${itemToDelete.birim}" birimini ve takibini silmek istediğinize emin misiniz?`)) {
-      const updated = list.filter(item => item.birim !== itemToDelete.birim);
+      const updated = latestListRef.current.filter(item => item.birim !== itemToDelete.birim);
+      latestListRef.current = updated;
       setList(updated);
       showNotification(`"${itemToDelete.birim}" listeden silindi.`, 'info');
       await onSaveSorumlular(updated);
     }
   };
 
-  // Inline hücre güncelleme ve E-Tabloya kaydetme
+  // Inline hücre güncelleme ve ref üzerinden E-Tabloya / Sunucuya kesin kaydetme
   const handleUpdateItemField = (itemBirim: string, field: 'birim' | 'adSoyad' | 'eposta' | 'mail90', value: string) => {
-    setList(prev => {
-      const updated = prev.map(p => p.birim === itemBirim ? { ...p, [field]: value } : p);
-      return updated;
-    });
+    const updated = latestListRef.current.map(p => p.birim === itemBirim ? { ...p, [field]: value } : p);
+    latestListRef.current = updated;
+    setList(updated);
   };
 
   const handleCellBlurOrEnter = async () => {
     setEditingCell(null);
-    await onSaveSorumlular(list);
+    await onSaveSorumlular(latestListRef.current);
   };
 
   // Norm Seçim Listesinden Değiştirme (Anında Kaydeder & Canlı Analizi Yeniler)
   const handleSelectNorm = async (itemBirim: string, newNormLabel: string) => {
-    const updatedList = list.map(p => p.birim === itemBirim ? { ...p, norm: newNormLabel } : p);
+    const updatedList = latestListRef.current.map(p => p.birim === itemBirim ? { ...p, norm: newNormLabel } : p);
+    latestListRef.current = updatedList;
     setList(updatedList);
     await onSaveSorumlular(updatedList);
-    showNotification(`✅ "${itemBirim}" için takip normu "${newNormLabel}" olarak güncellendi ve E-Tabloya kaydedildi.`, 'success');
+    showNotification(`✅ "${itemBirim}" için takip normu "${newNormLabel}" olarak güncellendi ve kaydedildi.`, 'success');
   };
 
   // Tüm sorumluları Excel'e aktar
@@ -1033,6 +1268,15 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[800] flex items-center justify-center p-2 sm:p-4 bg-slate-900/85 backdrop-blur-md animate-fade-in">
+      <style>{`
+        @keyframes gunTakipOverdueRowBlink {
+          0%, 100% { background-color: #ffe4e6; box-shadow: inset 4px 0 0 #e11d48; }
+          50% { background-color: #fecdd3; box-shadow: inset 6px 0 0 #9f1239; }
+        }
+        .gun-takip-overdue-blink {
+          animation: gunTakipOverdueRowBlink 1.15s ease-in-out infinite;
+        }
+      `}</style>
       <div className="bg-white rounded-3xl w-full max-w-7xl h-[94vh] shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
         
         {/* HEADER */}
@@ -1049,7 +1293,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                 </span>
               </h2>
               <p className="text-xs text-emerald-200/80 font-medium mt-0.5">
-                Pencere açılır açılmaz veriler Google Drive ve sunucudan canlı çekilir; seçilen norma göre anında analiz edilip uymayanlar listelenir.
+                Pencere açılır açılmaz veriler Bulut Arşivi ve sunucudan canlı çekilir; seçilen norma göre anında analiz edilip uymayanlar listelenir.
               </p>
             </div>
           </div>
@@ -1210,7 +1454,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
 
             {/* Save All to Sheets */}
             <button
-              onClick={() => onSaveSorumlular(list)}
+              onClick={() => onSaveSorumlular(latestListRef.current)}
               disabled={isSaving}
               className="px-4 py-1.5 bg-[#0b3d1d] hover:bg-[#072612] text-white font-black text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer active:scale-95 disabled:opacity-50"
             >
@@ -1261,7 +1505,9 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
               <tbody className="divide-y divide-slate-200 font-medium text-slate-700">
                 {filteredList.map((item, idx) => {
                   const stats = getBirimStats(item.birim, item.norm);
-                  const displayNorm = item.norm || getDefaultNormForBirim(item.birim);
+                  const rawNorm = item.norm || getDefaultNormForBirim(item.birim);
+                  const matchedOpt = NORM_OPTIONS.find(opt => opt.label === rawNorm);
+                  const displayNorm = matchedOpt ? matchedOpt.label : getDefaultNormForBirim(item.birim);
 
                   const isEditingBirim = editingCell?.index === idx && editingCell.field === 'birim';
                   const isEditingAd = editingCell?.index === idx && editingCell.field === 'adSoyad';
@@ -1293,7 +1539,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                             value={item.birim}
                             onChange={(e) => handleUpdateItemField(item.birim, 'birim', e.target.value.toUpperCase())}
                             onBlur={handleCellBlurOrEnter}
-                            onKeyDown={(e) => e.key === 'Enter' && handleCellBlurOrEnter()}
+                            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
                             className="w-full px-2 py-1 bg-white border border-emerald-600 rounded-lg text-xs font-mono font-bold text-slate-900 shadow-sm focus:outline-none"
                           />
                         ) : (
@@ -1321,7 +1567,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                             value={item.adSoyad}
                             onChange={(e) => handleUpdateItemField(item.birim, 'adSoyad', e.target.value)}
                             onBlur={handleCellBlurOrEnter}
-                            onKeyDown={(e) => e.key === 'Enter' && handleCellBlurOrEnter()}
+                            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
                             className="w-full px-2 py-1 bg-white border border-emerald-600 rounded-lg text-xs font-semibold text-slate-900 shadow-sm focus:outline-none"
                           />
                         ) : (
@@ -1344,7 +1590,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
                             value={item.eposta}
                             onChange={(e) => handleUpdateItemField(item.birim, 'eposta', e.target.value)}
                             onBlur={handleCellBlurOrEnter}
-                            onKeyDown={(e) => e.key === 'Enter' && handleCellBlurOrEnter()}
+                            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
                             className="w-full px-2 py-1 bg-white border border-emerald-600 rounded-lg text-xs font-mono font-medium text-slate-900 shadow-sm focus:outline-none"
                           />
                         ) : (
@@ -1668,9 +1914,11 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
 
                           return (
                             <tr
-                              key={item.techName + idx}
-                              className={`hover:bg-slate-50 transition-colors ${
-                                isOverdue ? 'bg-rose-50/40' : idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                              key={`${item.unitKey}_${item.subSection}_${item.rowIndex}_${item.lineIndex ?? 0}_${item.techName}_${idx}`}
+                              className={`transition-colors ${
+                                isOverdue
+                                  ? 'gun-takip-overdue-blink border-l-4 border-l-rose-600'
+                                  : 'bg-amber-50/90 hover:bg-amber-100/80 border-l-4 border-l-amber-500'
                               }`}
                             >
                               <td className="py-2.5 px-3 text-center font-mono text-slate-400 font-bold border-r border-slate-200">
@@ -1709,7 +1957,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
 
                               <td className="py-2.5 px-3 text-center font-mono font-black border-r border-slate-200">
                                 {isOverdue ? (
-                                  <span className="text-rose-700 font-black">
+                                  <span className="text-rose-800 font-black animate-pulse inline-block">
                                     {Math.abs(item.daysDiff)} GÜN GEÇTİ
                                   </span>
                                 ) : (
@@ -1721,7 +1969,7 @@ export const GunTakipModal: React.FC<GunTakipModalProps> = ({
 
                               <td className="py-2.5 px-3 text-center">
                                 {isOverdue ? (
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-black bg-rose-700 text-white shadow-xs">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-black bg-rose-700 text-white shadow-xs animate-pulse">
                                     🔴 OTOMATİK BİLDİRİMDE
                                   </span>
                                 ) : (

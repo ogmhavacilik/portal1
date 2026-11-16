@@ -1202,7 +1202,7 @@ export const YasamDestekPanel: React.FC<YasamDestekPanelProps> = ({
           onClick={handleManualRefresh}
           disabled={isManualRefreshing || isStockLoading}
           className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-md transition-all disabled:opacity-50 shrink-0"
-          title="Google E-Tablo ve depodaki en güncel canlı verileri anında çek ve yenile"
+          title="Canlı E-Tablo ve depodaki en güncel canlı verileri anında çek ve yenile"
         >
           <RefreshCw className={`w-4 h-4 ${isManualRefreshing || isStockLoading ? 'animate-spin' : ''}`} />
           <span>{isManualRefreshing || isStockLoading ? 'GÜNCELLENİYOR...' : '🔄 VERİLERİ YENİLE'}</span>

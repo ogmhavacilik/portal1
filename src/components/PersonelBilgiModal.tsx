@@ -172,7 +172,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
   const fetchLiveExcelFromDrive = async (isManual = false) => {
     if (isManual) {
       setIsLoadingDrive(true);
-      setSyncStatusMessage("Google Drive E-Tablo Aranıyor...");
+      setSyncStatusMessage("Bulut Arşivi E-Tablo Aranıyor...");
     }
 
     try {
@@ -185,18 +185,18 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
       if (result && result.status === 'success' && result.base64) {
         const success = parseExcelAndSetPeople(result.base64);
         if (success && showNotification && isManual) {
-          showNotification("✅ Google Drive'dan Personel Bilgi Çizelgesi canlı olarak yüklendi.");
+          showNotification("✅ Bulut Arşivinden Personel Bilgi Çizelgesi canlı olarak yüklendi.");
         } else if (!success) {
            console.warn("Drive fetch success but parse failed");
            if (showNotification) showNotification("⚠️ Veri alındı ancak işlenemedi (başlık satırı bulunamadı).");
         }
       } else {
         console.warn("Drive fetch returned no data or failed");
-        if (showNotification) showNotification("⚠️ Google Drive'dan veri çekilemedi.");
+        if (showNotification) showNotification("⚠️ Bulut Arşivinden veri çekilemedi.");
       }
     } catch (err) {
       console.warn("Drive Excel fetch warning:", err);
-      if (showNotification) showNotification("⚠️ Google Drive bağlantısı başarısız.");
+      if (showNotification) showNotification("⚠️ Bulut Arşivi bağlantısı başarısız.");
     } finally {
       setIsLoadingDrive(false);
       setSyncStatusMessage('');
@@ -402,7 +402,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
       const b64 = buildExcelBase64FromPeople(updatedPeople);
       await uploadExcelToDrive(DRIVE_FILE_NAME, b64, 'personel_bilgi');
       if (showNotification) {
-        showNotification("✅ Personel bilgileri Google Drive'a canlı kaydedildi.");
+        showNotification("✅ Personel bilgileri Bulut Arşivine canlı kaydedildi.");
       }
     } catch (e) {
       console.warn("Drive sync error:", e);
@@ -589,7 +589,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
 
     syncToGoogleDrive(
       updatedList,
-      formMode === 'add' ? 'Yeni Personel Google Drive E-Tabloya Ekleniyor...' : 'Personel Güncellemesi Drive\'a İşleniyor...'
+      formMode === 'add' ? 'Yeni Personel Bulut Arşivi E-Tabloya Ekleniyor...' : 'Personel Güncellemesi Bulut Arşivine İşleniyor...'
     );
 
     autoSyncTechnicianToPersonelEgitim(formData.adiSoyadi, formData.kadroUnvani);
@@ -618,7 +618,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
     setIsAuthorized(true);
 
     if (showNotification) {
-      showNotification(`🗑️ "${targetName}" personeli silindi. Google Drive güncelleniyor...`);
+      showNotification(`🗑️ "${targetName}" personeli silindi. Bulut Arşivi güncelleniyor...`);
     }
 
     syncToGoogleDrive(updatedList, `"${targetName}" Personel Kaydı Siliniyor...`);
@@ -1047,7 +1047,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
                                     ? 'bg-white/20 border-white/40 text-white hover:bg-white/30'
                                     : 'bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100'
                                 }`}
-                                title="Düzenle (Şifre: 1839)"
+                                title="Düzenle"
                               >
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
@@ -1059,7 +1059,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
                                     ? 'bg-red-500/80 border-red-300 text-white hover:bg-red-600'
                                     : 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100'
                                 }`}
-                                title="Sil (Şifre: 1839)"
+                                title="Sil"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -1154,7 +1154,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
               />
               {deletePinError && (
                 <span className="text-red-500 text-[10px] font-black mt-1 block text-center uppercase animate-pulse">
-                  ❌ HATALI ŞİFRE! (YETKİLİ: 1839)
+                  ❌ HATALI ŞİFRE!
                 </span>
               )}
             </div>
@@ -1194,7 +1194,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
               </div>
               <div>
                 <h3 className="font-extrabold text-sm uppercase tracking-wider font-mono">
-                  YETKİLİ GİRİŞİ (1839)
+                  YETKİLİ GİRİŞİ
                 </h3>
                 <p className="text-[11px] text-slate-400">
                   İşleme devam etmek için şifrenizi giriniz.
@@ -1213,7 +1213,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
                 className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl font-mono text-lg font-bold text-center tracking-widest outline-none focus:border-blue-500"
               />
               {pinError && (
-                <span className="text-red-400 text-xs font-bold mt-1 block text-center">Hatalı Şifre! Lütfen 1839 giriniz.</span>
+                <span className="text-red-400 text-xs font-bold mt-1 block text-center">Hatalı Şifre! Lütfen tekrar deneyiniz.</span>
               )}
             </div>
 
@@ -1273,7 +1273,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
 
                 <div>
                   <label className="block text-xs font-bold uppercase font-mono text-slate-300 mb-2">
-                    YETKİLİ ŞİFRESİ (1839)
+                    YETKİLİ ŞİFRESİ
                   </label>
                   <input
                     type="password"
@@ -1284,7 +1284,7 @@ export const PersonelBilgiModal: React.FC<PersonelBilgiModalProps> = ({
                     className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl font-mono text-lg font-bold text-center tracking-widest outline-none focus:border-amber-500"
                   />
                   {testMailPinError && (
-                    <span className="text-red-400 text-xs font-bold mt-1 block text-center">Hatalı Şifre! Lütfen 1839 giriniz.</span>
+                    <span className="text-red-400 text-xs font-bold mt-1 block text-center">Hatalı Şifre! Lütfen tekrar deneyiniz.</span>
                   )}
                 </div>
 
