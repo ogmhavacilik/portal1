@@ -17,32 +17,24 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Netlify serverless function is running' });
 });
 
-// Taskline EBYS Proxy
-app.get('/api/taskline-ebys', async (req, res) => {
-  const scriptUrl = req.query.scriptUrl as string;
-  const targetUrl = scriptUrl || 'https://script.google.com/macros/s/AKfycbxuivDglCOCOl32raOdzjV_gjDk6k7i70pepzYp8ak9tcc1D8t5L9gJNI2YxYXZi7wa/exec';
-  const finalUrl = targetUrl.replace(/\/dev$/, '/exec');
-  const spreadsheetId = (req.query.spreadsheetId as string) || '1L05588TdYZmH401Lvn4_yr4zwiw2pW4EJ8dIyl-UTVQ';
-  
-  let fetchedData: any = null;
+// Resilient Excel from Drive Route for Netlify
+app.post('/api/read-excel-from-drive', async (req, res) => {
   try {
-    const response = await fetch(finalUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'getDemands', spreadsheetId })
-    });
-    if (response.ok) {
-      const json = await response.json();
-      if (json && json.status !== 'error') {
-        fetchedData = json;
-      }
+    const { fileName = 'at-802_sarf_ve_parca_deposu.xlsx' } = req.body || {};
+    const localPath = path.resolve(process.cwd(), `public/${fileName}`);
+    if (fs.existsSync(localPath)) {
+      const buf = fs.readFileSync(localPath);
+      return res.json({
+        status: 'success',
+        source: 'local-mirror',
+        base64: buf.toString('base64'),
+        updated: new Date().toLocaleString('tr-TR')
+      });
     }
-  } catch (err: any) {}
-
-  if (!fetchedData) {
-    return res.status(500).json({ status: 'error', message: 'Canlı EBYS listesi çekilemedi.' });
+    return res.status(404).json({ status: 'error', message: 'Dosya bulunamadı' });
+  } catch (err: any) {
+    return res.status(500).json({ status: 'error', message: err.message });
   }
-  return res.json(fetchedData);
 });
 
 // Gün Takip Live Scan Fallback
