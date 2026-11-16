@@ -58,7 +58,7 @@ export const useCircularOgmLogo = (): string => {
       };
       img.src = src;
     };
-    renderCircularLogo('/api/ogm-logo', OGM_FALLBACK_SEAL_DATA_URI);
+    renderCircularLogo(OGM_WIKIMEDIA_LOGO_URL, OGM_FALLBACK_SEAL_DATA_URI);
     return () => {
       cancelled = true;
     };
